@@ -10,7 +10,7 @@ dd2a5f8483b6d5aba5ee4e5e839885e0e6c347e956a2d4457d35e3ffabe19e78  ./docs/03-OPEN
 fdde69c58f97c93f2f3105af19c0b6653b4eb66fa366f395dc014e09a9150676  ./docs/05-FEHLERSUCHE.md
 7e5efecdbd743b13e490f30ff7a1253f404ceed951fffd22858a04fb2c4b841c  ./docs/06-BUILD-VERIFICATION.md
 c01c90295e1fd43c583f911c54bd55a4c1ee255650dc4e96498993ab5808b81a  ./docs/07-LOKALE-STIMME.md
-b295901ae64fdf81dc01300186bfa9098eaa8839cdc65ef788ba5b6f5b72bfdb  ./docs/08-LOKALE-ERKENNUNG.md
+d40de8e268c45ae5a3adb91fbffcfca164ff05848cb0faeee00f462e6f49358e  ./docs/08-LOKALE-ERKENNUNG.md
 3e8fc0a212364d372e1fdb37e1f2f22c5104ccbdd5b7fe9b439e4aca472e3e44  ./firmware/dependencies.lock
 b9e21f402ff3f75f6007568da63288412ba367d47af555eb971071cae283c5be  ./firmware/patches/uart-uhci-idf61.patch
 0f6d3794ca6035c0036cfd40dc2b8c6fb1d17c897e7e04ac19a9a6cc83568fa2  ./firmware/patches/xiaozhi-esp32-openclaw.patch
@@ -19,8 +19,8 @@ b9e21f402ff3f75f6007568da63288412ba367d47af555eb971071cae283c5be  ./firmware/pat
 69672c442cdf5166f89e0bfc50e2d26854b0f669afac8c45e573f2b4de1f0fb8  ./firmware/prebuilt/previous-no-watchdog/xiaozhi.bin
 9e8cdc856d57a5f5561842652096eef1a31039d62f59bde5424a41803bd6e739  ./firmware/prebuilt/previous-watchdog-smiley/xiaozhi.bin
 4325094cd59b6dc7c5e615e7236ab3318aa69ed39d698972d9e23337a138010e  ./firmware/prebuilt/xiaozhi.bin
-3a3715c16a005d8833dcba1354be52bbc6b9a067ec4bf67f7d439fa4ae37a6ab  ./gateway/local-voice.mjs
-bca8671817ec9e342035ae54c8a946520454005dff74c684c3b13a11f95be48c  ./gateway/local_stt.mjs
+140dc5197e93bf97385c4dee28714081a5ee7e48e903e67cfdd1ab55e19b22e9  ./gateway/local-voice.mjs
+fa7409e5b9e2ccfad91f4686442d8d0f716d1639715ae051ff5a1d48de700905  ./gateway/local_stt.mjs
 430aa9205b5f275552c14e27aefbaa4f58990df892071bd173c3e9c55e1145c6  ./gateway/openclaw-talk-realtime.mjs
 3095e67fec0e279a4bffb18a85008d332030c3d2b85ce3ee1458c4db43a8012b  ./gateway/piper_speaker.py
 4b0d862dd53f422f71115d2843a56fdf45c4043b04c661de756dcaeec30b033d  ./gateway/requirements-tts.txt
@@ -44,3 +44,4 @@ d1ac3409f17b30193f35c2a81da425150acf9ddc13049a57759f4d941f882120  ./tests/test_b
 4f5ac0204a125b2bf554d369930a6a360b5b77f569fefdad17860debed66791d  ./tests/test_local_helper_e2e.mjs
 4dad32f27e4a889e0e861137b77b5956d175cd3a8b270bb60086b8d1e742504a  ./tests/test_local_stt.mjs
 536acfee0347efc39fa30233f1cc5fc00160f5602167653beebe8d16b3aeee01  ./tests/test_local_tts.py
+1468c942d2f34fea96b05700503aca417f651b9f762d7fc683319fb7abb452c2  ./tests/test_wake_word_clean.mjs

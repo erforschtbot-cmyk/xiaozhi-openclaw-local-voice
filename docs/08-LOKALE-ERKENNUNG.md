@@ -196,10 +196,14 @@ künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
    `payload.message.content` (Liste von Teilen), nicht in `payload.text`.
    Ein `payload.text`-Zugriff ergibt immer leer — die Stimme verstummt still.
    Beide Formen abdecken (siehe `extractText` in `gateway/local-voice.mjs`).
-3. **Das Wachwort wurde als Auftrag verschickt.** Da das Gerät Mikrofon
-   fortlaufend sendet, wird auch das gesprochene „Jarvis" transkribiert.
-   Ohne Filter geht es als Frage an den Agenten. `isWakeWordOnly()` verwirft
-   reine Wachworte.
+3. **Das Wachwort wurde als Auftrag verschickt.** Das Gerät öffnet den
+   Audiokanal erst, wenn es das Wachwort gehört hat; je nach Zeitpunkt
+   liegen die ersten Rahmen noch davor und enthalten es. Whisper schreibt
+   „Jarvis" sehr unterschiedlich — im Betrieb beobachtet: „Jarvis.",
+   „Ja, das...", „Job es.", „Ja, bis da an den Witz.". `cleanTranscript()`
+   schneidet führende Wachwort-Reste ab und verwirft reine Wachworte; kurze
+   Fehldeutungen (≤ 3 Wörter) werden ebenfalls verworfen, damit „Ja, das ist
+   gut." als echter Satz erhalten bleibt.
 4. **Zwei Äußerungen liefen gleichzeitig.** Wurde `busy` erst nach der
    Transkription gesetzt, konnte eine zweite Äußerung die laufende Antwort
    überschreiben; die erste ging verloren. `busy` wird jetzt **sofort**
@@ -211,6 +215,36 @@ künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
 
 Lehre: Die Sprachschwelle immer an **echtem Mikrofon-Audio** kalibrieren,
 nie an Synthese-Ausgabe.
+
+## Wachwort-Reste im Transkript
+
+Das Gerät öffnet den Audiokanal erst, wenn es das Wachwort gehört hat. Je
+nach Zeitpunkt liegen die ersten Audiorahmen noch **davor** — das Wachwort
+steckt dann mit im Transkript. Die Ursache liegt damit im Gerät (Firmware),
+die Bereinigung gelingt aber auf dem Host und ist der sicherere Weg: Ein
+Firmware-Neubau kann Mikrofon/Audio verlieren (siehe
+`docs/06-BUILD-VERIFICATION.md`).
+
+Whisper schreibt „Jarvis" sehr unterschiedlich. Im echten Betrieb beobachtet:
+
+| Transkript | Bewertung |
+|---|---|
+| `Jarvis.` | reines Wachwort → verwerfen |
+| `Ja, das...` | Fehldeutung → verwerfen |
+| `Job es.` | Fehldeutung → verwerfen |
+| `Ja, bis da an den Witz.` | Wachwort-Rest + Auftrag |
+| `Jarvis, erzähle einen Witz.` | Wachwort-Rest + Auftrag |
+
+`cleanTranscript()` in `gateway/local_stt.mjs` behandelt beide Formen:
+
+1. **Führende Wachwort-Reste abschneiden** — der Auftrag dahinter bleibt:
+   `"Jarvis, erzähle einen Witz."` → `"erzähle einen Witz."`
+2. **Reine Wachwort-Reste verwerfen** — es gibt keinen Auftrag.
+3. **Kurze Fehldeutungen verwerfen** — aber nur bei höchstens drei Wörtern,
+   damit ein echter Satz wie `"Ja, das ist gut."` nicht verschluckt wird.
+
+Geprüft mit `tests/test_wake_word_clean.mjs`; die Fälle stammen ausnahmslos
+aus echten Bridge-Logs.
 
 ## Zurück zur Provider-Erkennung
 

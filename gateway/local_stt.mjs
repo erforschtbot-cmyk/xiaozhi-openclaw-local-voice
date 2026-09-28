@@ -84,6 +84,44 @@ function createReader(socket, onEvent) {
 }
 
 // --------------------------------------------------------------------------
+// Wachwort-Reste
+// --------------------------------------------------------------------------
+//
+// Das Geraet oeffnet den Audiokanal erst, wenn es das Wachwort gehoert hat.
+// Je nach Zeitpunkt liegen die ersten Rahmen noch davor, sodass Reste des
+// Wachworts im Transkript landen. Whisper schreibt "Jarvis" sehr
+// unterschiedlich; alle folgenden Formen wurden im echten Betrieb gesehen:
+//
+//   "Jarvis."   "Ja, das..."   "Job es."   "Ja, bis da an den Witz."
+//
+// Deshalb zwei Stufen:
+//   1. Fuehrende Wachwort-Reste abschneiden (der Auftrag folgt dahinter).
+//   2. Reine Wachwort-Reste ganz verwerfen.
+const WAKE_LEAD =
+  /^(?:hey[\s,]+)?(?:jarvis|jarwis|jawis|javis|dschawis|tschawis|charvis|harvis)\b[\s,.:;!?\-–]*/i;
+const WAKE_ONLY =
+  /^(?:hey[\s,]+)?(?:jarvis|jarwis|jawis|javis|dschawis|tschawis|charvis|harvis)[.!?]*$/i;
+// Sehr kurze Fehldeutungen ohne eigenen Auftrag. Der Vergleich gilt nur fuer
+// Aeusserungen mit hoechstens drei Woertern, damit ein echter Satz wie
+// "Ja, das ist gut" nicht verschluckt wird.
+const WAKE_SHORT = /^(?:ja,?\s*(?:das|bis)|job\s*es|jabis|japp?)$/i;
+
+/**
+ * Raeumt Wachwort-Reste aus einem Transkript.
+ *
+ * @param {string} text  Rohtranskript des lokalen Whisper
+ * @returns {string} der verbleibende Auftrag, oder "" wenn nichts bleibt
+ */
+export function cleanTranscript(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return "";
+  if (WAKE_ONLY.test(trimmed)) return "";
+  const words = trimmed.replace(/[.!?]+$/, "").split(/\s+/).filter(Boolean);
+  if (words.length <= 3 && WAKE_SHORT.test(words.join(" "))) return "";
+  return trimmed.replace(WAKE_LEAD, "").trim();
+}
+
+// --------------------------------------------------------------------------
 // Erkennung
 // --------------------------------------------------------------------------
 

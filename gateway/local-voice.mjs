@@ -30,7 +30,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { transcribePcm, UtteranceDetector } from "./local_stt.mjs";
+import { cleanTranscript, transcribePcm, UtteranceDetector } from "./local_stt.mjs";
 
 const OPENCLAW_NPM_ROOT =
   process.env.OPENCLAW_NPM_ROOT ||
@@ -200,20 +200,6 @@ const detector = new UtteranceDetector({
 let busy = false;
 let pendingUtterance = null;
 
-// Wachwort allein darf keine Frage sein: Das Geraet schickt Mikrofon-Audio
-// fortlaufend, deshalb wird auch das gesprochene "Jarvis" erkannt. Es ist
-// kein Auftrag, sondern die Aktivierung.
-const WAKE_ONLY = /^(jarvis|hey jarvis|ja vis|javis|harvis|charvis)$/;
-
-function isWakeWordOnly(text) {
-  const normalized = text
-    .toLowerCase()
-    .replace(/[^\p{L}\s]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return normalized.length > 0 && WAKE_ONLY.test(normalized);
-}
-
 /**
  * Nimmt eine erkannte Aeusserung zur Verarbeitung an.
  *
@@ -254,10 +240,15 @@ async function handleUtterance(pcm) {
     log("Leere Erkennung; keine Antwort angefordert");
     return;
   }
-  if (isWakeWordOnly(text)) {
-    log(`Wachwort erkannt, kein Auftrag: ${text}`);
+  const cleaned = cleanTranscript(text);
+  if (!cleaned) {
+    log(`Wachwort-Rest verworfen: ${text}`);
     return;
   }
+  if (cleaned !== text) {
+    log(`Wachwort-Rest entfernt: ${text} -> ${cleaned}`);
+  }
+  text = cleaned;
 
   emit("user_transcript", { text });
   log(`Erkannt: ${text}`);
