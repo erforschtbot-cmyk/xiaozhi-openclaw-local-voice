@@ -78,24 +78,74 @@ def strip_markdown(text: str) -> str:
 
 
 class PiperSpeaker:
-    """Haelt ein Piper-Modell geladen und liefert PCM fuer das Geraet."""
+    """Haelt ein Piper-Modell geladen und liefert PCM fuer das Geraet.
 
-    def __init__(self, model_path: str, target_rate: int = DEVICE_SAMPLE_RATE):
+    Die Feinregler (`length_scale`, `noise_scale`, `noise_w_scale`, `volume`)
+    kommen von Piper selbst:
+
+    - `length_scale`: Tempo. 1,0 ist normal, groesser = langsamer, kleiner =
+      schneller. Fuer Sprachausgabe ist leicht unter 1 oft verstaendlicher.
+    - `noise_scale`: Variation der Aussprache. Hoeher = lebendiger, aber
+      unruhiger; niedriger = gleichmaessiger.
+    - `noise_w_scale`: Variation der Lautlaengen. Achnlich, feiner.
+    - `volume`: Lautstaerke der Synthese (nicht der Geraetelautstaerke).
+
+    `None` bedeutet jeweils: Pipers Standardwert unveraendert lassen.
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        target_rate: int = DEVICE_SAMPLE_RATE,
+        length_scale: float | None = None,
+        noise_scale: float | None = None,
+        noise_w_scale: float | None = None,
+        volume: float | None = None,
+    ):
         self.model_path = model_path
         self.target_rate = target_rate
         self.voice = PiperVoice.load(model_path)
         self.source_rate = int(self.voice.config.sample_rate)
+        self.length_scale = length_scale
+        self.noise_scale = noise_scale
+        self.noise_w_scale = noise_w_scale
+        self.volume = volume
+        self._syn_config = self._build_config()
         # Ein Satz Piper-Audio wird in einem Stueck umgesetzt. Kleine
         # Puffergroessen waeren hier kuenstlich; der Aufrufer zerlegt das
         # Ergebnis ohnehin in 60-ms-Opus-Rahmen.
         self._rng = np.arange(0, 1, dtype=np.float64)
 
+    def _build_config(self):
+        """Baut die Piper-Syntheseeinstellungen, falls Feinregler gesetzt sind.
+
+        Wichtig: Nur gesetzte Werte uebergeben. Ein explizites
+        `volume=None` wuerde Pipers Standard (1.0) ueberschreiben und die
+        Synthese mit einem Typfehler abbrechen (`float * None`).
+        """
+        overrides = {}
+        for name in ("length_scale", "noise_scale", "noise_w_scale", "volume"):
+            value = getattr(self, name)
+            if value is not None:
+                overrides[name] = value
+        if not overrides:
+            return None
+        from piper import SynthesisConfig
+
+        return SynthesisConfig(**overrides)
+
     def describe(self) -> dict:
-        return {
+        info = {
             "model": self.model_path,
             "source_rate": self.source_rate,
             "target_rate": self.target_rate,
         }
+        # Nur gesetzte Feinregler anzeigen, damit die Startzeile kurz bleibt.
+        for name in ("length_scale", "noise_scale", "noise_w_scale", "volume"):
+            value = getattr(self, name)
+            if value is not None:
+                info[name] = value
+        return info
 
     def _resample(self, samples: np.ndarray) -> np.ndarray:
         """Lineare Umsetzung von source_rate auf target_rate.
@@ -123,7 +173,7 @@ class PiperSpeaker:
         if not text:
             return b""
         parts: list[np.ndarray] = []
-        for chunk in self.voice.synthesize(text):
+        for chunk in self.voice.synthesize(text, syn_config=self._syn_config):
             raw = chunk.audio_int16_bytes
             if not raw:
                 continue

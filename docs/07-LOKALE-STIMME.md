@@ -98,8 +98,11 @@ vom Gerät erwarteten 24 kHz um. `server.py` sendet das PCM dann **in
 Echtzeit** in 60-ms-Rahmen, mit drei Rahmen Vorlauf, damit der Anfang nicht
 unterläuft.
 
-Zusätzlich wird Text an **Satzgrenzen** gesprochen, nicht als ganzer Absatz. So
-beginnt die Stimme früher. Dezimalpunkte (`13.95`) trennen dabei nicht.
+Zusätzlich wird Text an **Sprechgrenzen** gesprochen, nicht als ganzer Absatz.
+So beginnt die Stimme früher. Wie kleinteilig das geschieht, steuert
+`--tts-split` (`clause` / `sentence` / `whole`); Zahlzeichen trennen nie,
+weder Dezimalpunkt (`13.95`) noch Uhrzeit (`13:52`). Vollständige Beschreibung
+samt Stimm-Feinreglern: [`docs/08-LOKALE-ERKENNUNG.md`](08-LOKALE-ERKENNUNG.md).
 
 ## Prüfen, ob der lokale Pfad läuft
 

@@ -123,6 +123,54 @@ Bridge selbst (`UtteranceDetector` in `gateway/local_stt.mjs`):
 Der frühere Provider wartete **3000 ms** Stille. Diese 2,3 Sekunden fallen
 hier weg — das ist der größte Latenzgewinn des Umbaus.
 
+## Zerlegung steuern (`--tts-split`)
+
+Wie kleinteilig gesprochen wird, ist einstellbar:
+
+| Modus | Trennt bei | Wirkung |
+|---|---|---|
+| `clause` | Komma und Satzzeichen | frühester Beginn, klingt zerstückelter |
+| `sentence` | Satzzeichen (Standard) | guter Kompromiss |
+| `whole` | gar nicht | die ganze Antwort in einem Stück: spätester Beginn, ruhigster Klang |
+
+```bash
+--tts-split clause     # bis zum Komma senden
+--tts-split sentence   # bis zum Punkt senden (Standard)
+--tts-split whole      # alles auf einmal
+```
+
+Der Zusammenhang: Früher trennen heißt **früher anfangen zu sprechen**, aber
+mehr Nahtstellen zwischen den Stücken. `whole` klingt am ruhigsten, lässt den
+Nutzer aber warten, bis die ganze Antwort fertig ist.
+
+**Wichtig:** Ein Schnitt mitten in einer Zahl klingt hörbar abgehackt. Der
+Code schützt deshalb Ziffer-zu-Ziffer-Zeichen: Uhrzeiten (`13:52`) und
+Dezimalzahlen (`13.95`) werden nie getrennt. Ohne diesen Schutz ergäbe
+„Es ist 13:52 Uhr" ein „Es ist 13:" — genau der abgehackte Eindruck.
+
+## Stimm-Feinregler
+
+Piper kennt vier Regler, die jetzt durchgereicht werden (weggelassen =
+Pipers Standard):
+
+| Schalter | Wirkung |
+|---|---|
+| `--tts-length-scale` | Tempo: 1.0 normal, kleiner = schneller, größer = langsamer |
+| `--tts-noise-scale` | Aussprache-Variation: kleiner = gleichmäßiger |
+| `--tts-noise-w-scale` | Lautlängen-Variation: kleiner = gleichmäßiger |
+| `--tts-volume` | Lautstärke der Synthese (nicht die Gerätelautstärke) |
+
+Gemessen an „Es ist 13:52 Uhr." (Kerstin):
+
+| Einstellung | Audiolänge |
+|---|---|
+| Standard | 2,56 s |
+| `--tts-length-scale 0.9` | 2,42 s (schneller) |
+| `--tts-length-scale 1.15` | 2,82 s (langsamer) |
+
+Diese Regler ändern den **Klang**, nicht die Taktung zum Gerät. Die
+60-ms-Rahmen bleiben unverändert.
+
 ## Antworttext und Sprachausgabe
 
 Der Agent antwortet häufig **formatiert** („Es ist \*\*13:30 Uhr\*\*",
@@ -156,6 +204,10 @@ künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
    Transkription gesetzt, konnte eine zweite Äußerung die laufende Antwort
    überschreiben; die erste ging verloren. `busy` wird jetzt **sofort**
    gesetzt, die nächste Äußerung vorgemerkt und danach verarbeitet.
+5. **Doppelpunkt in der Uhrzeit galt als Satzgrenze.** `"Es ist 13:52 Uhr"`
+   wurde zu `"Es ist 13:"` zerschnitten — hörbar abgehackt mitten in der
+   Zahl. Behoben: Steht links und rechts des Zeichens eine Ziffer, ist es
+   keine Sprechgrenze.
 
 Lehre: Die Sprachschwelle immer an **echtem Mikrofon-Audio** kalibrieren,
 nie an Synthese-Ausgabe.

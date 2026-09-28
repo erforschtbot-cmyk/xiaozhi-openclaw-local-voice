@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   echo "Usage: $0 --public-host LAN_IP [--install-dir PATH] [--tts-voice NAME] [--tts-voice-dir PATH]" >&2
   echo "       --stt-uri HOST:PORT  Adresse des lokalen Whisper-Dienstes (Standard 127.0.0.1:10300)" >&2
+  echo "       --tts-split MODUS    clause | sentence | whole (Standard: sentence)" >&2
   echo "       --provider-stt       installiert ohne lokale Erkennung (OpenAI hoert zu)" >&2
   echo "       --provider-voice     installiert ohne lokale Sprachausgabe (OpenAI-Stimme)" >&2
   exit 2
@@ -12,6 +13,7 @@ usage() {
 public_host=""
 tts_voice="de_DE-kerstin-low"
 tts_voice_dir="$HOME/.local/share/piper-voices"
+tts_split="sentence"
 stt_uri="127.0.0.1:10300"
 local_voice=1
 local_stt=1
@@ -22,12 +24,18 @@ while (($#)); do
     --install-dir) install_dir="${2:-}"; shift 2 ;;
     --tts-voice) tts_voice="${2:-}"; shift 2 ;;
     --tts-voice-dir) tts_voice_dir="${2:-}"; shift 2 ;;
+    --tts-split) tts_split="${2:-}"; shift 2 ;;
     --stt-uri) stt_uri="${2:-}"; shift 2 ;;
     --provider-stt) local_stt=0; shift ;;
     --provider-voice) local_voice=0; shift ;;
     *) usage ;;
   esac
 done
+
+case "$tts_split" in
+  clause|sentence|whole) ;;
+  *) echo "Ungueltiger --tts-split Wert: $tts_split" >&2; usage ;;
+esac
 
 # Lokale Erkennung setzt lokale Sprachausgabe voraus: der lokale Helfer
 # liefert kein Audio; ohne Piper gäbe es nichts zu hören.
@@ -67,12 +75,12 @@ fi
 unit_target="$HOME/.config/systemd/user/jarvis-realtime-bridge.service"
 python3 - "$repo_dir/systemd/jarvis-realtime-bridge.service.in" "$unit_target" \
   "$install_dir" "$public_host" "$tts_voice" "$tts_voice_dir" "$stt_uri" \
-  "$local_voice" "$local_stt" <<'PY'
+  "$tts_split" "$local_voice" "$local_stt" <<'PY'
 from pathlib import Path
 import sys
 (
     source, target, install_dir, public_host, tts_voice,
-    tts_voice_dir, stt_uri, local_voice, local_stt,
+    tts_voice_dir, stt_uri, tts_split, local_voice, local_stt,
 ) = sys.argv[1:]
 text = Path(source).read_text()
 text = (
@@ -81,13 +89,15 @@ text = (
     .replace("@TTS_VOICE@", tts_voice)
     .replace("@TTS_VOICE_DIR@", tts_voice_dir)
     .replace("@STT_URI@", stt_uri)
+    .replace("@TTS_SPLIT@", tts_split)
 )
 # Provider-Varianten: die jeweiligen lokalen Schalter entfernen.
 if local_stt == "0":
     text = text.replace(f" --stt-local --stt-uri {stt_uri} --stt-language de", "")
 if local_voice == "0":
     text = text.replace(
-        f" --tts-local --tts-voice {tts_voice} --tts-voice-dir {tts_voice_dir}",
+        f" --tts-local --tts-voice {tts_voice} --tts-voice-dir {tts_voice_dir}"
+        f" --tts-split {tts_split}",
         "",
     )
 Path(target).write_text(text)
@@ -103,7 +113,7 @@ else
   echo "Installed and active: jarvis-realtime-bridge.service (recognition: provider)"
 fi
 if (( local_voice )); then
-  echo "  voice:       local Piper ($tts_voice)"
+  echo "  voice:       local Piper ($tts_voice), split=$tts_split"
 else
   echo "  voice:       provider"
 fi

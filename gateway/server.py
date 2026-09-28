@@ -467,9 +467,14 @@ class XiaozhiSession:
         """Sammelt Text und schiebt fertige Saetze an den Arbeiter."""
         if not self.tts_local or not text:
             return
+        mode = getattr(self.args, "tts_split", "sentence")
+        if mode == "whole":
+            # Erst am Ende der Antwort sprechen (siehe finish_local_tts).
+            self.tts_text_buffer += text
+            return
         self.tts_text_buffer += text
         while True:
-            boundary = self._tts_boundary(self.tts_text_buffer)
+            boundary = self._tts_boundary(self.tts_text_buffer, mode)
             if boundary <= 0:
                 break
             phrase = self.tts_text_buffer[:boundary].strip()
@@ -479,15 +484,33 @@ class XiaozhiSession:
                 self.tts_queue.put_nowait(phrase)
 
     @staticmethod
-    def _tts_boundary(text):
-        """Index hinter dem naechsten Satzende, sonst bei Ueberlaenge."""
+    def _tts_boundary(text, mode="sentence"):
+        """Index hinter der naechsten Sprechgrenze, sonst bei Ueberlaenge.
+
+        `mode` steuert, wo getrennt wird:
+
+        - `clause`:  schon am Komma. Die Stimme beginnt am fruehesten,
+          klingt aber zerstueckelter (kurze Stuecke, mehr Nahtstellen).
+        - `sentence` (Standard): am Satzende (`. ! ? ; : …`). Guter
+          Kompromiss — frueher Beginn, wenige Nahtstellen.
+        - `whole`: nicht trennen. Die ganze Antwort wird in einem Stueck
+          gesprochen; die Stimme beginnt spaet, klingt dafuer am ruhigsten.
+        """
+        if mode == "whole":
+            return 0
+        breaks = ".!?;:…" if mode == "sentence" else ".!?;:…,"
         for index, char in enumerate(text):
-            if char in ".!?;:…":
-                # Beim Punkt sicherstellen, dass nicht gerade eine Abkuerzung
-                # oder Zahl mit Dezimaltrennzeichen getrennt wird.
-                if char == "." and index + 1 < len(text) and text[index + 1].isdigit():
-                    continue
-                return index + 1
+            if char not in breaks:
+                continue
+            # Steht links und rechts eine Ziffer, trennt das Zeichen keine
+            # Saetze, sondern gehoert zur Zahl: Uhrzeit (13:52), Dezimalzahl
+            # (13.95) oder Tausendertrennung. Ein Schnitt dort ergaebe
+            # "Es ist 13:" — hoerbar abgehackt mitten in der Zahl.
+            left_digit = index > 0 and text[index - 1].isdigit()
+            right_digit = index + 1 < len(text) and text[index + 1].isdigit()
+            if left_digit and right_digit:
+                continue
+            return index + 1
         if len(text) >= 160:
             space = text.rfind(" ", 0, 160)
             return space + 1 if space > 0 else 160
@@ -828,6 +851,41 @@ async def main():
         default="",
         help="Direkter Pfad zu einer .onnx-Stimme (uebersteuert --tts-voice)",
     )
+    parser.add_argument(
+        "--tts-split",
+        choices=("clause", "sentence", "whole"),
+        default="sentence",
+        help=(
+            "Wo der Sprechtext getrennt wird: clause = am Komma (fruehester "
+            "Beginn), sentence = am Satzende (Standard), whole = die ganze "
+            "Antwort in einem Stueck (spaetester Beginn, am ruhigsten)"
+        ),
+    )
+    # Feinregler der Stimme (Piper). Weggelassen = Pipers Standard.
+    parser.add_argument(
+        "--tts-length-scale",
+        type=float,
+        default=None,
+        help="Tempo: 1.0 normal, kleiner = schneller, groesser = langsamer",
+    )
+    parser.add_argument(
+        "--tts-noise-scale",
+        type=float,
+        default=None,
+        help="Aussprache-Variation: kleiner = gleichmaessiger",
+    )
+    parser.add_argument(
+        "--tts-noise-w-scale",
+        type=float,
+        default=None,
+        help="Lautlaengen-Variation: kleiner = gleichmaessiger",
+    )
+    parser.add_argument(
+        "--tts-volume",
+        type=float,
+        default=None,
+        help="Lautstaerke der Synthese (0.0-1.0, nicht die Geraetelautstaerke)",
+    )
     args = parser.parse_args()
 
     # Lokale Erkennung bedeutet zwangslaeufig lokale Sprachausgabe: der
@@ -854,8 +912,15 @@ async def main():
         else:
             model_path = find_default_voice(args.tts_voice_dir, args.tts_voice)
         print(f"Local voice enabled: loading {model_path}", flush=True)
-        args.speaker = PiperSpeaker(model_path)
+        args.speaker = PiperSpeaker(
+            model_path,
+            length_scale=args.tts_length_scale,
+            noise_scale=args.tts_noise_scale,
+            noise_w_scale=args.tts_noise_w_scale,
+            volume=args.tts_volume,
+        )
         print(f"Local voice ready: {args.speaker.describe()}", flush=True)
+        print(f"Local voice split mode: {args.tts_split}", flush=True)
     else:
         args.speaker = None
 

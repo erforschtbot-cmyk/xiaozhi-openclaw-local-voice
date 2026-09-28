@@ -74,6 +74,7 @@ Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 | Erkennung | faster-whisper `small`, int8, CPU | ~2,2 s für 3,1 s Sprache |
 | Stimme | Piper `de_DE-kerstin-low` | RTF 0,04, erster Ton ~70 ms |
 | Aeusserungsende | 700 ms Stille | vorher 3000 ms beim Provider |
+| Sprechgrenze | `--tts-split` (Komma/Satz/ganz) | Standard: Satzende
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143
