@@ -39,18 +39,24 @@ function frame(amplitude) {
   return buf;
 }
 
+// Pegel wie am echten Geraet beobachtet: Sprache liegt bei RMS 40-110,
+// Stille bei RMS 14-20. Ein Test mit hohen Werten (z. B. 4000) wuerde eine
+// viel zu hohe Schwelle nicht auffallen lassen.
+const SPEECH_AMPLITUDE = 80; // RMS ~80
+const QUIET_AMPLITUDE = 16;  // RMS ~16
+const NOISE_AMPLITUDE = 30;  // RMS ~30, unter der Schwelle 35
+
 // Stille -> Sprache -> Stille. Genau eine Aeusserung muss herauskommen.
-const detector = new UtteranceDetector({ rate: RATE, silenceMs: 700, minSpeechMs: 250 });
+const detector = new UtteranceDetector({ rate: RATE, silenceMs: 700, minSpeechMs: 200 });
 let utterances = 0;
-let quiet = 0;
 for (let index = 0; index < 20; index += 1) {          // 1,2 s Stille
-  if (detector.push(frame(0))) utterances += 1;
+  if (detector.push(frame(QUIET_AMPLITUDE))) utterances += 1;
 }
 for (let index = 0; index < 25; index += 1) {          // 1,5 s Sprache
-  if (detector.push(frame(4000))) utterances += 1;
+  if (detector.push(frame(SPEECH_AMPLITUDE))) utterances += 1;
 }
 for (let index = 0; index < 30; index += 1) {          // 1,8 s Stille
-  const result = detector.push(frame(0));
+  const result = detector.push(frame(QUIET_AMPLITUDE));
   if (result) utterances += 1;
 }
 check("Genau eine Aeusserung erkannt", utterances === 1, `gezaehlt: ${utterances}`);
@@ -59,17 +65,30 @@ check("Genau eine Aeusserung erkannt", utterances === 1, `gezaehlt: ${utterances
 const quietDetector = new UtteranceDetector({ rate: RATE });
 let quietUtterances = 0;
 for (let index = 0; index < 100; index += 1) {
-  if (quietDetector.push(frame(0))) quietUtterances += 1;
+  if (quietDetector.push(frame(QUIET_AMPLITUDE))) quietUtterances += 1;
 }
 check("Reine Stille ergibt keine Aeusserung", quietUtterances === 0);
 
-// Grundrauschen darf nicht als Sprache gelten (leises Brummen).
-const noisyDetector = new UtteranceDetector({ rate: RATE, speechRms: 420 });
+// Zimmerrauschen darf nicht als Sprache gelten.
+const noisyDetector = new UtteranceDetector({ rate: RATE });
 let noisyUtterances = 0;
 for (let index = 0; index < 100; index += 1) {
-  if (noisyDetector.push(frame(80))) noisyUtterances += 1;
+  if (noisyDetector.push(frame(NOISE_AMPLITUDE))) noisyUtterances += 1;
 }
-check("Leises Grundrauschen ergibt keine Aeusserung", noisyUtterances === 0);
+check("Zimmerrauschen ergibt keine Aeusserung", noisyUtterances === 0);
+
+// Sehr leise Sprache muss trotzdem erkannt werden (Grenzfall).
+const faintDetector = new UtteranceDetector({ rate: RATE });
+let faintUtterances = 0;
+for (let index = 0; index < 10; index += 1) faintDetector.push(frame(QUIET_AMPLITUDE));
+for (let index = 0; index < 25; index += 1) {
+  if (faintDetector.push(frame(45))) faintUtterances += 1;
+}
+for (let index = 0; index < 30; index += 1) {
+  if (faintDetector.push(frame(QUIET_AMPLITUDE))) faintUtterances += 1;
+}
+check("Leise Sprache (RMS ~45) wird erkannt", faintUtterances === 1,
+      `gezaehlt: ${faintUtterances}`);
 
 // --------------------------------------------------------------------------
 console.log();

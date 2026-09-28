@@ -16,7 +16,7 @@ wurde ausschliesslich der Sprachausgabe-Pfad des Hosts.
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | **Lokale Sprachausgabe** | `piper-tts==1.4.2` (GPL-3.0-or-later), `numpy>=1.26` |
 | **Lokale Stimme** | `de_DE-kerstin-low` (16 kHz, 60,2 MB) |
-| **Lokale Erkennung** | `faster-whisper` **base**, int8, CPU (Wyoming-Dienst) |
+| **Lokale Erkennung** | `faster-whisper` **small**, int8, CPU (Wyoming-Dienst) |
 | Erkennungsdienst | `wyoming-faster-whisper`, Port `10300` |
 | Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |
 | Provider-Stimme (nur noch Rueckfall) | `cove` |

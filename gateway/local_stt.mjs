@@ -167,6 +167,13 @@ export function transcribePcm(pcm, options = {}) {
  * dem gelernten Grundrauschen, gilt das als Sprache. Bleibt es danach lang
  * genug still, ist die Aeusserung beendet.
  *
+ * Die absoluten Werte sind niedriger als man erwartet: Ein echtes Mikrofon
+ * am Geraet liefert fuer Sprache RMS-Werte um 40-110 bei Stille um 15-20.
+ * Voll ausgesteuertes Synthese-Audio (Piper) erreicht RMS um 1700 — eine
+ * Kalibrierung an solchem Testmaterial setzt die Schwelle viel zu hoch.
+ * Deshalb ist `speechRms` klein (35) und die Grundrauschen-Adaption
+ * uebernimmt die Anpassung an den Raum.
+ *
  * Die Ruheschwelle ist bewusst kurz (Standard 700 ms). Der frueher genutzte
  * OpenAI-Dienst wartete 3000 ms — diese Wartezeit faellt hier weg.
  */
@@ -174,9 +181,9 @@ export class UtteranceDetector {
   constructor(options = {}) {
     const {
       rate = 16000,
-      speechRms = 420,
+      speechRms = 35,
       silenceMs = 700,
-      minSpeechMs = 250,
+      minSpeechMs = 200,
       maxUtteranceMs = 20000,
     } = options;
     this.rate = rate;
@@ -184,6 +191,10 @@ export class UtteranceDetector {
     this.silenceMs = silenceMs;
     this.minSpeechMs = minSpeechMs;
     this.maxUtteranceMs = maxUtteranceMs;
+    // Startwert des Grundrauschens: gemessen liegt Stille am Geraet bei
+    // RMS 14-20. Ein hoeherer Startwert wuerde die ersten Sekunden Sprache
+    // unterdruecken, weil die Schwelle erst langsam absinkt.
+    this.noiseFloorStart = 15;
     this.reset();
   }
 
@@ -193,9 +204,10 @@ export class UtteranceDetector {
     this.speaking = false;
     this.speechMs = 0;
     this.silenceMsAccum = 0;
-    this.noiseFloor = 60;
+    this.noiseFloor = this.noiseFloorStart;
     this.startedAtMs = 0;
     this.lastRms = 0;
+    this.rmsSamples = [];
   }
 
   /** Effektivwert eines s16le-Rahmens. */
@@ -220,9 +232,16 @@ export class UtteranceDetector {
     const durationMs = (buf.length / 2 / this.rate) * 1000;
     const rms = UtteranceDetector.rms(buf);
     this.lastRms = rms;
+    this.rmsSamples.push(rms);
+    if (this.rmsSamples.length > 50) this.rmsSamples.shift();
 
-    const speakingNow =
-      rms > Math.max(this.speechRms, this.noiseFloor * 3);
+    // Zwei Huerden: eine absolute Mindestschwelle und das Doppelte des
+    // gelernten Grundrauschens. Der Faktor ist bewusst 2, nicht 3: bei
+    // Sprache um RMS 40-110 und Stille um 15-20 waere das Dreifache des
+    // Grundrauschens bereits ueber der halben Sprache.
+    const threshold = Math.max(this.speechRms, this.noiseFloor * 2);
+    this.lastThreshold = threshold;
+    const speakingNow = rms > threshold;
 
     if (!this.speaking) {
       if (!speakingNow) {

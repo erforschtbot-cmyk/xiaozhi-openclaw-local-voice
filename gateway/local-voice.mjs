@@ -74,6 +74,20 @@ function finalMessageText(message) {
     .join("");
 }
 
+/**
+ * Zieht den Antworttext aus einem chat-Ereignis.
+ *
+ * Der Agent liefert den Text NICHT als `payload.text`, sondern als
+ * `payload.message.content` (Liste von Teilen). Ein reiner `payload.text`-Zugriff
+ * ergibt deshalb immer einen leeren Text — die Antwort verstummt und der
+ * Rueckfall greift. Beide Formen werden hier abgedeckt.
+ */
+function extractText(payload) {
+  if (!payload) return "";
+  if (typeof payload.text === "string" && payload.text) return payload.text;
+  return finalMessageText(payload.message);
+}
+
 const [, , rateText, widthText, channelsText] = process.argv;
 const rate = Number(rateText);
 const width = Number(widthText);
@@ -114,20 +128,25 @@ const client = new GatewayClient({
 
     // Antworttext an die Bridge melden, damit sie lokal spricht.
     if (activeRun && payload?.runId === activeRun.runId) {
-      if (payload.state === "delta" && typeof payload.text === "string") {
-        const delta = takeDelta(payload.text);
+      if (payload.state === "delta") {
+        const text = extractText(payload);
+        const delta = takeDelta(text);
         if (delta) emit("assistant_delta", { text: delta });
         return;
       }
       if (payload.state === "final") {
-        const full = finalMessageText(payload.message) || "";
+        const full = extractText(payload);
+        if (!full) {
+          // Sichtbar machen, statt still zu verstummen.
+          log(`final ohne Text; Rohdaten: ${JSON.stringify(payload).slice(0, 300)}`);
+        }
         // Falls das Transkript nie als Delta kam, den Rest nachreichen.
         const tail = takeDelta(full);
         if (tail) emit("assistant_delta", { text: tail });
         const pending = pendingRuns.get(payload.runId);
         if (pending) {
           pendingRuns.delete(payload.runId);
-          pending.resolve(full || "Erledigt.");
+          pending.resolve(full);
         }
         return;
       }
@@ -171,12 +190,50 @@ emit("ready", { sessionId: `local-voice`, consultSessionKey: null });
 
 const detector = new UtteranceDetector({
   rate,
-  speechRms: Number(process.env.OPENCLAW_VAD_RMS || 420),
+  // Gemessene Werte am Gerät: Sprache RMS 40-110, Stille 14-20. Die
+  // Schwelle muss deutlich darunter liegen, sonst wird Sprache verworfen.
+  speechRms: Number(process.env.OPENCLAW_VAD_RMS || 35),
   silenceMs: Number(process.env.OPENCLAW_VAD_SILENCE_MS || 700),
-  minSpeechMs: Number(process.env.OPENCLAW_VAD_MIN_SPEECH_MS || 250),
+  minSpeechMs: Number(process.env.OPENCLAW_VAD_MIN_SPEECH_MS || 200),
 });
 
 let busy = false;
+let pendingUtterance = null;
+
+// Wachwort allein darf keine Frage sein: Das Geraet schickt Mikrofon-Audio
+// fortlaufend, deshalb wird auch das gesprochene "Jarvis" erkannt. Es ist
+// kein Auftrag, sondern die Aktivierung.
+const WAKE_ONLY = /^(jarvis|hey jarvis|ja vis|javis|harvis|charvis)$/;
+
+function isWakeWordOnly(text) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^\p{L}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > 0 && WAKE_ONLY.test(normalized);
+}
+
+/**
+ * Nimmt eine erkannte Aeusserung zur Verarbeitung an.
+ *
+ * Wichtig: `busy` wird SOFORT gesetzt, nicht erst nach der Transkription.
+ * Sonst koennen zwei Aeusserungen gleichzeitig in die Verarbeitung laufen;
+ * die zweite ueberschreibt dann die laufende Antwort und die erste geht
+ * verloren. Ist bereits eine Aeusserung aktiv, wird die neue vorgemerkt
+ * (die letzte gewinnt) und danach verarbeitet.
+ */
+function dispatchUtterance(frame) {
+  if (busy) {
+    pendingUtterance = frame;
+    log(
+      `Aeusserung vorgemerkt: ${(frame.length / 2 / rate).toFixed(2)} s ` +
+      "(laufende Verarbeitung zuerst)",
+    );
+    return;
+  }
+  busy = true;
+  void handleUtterance(frame);}
 
 async function handleUtterance(pcm) {
   let text = "";
@@ -197,11 +254,15 @@ async function handleUtterance(pcm) {
     log("Leere Erkennung; keine Antwort angefordert");
     return;
   }
+  if (isWakeWordOnly(text)) {
+    log(`Wachwort erkannt, kein Auftrag: ${text}`);
+    return;
+  }
 
   emit("user_transcript", { text });
   log(`Erkannt: ${text}`);
 
-  busy = true;
+  // Textzustand fuer die Delta-Berechnung zuruecksetzen.
   assistantText = "";
   try {
     const started = await client.request("chat.send", {
@@ -217,6 +278,17 @@ async function handleUtterance(pcm) {
     const answer = await new Promise((resolve, reject) => {
       pendingRuns.set(runId, { resolve, reject });
     });
+    if (!answer) {
+      // Ohne Text nicht sprechen; die Bridge soll trotzdem sauber abschliessen.
+      log("Leere Antwort; kein Sprechauftrag");
+      emit("assistant_done", {
+        text: "",
+        audioFrameCount: 0,
+        audioByteCount: 0,
+        msSinceLastAudio: null,
+      });
+      return;
+    }
     emit("assistant_done", {
       text: answer,
       audioFrameCount: 0,
@@ -230,11 +302,16 @@ async function handleUtterance(pcm) {
   } finally {
     activeRun = null;
     busy = false;
+    // Eine waehrend der Verarbeitung erkannte Aeusserung jetzt nachholen.
+    const next = pendingUtterance;
+    pendingUtterance = null;
+    if (next) dispatchUtterance(next);
   }
 }
 
 // Stdin als PCM-Strom lesen.
 let pending = Buffer.alloc(0);
+let framesSeen = 0;
 const frameBytes = Math.floor((rate * 60) / 1000) * 2; // 60-ms-Rahmen
 
 process.stdin.on("data", (chunk) => {
@@ -242,11 +319,24 @@ process.stdin.on("data", (chunk) => {
   while (pending.length >= frameBytes) {
     const frame = pending.subarray(0, frameBytes);
     pending = pending.subarray(frameBytes);
-    if (busy) continue; // Waehrend einer Antwort nichts annehmen.
+    framesSeen += 1;
+    if (framesSeen % 25 === 0) {
+      // Diagnose: zeigt, ob ueberhaupt Audio ankommt und wie laut es ist.
+      const recent = detector.rmsSamples;
+      const avg = recent.length
+        ? (recent.reduce((a, b) => a + b, 0) / recent.length).toFixed(0)
+        : "-";
+      log(
+        `frames=${framesSeen} rms=${detector.lastRms.toFixed(0)} ` +
+        `avg=${avg} threshold=${(detector.lastThreshold ?? 0).toFixed(0)} ` +
+        `speaking=${detector.speaking} speechMs=${detector.speechMs.toFixed(0)} ` +
+        `silence=${detector.silenceMsAccum.toFixed(0)} busy=${busy}`,
+      );
+    }
     const utterance = detector.push(frame);
     if (utterance) {
-      // Absichtlich nicht awaiten: weiterlesen, damit stdin nicht blockiert.
-      void handleUtterance(utterance);
+      log(`Aeusserung erkannt: ${(utterance.length / 2 / rate).toFixed(2)} s`);
+      dispatchUtterance(utterance);
     }
   }
 });

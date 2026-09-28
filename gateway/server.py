@@ -50,6 +50,9 @@ class XiaozhiSession:
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
+        # Diagnosezaehler fuer den Mikrofonpegel (siehe feed_opus).
+        self.audio_packets = 0
+        self.audio_peak = 0
 
         # --- Lokale Sprachausgabe (Piper) -------------------------------
         # `tts_local` schaltet den Pfad um: der Provider liefert dann nur
@@ -645,6 +648,20 @@ class XiaozhiSession:
             return
         if self.input_stopped:
             return
+        if pcm:
+            # Pegel mitschreiben: ein zu hoher Schwellwert in der
+            # Aeusserungserkennung faellt sonst nicht auf.
+            samples = memoryview(pcm).cast("h")
+            peak = max((abs(sample) for sample in samples), default=0)
+            self.audio_packets += 1
+            self.audio_peak = max(self.audio_peak, peak)
+            if self.audio_packets % 25 == 0:
+                print(
+                    f"Mic audio: packets={self.audio_packets} "
+                    f"peak={self.audio_peak} followup={self.followup_open}",
+                    flush=True,
+                )
+                self.audio_peak = 0
         if self.followup_open and pcm:
             samples = memoryview(pcm).cast("h")
             self.followup_peak = max(

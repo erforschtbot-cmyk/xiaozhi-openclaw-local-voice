@@ -37,17 +37,23 @@ hier ist eine Sekunde Stille für den Nutzer. Gemessen auf dem Referenzhost
 
 | Modell | Zeit | RTF | Urteil |
 |---|---|---|---|
-| `base` | **0,81 s** | 0,26 | Standard |
-| `small` | 2,18 s | 0,70 | genauer, 2,7× langsamer |
+| `base` | 0,81 s | 0,26 | schnell, verhört sich gelegentlich |
+| `small` | 2,18 s | 0,70 | **Standard** — genauer |
 | `medium` | 7,3–15,0 s | 2,3–4,8 | **untauglich** |
 
-`medium` ist das genaue Gegenteil von „schnell": Bei einem 3-Sekunden-Satz
-wartet man 7 bis 15 Sekunden. Auf diesem Host kommt nur `base` in Frage;
-`small` ist der Kompromiss, wenn Erkennungsfehler stören.
+Der früher laufende `medium`-Dienst war 9- bis 18-mal langsamer als `base`.
+Auf diesem Host sind `base` und `small` tragfähig; gewählt wurde `small`,
+weil die Erkennungsfehler von `base` im Sprachbetrieb störten
+(„Schalte“ → „Zeite“).
 
-Beispiel für die Genauigkeit von `base`:
-„Schalte den Monitor an. Wie spät ist es?" → „Zeite den Monitor an, wie spät
-es ist." Inhaltlich verständlich, aber nicht fehlerfrei.
+Beobachtete Genauigkeit an echtem Mikrofon-Audio:
+- `base`: „Schalte den Monitor an. Wie spät ist es?“ → „Zeite den Monitor
+  an, wie spät es ist.“
+- `small`: derselbe Satz → „Wie spät ist das?“ (Wörter und Satzbau besser,
+  einzelne Verwechslungen bleiben)
+
+Beide Modelle brauchen Vorlaufzeit beim ersten Satz, wenn der Dienst sie noch
+nicht geladen hat. Modelle vorab laden, siehe Einrichtung unten.
 
 ## Einrichten
 
@@ -62,20 +68,20 @@ ExecStart=%h/wyoming-stt/.venv/bin/wyoming-faster-whisper \
   --uri tcp://0.0.0.0:10300 \
   --data-dir %h/.cache/faster-whisper-models \
   --download-dir %h/.cache/faster-whisper-models \
-  --model base \
+  --model small \
   --compute-type int8 \
   --language de \
   --beam-size 5
 ```
 
-Wichtig: `--model base`. Der Standard vieler Anleitungen ist `medium` — das
-ist auf CPU-Hardware ohne Grafikkarte zu langsam.
+Wichtig: `--model small` (oder `base`). Der Standard vieler Anleitungen ist
+`medium` — das ist auf CPU-Hardware ohne Grafikkarte zu langsam.
 
 Modell vorladen (sonst lädt der Dienst es beim ersten Satz nach):
 
 ```bash
 python3 -c "from faster_whisper import WhisperModel; \
-  WhisperModel('base', device='cpu', compute_type='int8', \
+  WhisperModel('small', device='cpu', compute_type='int8', \
   download_root=os.path.expanduser('~/.cache/faster-whisper-models'))"
 ```
 
@@ -127,6 +133,33 @@ Formatierung, behält aber den Inhalt.
 Nachgewiesen: Derselbe Satz mit und ohne Sternchen ergibt unterschiedlich
 langes Audio — Piper spricht `**` tatsächlich mit (2,74 s statt 2,68 s).
 
+## Vier Fehler, die erst im echten Betrieb auftraten
+
+Diese sind alle behoben. Sie stehen hier, weil keiner davon durch Tests mit
+künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
+
+1. **Sprachschwelle an falschem Material kalibriert.** Ein Test mit
+   Piper-Audio (RMS ~1755) setzte die Schwelle auf 420. Ein echtes Mikrofon
+   liefert für Sprache nur RMS 40–110 bei Stille 14–20. Folge: Sprache wurde
+   fast nie erkannt, Äußerungen still verworfen — das Gerät blieb im
+   Zustand „hört zu", ohne dass etwas geschah. Richtig ist
+   `speechRms: 35` plus Grundrauschen-Adaption.
+2. **Falsches Feld für den Antworttext.** Der Agent liefert Text in
+   `payload.message.content` (Liste von Teilen), nicht in `payload.text`.
+   Ein `payload.text`-Zugriff ergibt immer leer — die Stimme verstummt still.
+   Beide Formen abdecken (siehe `extractText` in `gateway/local-voice.mjs`).
+3. **Das Wachwort wurde als Auftrag verschickt.** Da das Gerät Mikrofon
+   fortlaufend sendet, wird auch das gesprochene „Jarvis" transkribiert.
+   Ohne Filter geht es als Frage an den Agenten. `isWakeWordOnly()` verwirft
+   reine Wachworte.
+4. **Zwei Äußerungen liefen gleichzeitig.** Wurde `busy` erst nach der
+   Transkription gesetzt, konnte eine zweite Äußerung die laufende Antwort
+   überschreiben; die erste ging verloren. `busy` wird jetzt **sofort**
+   gesetzt, die nächste Äußerung vorgemerkt und danach verarbeitet.
+
+Lehre: Die Sprachschwelle immer an **echtem Mikrofon-Audio** kalibrieren,
+nie an Synthese-Ausgabe.
+
 ## Zurück zur Provider-Erkennung
 
 ```bash
@@ -141,9 +174,9 @@ umgebaut werden; beide Pfade sind im Code erhalten.
 - **Das Denken bleibt beim Agenten.** Der Agent läuft weiterhin über ein
   Modell, das je nach Einrichtung lokal oder in der Cloud liegt. Dieser
   Aufbau macht Erkennung und Stimme lokal, nicht das Modell.
-- **`base` verhört sich gelegentlich.** Beispiele: „Schalte" → „Zeite",
-  „wie spät ist es" → „wie spät es ist". Bei Werkzeugbefehlen kann das
-  Folgen haben. Wer das nicht akzeptiert, nimmt `small` und wartet länger.
+- **`small` verhört sich gelegentlich.** Beispiele: „Schalte" → „Zeite".
+  Bei Werkzeugbefehlen kann das Folgen haben. `base` ist schneller, aber
+  ungenauer; die Wahl ist ein Abwägen zwischen Wartezeit und Treffsicherheit.
 - **Die Stille-Erkennung ist schwellwertbasiert.** In sehr lauter Umgebung
   kann sie eine Äußerung zu früh oder zu spät beenden. Die Schwellen sind
   über Umgebungsvariablen einstellbar (`OPENCLAW_VAD_RMS`,
