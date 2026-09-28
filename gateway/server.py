@@ -53,6 +53,16 @@ class XiaozhiSession:
         # Diagnosezaehler fuer den Mikrofonpegel (siehe feed_opus).
         self.audio_packets = 0
         self.audio_peak = 0
+        # Vorwaermen: der Sprachhelfer (Cloud-Talk-Sitzung) braucht vom Start
+        # bis "ready" rund 3 Sekunden. Wird er erst beim ersten Mikrofonpaket
+        # gestartet, ist der Nutzer mit seinem Satz laengst durch, bevor
+        # ueberhaupt zugehoert wird. Deshalb startet er schon beim
+        # Verbindungsaufbau (hello). `helper_starting` verhindert, dass zwei
+        # gleichzeitige Aufrufe (hello und erstes Paket) zwei Helfer starten.
+        self.helper_ready = asyncio.Event()
+        self.helper_starting = False
+        self.helper_ready_at = 0.0
+        self.helper_started_at = 0.0
 
         # --- Lokale Sprachausgabe (Piper) -------------------------------
         # `tts_local` schaltet den Pfad um: der Provider liefert dann nur
@@ -181,7 +191,34 @@ class XiaozhiSession:
             # must not replace its still-running helper. A follow-up helper is
             # allowed only after finish_after_grace_period reaps this process.
             return
+        if self.helper_starting:
+            # Der Start laeuft bereits (Vorwaermen beim hello). Ein zweiter
+            # Aufruf aus dem ersten Mikrofonpaket darf keinen zweiten Helfer
+            # erzeugen.
+            return
+        self.helper_starting = True
+        try:
+            await self._start_realtime_process()
+        finally:
+            self.helper_starting = False
 
+    async def prewarm_realtime(self):
+        """Oeffnet die Talk-Sitzung schon beim Verbindungsaufbau.
+
+        Ohne diesen Schritt entsteht der Helfer erst mit dem ersten
+        Mikrofonpaket - also nach dem Wachwort, waehrend der Nutzer bereits
+        spricht. Die Anlaufzeit der Sitzung faellt dann in den gesprochenen
+        Satz und die ersten Woerter gehen verloren.
+        """
+        loop = asyncio.get_running_loop()
+        self.helper_started_at = loop.time()
+        print("Prewarm: starting talk helper before first microphone packet", flush=True)
+        try:
+            await self.start_realtime()
+        except Exception as exc:  # noqa: BLE001
+            print(f"Prewarm failed: {exc!r}", flush=True)
+
+    async def _start_realtime_process(self):
         self.turn_id = str(uuid.uuid4())
         self.tts_started = False
         self.pcm_buffer = bytearray()
@@ -650,6 +687,15 @@ class XiaozhiSession:
                         else:
                             self.schedule_stream_end(process)
                 elif kind in {"ready", "tool_result"}:
+                    if kind == "ready":
+                        self.helper_ready.set()
+                        if self.helper_started_at:
+                            self.helper_ready_at = asyncio.get_running_loop().time()
+                            print(
+                                "Prewarm: helper ready after "
+                                f"{self.helper_ready_at - self.helper_started_at:.2f}s",
+                                flush=True,
+                            )
                     print(
                         "OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
@@ -691,7 +737,11 @@ class XiaozhiSession:
                 self.followup_peak,
                 max((abs(sample) for sample in samples), default=0),
             )
-        if self.process.stdin and not self.process.stdin.is_closing():
+        if (
+            self.process
+            and self.process.stdin
+            and not self.process.stdin.is_closing()
+        ):
             if self.followup_open:
                 self.followup_forwarded_packets += 1
             self.process.stdin.write(pcm)
@@ -750,6 +800,13 @@ class XiaozhiSession:
                     })
                     if payload.get("features", {}).get("mcp"):
                         asyncio.create_task(self.initialize_mcp())
+                    # Vorwaermen: Die Talk-Sitzung des Providers braucht rund
+                    # 3 Sekunden bis sie zuhoert. Hier ist der einzige
+                    # Zeitpunkt, der frueh genug liegt: das Geraet hat gerade
+                    # den Kanal geoeffnet und der Nutzer hat das Wachwort noch
+                    # nicht gesprochen. Bewusst als Task, damit der
+                    # hello-Austausch nicht darauf wartet.
+                    asyncio.create_task(self.prewarm_realtime())
                 elif kind == "mcp":
                     mcp_payload = payload.get("payload", {})
                     request_id = mcp_payload.get("id")
@@ -758,6 +815,19 @@ class XiaozhiSession:
                         pending.set_result(mcp_payload)
                 elif kind == "listen" and payload.get("state") == "start":
                     await self.start_realtime()
+                elif (
+                    kind == "device"
+                    and payload.get("event") == "state"
+                ):
+                    # Die Firmware meldet bei jedem Zustandswechsel ihren
+                    # echten Zustand. Bisher wurde das ignoriert; die Bridge
+                    # musste den Geraetezustand aus dem Timing erraten. Wir
+                    # protokollieren ihn, damit sich Anzeige und Wirklichkeit
+                    # bei Bedarf abgleichen lassen.
+                    print(
+                        f"Device state: {payload.get('state')}",
+                        flush=True,
+                    )
                 elif kind == "listen" and payload.get("state") == "stop":
                     # This device-state notification may arrive after
                     # playback_drained. The finalized user transcript already

@@ -180,3 +180,45 @@ Gateway-Neustart und End-to-End-Werkzeugtest sind Pflicht:
 ./scripts/verify-openclaw-voice-dist-patches.py
 systemctl --user restart openclaw-gateway.service
 ```
+
+## „Jarvis" wird gehört, aber der erste Satz geht verloren (Anlaufzeit der Talk-Sitzung)
+
+Symptom: Direkt nach dem Wachwort gesprochene Sätze kommen nicht an — man muss
+alles zweimal sagen. Wer dagegen wartet, bis „Zuhören" steht **plus etwa eine
+Sekunde**, wird immer verstanden. Es wirkt zufällig, ist aber ein Wettlauf.
+
+Ursache: Der Helfer (Cloud-Talk-Sitzung) wurde erst mit dem **ersten
+Mikrofonpaket** gestartet. Er braucht vom Start bis `ready` rund **2–3 s**
+(gemessen: 2,66 s; unter Gateway-Last bis 13 s):
+
+```text
+16:05:17  Gerät verbunden          →  Anzeige "Zuhören"
+16:05:19  Mikrofon-Paket 25        →  läuft schon, aber niemand hört zu
+16:05:28  Helfer bereit            →  erst JETZT wird wirklich zugehört
+```
+
+Die Anzeige „Zuhören" bedeutete in dieser Zeit **nicht**, dass zugehört wird.
+
+Maßnahme: `prewarm_realtime()` in `gateway/server.py` startet den Helfer bereits
+beim `hello` (Kanalaufbau) statt beim ersten Paket. Damit ist die Sitzung warm,
+bevor das Wachwort fällt.
+
+```text
+XiaoZhi connected from ...
+Prewarm: starting talk helper before first microphone packet
+Prewarm: helper ready after 2.66s
+```
+
+Absicherungen, die dazugehören:
+
+- `helper_starting` verhindert, dass `hello` und das erste Paket zwei Helfer starten.
+- `feed_opus` prüft `self.process and ...` — vorher war `self.process` durch das
+  Start-Await garantiert gesetzt; mit dem Vorwärmen kann `start_realtime()`
+  sofort zurückkehren, dann wäre `self.process` noch `None`.
+- Die Firmware meldet bei jedem Wechsel ihren echten Zustand
+  (`{"type":"device","event":"state","state":...}`). Die Bridge protokolliert das
+  jetzt als `Device state: …`. Vorher war sie dafür blind und musste den Zustand
+  aus dem Timing erraten.
+
+Rückweg: `~/.local/share/jarvis-realtime-bridge/server.py.bak-vorwaermen-VORHER-*`
+zurückkopieren und den Dienst neu starten.
