@@ -1,0 +1,22 @@
+[Unit]
+Description=Jarvis XiaoZhi voice bridge with local Piper speech (isolated from OpenClaw files)
+After=network-online.target openclaw-gateway.service
+
+[Service]
+Type=simple
+WorkingDirectory=@INSTALL_DIR@
+ExecStart=@INSTALL_DIR@/.venv/bin/python @INSTALL_DIR@/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host @PUBLIC_HOST@ --model gpt-live-1-codex --voice cove --session-key agent:voice:xiaozhi-realtime-v5 --consult-session-key agent:allgemein:xiaozhi-realtime-v5 --tts-local --tts-voice @TTS_VOICE@ --tts-voice-dir @TTS_VOICE_DIR@ --gateway-ca %h/.openclaw/ssl/gateway.crt --helper @INSTALL_DIR@/openclaw-talk-realtime.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Die Stimmen liegen unter ~/.local/share/piper-voices und muessen lesbar
+# sein; das Verzeichnis liegt innerhalb von ProtectHome=read-only und ist
+# damit bereits lesbar. Der Installationsordner bleibt der einzige
+# Schreibpfad.
+ReadWritePaths=%h/.openclaw %h/.local/share/jarvis-realtime-bridge
+
+[Install]
+WantedBy=default.target

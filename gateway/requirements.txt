@@ -1,0 +1,2 @@
+websockets==15.0.1
+opuslib==3.0.1

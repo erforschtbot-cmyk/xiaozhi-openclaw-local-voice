@@ -1,0 +1,1018 @@
+diff --git a/docker/firmware-builder/firmware_builder.py b/docker/firmware-builder/firmware_builder.py
+index d632aea..85a4e1e 100644
+--- a/docker/firmware-builder/firmware_builder.py
++++ b/docker/firmware-builder/firmware_builder.py
+@@ -28,7 +28,7 @@ from typing import Any, Sequence
+ SAFE_BOARD_DIR = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
+ SAFE_REPORTED_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+ SAFE_JOB_ID = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+-SAFE_WAKE_WORD = re.compile(r"^(?:disabled|nihaoxiaozhi|wn9[sl]?_[a-z0-9_]+)$")
++SAFE_WAKE_WORD = re.compile(r"^(?:disabled|hey_jarvis|nihaoxiaozhi|wn9[sl]?_[a-z0-9_]+)$")
+ ARTIFACTS = {
+     "ota": Path("build/xiaozhi.bin"),
+     "full": Path("build/merged-binary.bin"),
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..48a9638 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -210,11 +210,19 @@ void Application::Run() {
+ 
+         if (bits & MAIN_EVENT_STATE_CHANGED) {
+             HandleStateChangedEvent();
++            if (protocol_ && protocol_->IsAudioChannelOpened()) {
++                protocol_->SendDeviceState(DeviceStateMachine::GetStateName(GetDeviceState()));
++            }
+         }
+ 
+         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
+             if (audio_service_.IsPlaybackIdle()) {
+                 notify_player_.OnPlaybackDrained();
++                if (tts_stream_end_pending_ && GetDeviceState() == kDeviceStateSpeaking && protocol_) {
++                    tts_stream_end_pending_ = false;
++                    protocol_->SendPlaybackDrained();
++                    SetDeviceState(kDeviceStateListening);
++                }
+             }
+             // Deferred listening start (auto mode): the playback queue has
+             // drained, so it is now safe to enable voice processing.
+@@ -276,6 +284,9 @@ void Application::Run() {
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+ 
++            // Recovery watchdog: return a stalled conversation to standby.
++            HandleStuckWatchdog();
++
+             // Print debug info every 10 seconds
+             if (clock_ticks_ % 10 == 0) {
+                 SystemInfo::PrintHeapStats();
+@@ -286,6 +297,82 @@ void Application::Run() {
+     }
+ }
+ 
++void Application::HandleStuckWatchdog() {
++    const DeviceState state = GetDeviceState();
++
++    // Reset the per-state counter whenever the state changes.
++    if (state != watchdog_last_state_) {
++        watchdog_last_state_ = state;
++        watchdog_state_seconds_ = 0;
++    } else if (watchdog_state_seconds_ < 1000000) {
++        watchdog_state_seconds_++;
++    }
++
++    watchdog_idle_seconds_ = protocol_ ? protocol_->SecondsSinceLastIncoming() : 0;
++
++    // Only conversation states are guarded. Idle/wifi/activating/upgrading are
++    // never touched, and fatal_error must stay untouched.
++    //
++    // Thresholds are deliberately generous: they must not disturb normal turns,
++    // including tool consults that stream nothing to the device while running.
++    // Tune only with a full test-plan pass afterwards.
++    constexpr int kSpeakingIdleTimeoutS = 60;
++    constexpr int kListeningIdleTimeoutS = 120;
++    constexpr int kConnectingTimeoutS = 15;
++
++    bool stalled = false;
++    const char* reason = "";
++
++    switch (state) {
++        case kDeviceStateSpeaking:
++            // While speaking the server streams audio/TTS events continuously.
++            // A long silence means the answer is dead even though the socket is warm.
++            if (watchdog_idle_seconds_ >= kSpeakingIdleTimeoutS) {
++                stalled = true;
++                reason = "no server audio while speaking";
++            }
++            break;
++        case kDeviceStateListening:
++            // Listening means the device is waiting for the server. Silence for
++            // this long means the turn will never come back.
++            if (watchdog_idle_seconds_ >= kListeningIdleTimeoutS) {
++                stalled = true;
++                reason = "no server activity while listening";
++            }
++            break;
++        case kDeviceStateConnecting:
++            if (watchdog_state_seconds_ >= kConnectingTimeoutS) {
++                stalled = true;
++                reason = "audio channel did not open";
++            }
++            break;
++        default:
++            break;
++    }
++
++    if (!stalled) {
++        return;
++    }
++
++    ESP_LOGW(TAG,
++             "Stuck watchdog: state=%s in_state=%ds idle=%ds (%s) -> idle",
++             DeviceStateMachine::GetStateName(state), watchdog_state_seconds_,
++             watchdog_idle_seconds_, reason);
++
++    if (state == kDeviceStateSpeaking) {
++        AbortSpeaking(kAbortReasonNone);
++    }
++    // Drop deferred work so the wake word path is clean again, then tear the
++    // dead channel down; closing triggers the idle transition as well.
++    tts_stream_end_pending_ = false;
++    pending_listening_start_ = false;
++    if (protocol_) {
++        protocol_->CloseAudioChannel(false);
++    }
++    SetDeviceState(kDeviceStateIdle);
++    watchdog_state_seconds_ = 0;
++}
++
+ void Application::HandleNetworkConnectedEvent() {
+     ESP_LOGI(TAG, "Network connected");
+     auto state = GetDeviceState();
+@@ -551,8 +638,12 @@ void Application::InitializeProtocol() {
+         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+     });
+ 
+-    protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
++    protocol_->OnIncomingAudio([this, display](std::unique_ptr<AudioStreamPacket> packet) {
+         if (GetDeviceState() == kDeviceStateSpeaking) {
++            if (!tts_audio_started_) {
++                tts_audio_started_ = true;
++                display->OnAudioPlaybackStarted();
++            }
+             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+         }
+     });
+@@ -624,10 +715,25 @@ void Application::InitializeProtocol() {
+             if (strcmp(state->valuestring, "start") == 0) {
+                 Schedule([this]() {
+                     aborted_ = false;
++                    tts_stream_end_pending_ = false;
++                    tts_audio_started_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
++            } else if (strcmp(state->valuestring, "stream_end") == 0) {
++                Schedule([this]() {
++                    if (GetDeviceState() != kDeviceStateSpeaking || !protocol_) {
++                        return;
++                    }
++                    if (audio_service_.IsPlaybackIdle()) {
++                        protocol_->SendPlaybackDrained();
++                        SetDeviceState(kDeviceStateListening);
++                    } else {
++                        tts_stream_end_pending_ = true;
++                    }
++                });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 Schedule([this]() {
++                    tts_stream_end_pending_ = false;
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+                             SetDeviceState(kDeviceStateIdle);
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..6563548 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -70,7 +70,7 @@ public:
+ 
+     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+-    
++
+     /**
+      * Request state transition
+      * Returns true if transition was successful
+@@ -118,7 +118,7 @@ public:
+     AecMode GetAecMode() const { return aec_mode_; }
+     void PlaySound(const std::string_view& sound);
+     AudioService& GetAudioService() { return audio_service_; }
+-    
++
+     /**
+      * Reset protocol resources (thread-safe)
+      * Can be called from any task to release resources allocated after network connected
+@@ -151,9 +151,16 @@ private:
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
++    bool tts_stream_end_pending_ = false;   // Server sent all audio; waiting for physical playback drain
++    bool tts_audio_started_ = false;        // First TTS audio packet reached the device
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
+ 
++    // Recovery watchdog (runs once per clock tick).
++    int watchdog_state_seconds_ = 0;
++    int watchdog_idle_seconds_ = 0;
++    DeviceState watchdog_last_state_ = kDeviceStateUnknown;
++
+ 
+     // Event handlers
+     void HandleStateChangedEvent();
+@@ -164,6 +171,8 @@ private:
+     void HandleNetworkDisconnectedEvent();
+     void HandleActivationDoneEvent();
+     void HandleWakeWordDetectedEvent();
++    /** Returns a stalled speaking/listening/connecting state to idle. */
++    void HandleStuckWatchdog();
+     void ContinueOpenAudioChannel(ListeningMode mode);
+     void BeginWakeWordInvoke(const std::string& wake_word);
+     void ContinueWakeWordInvoke(const std::string& wake_word);
+@@ -183,7 +192,7 @@ private:
+     void ShowActivationCode(const std::string& code, const std::string& message);
+     void SetListeningMode(ListeningMode mode);
+     ListeningMode GetDefaultListeningMode() const;
+-    
++
+     // State change handler called by state machine
+     void OnStateChanged(DeviceState old_state, DeviceState new_state);
+ };
+diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
+index 5b3721d..356bc82 100644
+--- a/main/boards/common/wifi_board.cc
++++ b/main/boards/common/wifi_board.cc
+@@ -161,10 +161,15 @@ void WifiBoard::SetNetworkEventCallback(NetworkEventCallback callback) {
+ 
+ void WifiBoard::OnWifiConnectTimeout(void* arg) {
+     auto* board = static_cast<WifiBoard*>(arg);
+-    ESP_LOGW(TAG, "WiFi connection timeout, entering config mode");
+-
+     WifiManager::GetInstance().StopStation();
+-    board->StartWifiConfigMode();
++    if (board->EnterConfigModeOnConnectTimeout()) {
++        ESP_LOGW(TAG, "WiFi connection timeout, entering config mode");
++        board->StartWifiConfigMode();
++        return;
++    }
++
++    ESP_LOGW(TAG, "WiFi connection timeout, retrying saved networks");
++    board->TryWifiConnect();
+ }
+ 
+ void WifiBoard::StartWifiConfigMode() {
+diff --git a/main/boards/common/wifi_board.h b/main/boards/common/wifi_board.h
+index 7ee973c..5b1f1db 100644
+--- a/main/boards/common/wifi_board.h
++++ b/main/boards/common/wifi_board.h
+@@ -31,6 +31,13 @@ protected:
+      */
+     void StartWifiConfigMode();
+ 
++    /**
++     * Whether a timed-out station connection should fall back to provisioning.
++     * Boards intended for unattended operation can override this and keep
++     * retrying the saved networks instead.
++     */
++    virtual bool EnterConfigModeOnConnectTimeout() const { return true; }
++
+     /**
+      * WiFi connection timeout callback
+      */
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json b/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
+index 42fbf22..b70bcc8 100644
+--- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
+@@ -7,8 +7,9 @@
+             "name": "esp32-s3-touch-lcd-4b",
+             "sdkconfig_append": [
+                 "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
+-                "CONFIG_USE_DEVICE_AEC=y"
++                "CONFIG_USE_DEVICE_AEC=y",
++                "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\""
+             ]
+         }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+index 9ab6535..067e313 100644
+--- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+@@ -1,5 +1,5 @@
+ #include "wifi_board.h"
+-#include "display/lcd_display.h"
++#include "jarvis_face_display.h"
+ #include "esp_lcd_st7701.h"
+ 
+ #include "codecs/box_audio_codec.h"
+@@ -116,16 +116,10 @@ private:
+     bool key_handled;
+ 
+     void InitializePowerSaveTimer() {
+-        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
+-        power_save_timer_->OnEnterSleepMode([this]() {
+-            GetDisplay()->SetPowerSaveMode(true);
+-            GetBacklight()->SetBrightness(70); });
+-        power_save_timer_->OnExitSleepMode([this]() {
+-            GetDisplay()->SetPowerSaveMode(false);
+-            GetBacklight()->RestoreBrightness(); });
+-        power_save_timer_->OnShutdownRequest([this](){ 
+-            pmic_->PowerOff(); });
+-        power_save_timer_->SetEnabled(true);
++        // This wall-powered voice terminal must remain available around the
++        // clock. Disable CPU/display sleep and PMIC shutdown permanently.
++        power_save_timer_ = new PowerSaveTimer(-1, -1, -1);
++        power_save_timer_->SetEnabled(false);
+     }
+ 
+     void InitializeCodecI2c() {
+@@ -233,7 +227,7 @@ private:
+         ESP_ERROR_CHECK(esp_lcd_new_panel_st7701(panel_io, &panel_config, &panel_handle));
+         esp_lcd_panel_init(panel_handle);
+ 
+-        display_ = new RgbLcdDisplay(panel_io, panel_handle,
++        display_ = new JarvisFaceDisplay(panel_io, panel_handle,
+                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
+                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+     }
+@@ -406,6 +400,15 @@ public:
+         return &audio_codec;
+     }
+ 
++protected:
++    bool EnterConfigModeOnConnectTimeout() const override {
++        // Keep reconnecting saved networks indefinitely. Provisioning remains
++        // available explicitly via the boot button or MCP tool.
++        return false;
++    }
++
++public:
++
+     virtual Display* GetDisplay() override {
+         return display_;
+     }
+@@ -416,24 +419,17 @@ public:
+     }
+ 
+     virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
+-        static bool last_discharging = false;
+         charging = pmic_->IsCharging();
+         discharging = pmic_->IsDischarging();
+-        if (discharging != last_discharging)
+-        {
+-            power_save_timer_->SetEnabled(discharging);
+-            last_discharging = discharging;
+-        }
+ 
+         level = pmic_->GetBatteryLevel();
+         return true;
+     }
+ 
+     virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+-        if (level != PowerSaveLevel::LOW_POWER) {
+-            power_save_timer_->WakeUp();
+-        }
+-        WifiBoard::SetPowerSaveLevel(level);
++        // Never enable modem/light sleep on this always-on board. Keeping the
++        // radio awake also makes wake-word sessions and reconnects predictable.
++        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+     }
+ };
+ 
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
+new file mode 100644
+index 0000000..5611df1
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
+@@ -0,0 +1,418 @@
++#include "jarvis_face_display.h"
++
++#include "assets/lang_config.h"
++
++#include <algorithm>
++#include <cstring>
++
++#include <esp_log.h>
++#include <esp_timer.h>
++
++namespace {
++constexpr char TAG[] = "JarvisFace";
++// 20 fps matches the existing RGB/LVGL service cadence and keeps the face
++// smooth without waking the small MCU roughly 30 times per second.
++constexpr uint16_t kTickMs = 50;
++constexpr uint32_t kFaceCyan = 0x53d7ff;
++}
++
++JarvisFaceDisplay::JarvisFaceDisplay(esp_lcd_panel_io_handle_t panel_io,
++                                     esp_lcd_panel_handle_t panel, int width, int height,
++                                     int offset_x, int offset_y, bool mirror_x, bool mirror_y,
++                                     bool swap_xy)
++    : RgbLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y,
++                    swap_xy) {}
++
++JarvisFaceDisplay::~JarvisFaceDisplay() {
++    DisplayLockGuard lock(this);
++    if (face_timer_ != nullptr) {
++        lv_timer_delete(face_timer_);
++        face_timer_ = nullptr;
++    }
++    if (face_root_ != nullptr) {
++        lv_obj_delete(face_root_);
++        face_root_ = nullptr;
++    }
++}
++
++int32_t JarvisFaceDisplay::EaseOutCubic(int32_t q10) {
++    const int32_t inv = 1024 - q10;
++    return 1024 - static_cast<int32_t>((static_cast<int64_t>(inv) * inv * inv) >> 20);
++}
++
++void JarvisFaceDisplay::StartTween(Tween& tween, int32_t target, uint16_t duration_ms) {
++    if (tween.to == target) {
++        return;
++    }
++    tween.from = tween.value;
++    tween.to = target;
++    tween.elapsed_ms = 0;
++    tween.duration_ms = std::max<uint16_t>(duration_ms, 1);
++}
++
++void JarvisFaceDisplay::StepTween(Tween& tween, uint16_t dt_ms) {
++    if (tween.elapsed_ms >= tween.duration_ms) {
++        tween.value = tween.to;
++        return;
++    }
++    tween.elapsed_ms = std::min<uint16_t>(tween.duration_ms, tween.elapsed_ms + dt_ms);
++    const int32_t progress = static_cast<int32_t>(tween.elapsed_ms) * 1024 / tween.duration_ms;
++    const int32_t eased = EaseOutCubic(progress);
++    tween.value = tween.from +
++                  static_cast<int32_t>((static_cast<int64_t>(tween.to - tween.from) * eased) >> 10);
++}
++
++void JarvisFaceDisplay::SetupUI() {
++    RgbLcdDisplay::SetupUI();
++    DisplayLockGuard lock(this);
++    CreateFace();
++}
++
++void JarvisFaceDisplay::SetTheme(Theme* theme) {
++    RgbLcdDisplay::SetTheme(theme);
++    DisplayLockGuard lock(this);
++    ApplyFaceOverlayStyle();
++}
++
++void JarvisFaceDisplay::ApplyFaceOverlayStyle() {
++    // LcdDisplay::SetTheme() deliberately reapplies the normal light theme to
++    // these objects. Restore the face overlay afterwards so status, transcript
++    // and answer text stay cyan on the black face canvas.
++    const lv_color_t face_cyan = lv_color_hex(kFaceCyan);
++    for (lv_obj_t* bar : {top_bar_, status_bar_, bottom_bar_}) {
++        if (bar != nullptr) {
++            lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
++            lv_obj_set_style_border_opa(bar, LV_OPA_TRANSP, 0);
++        }
++    }
++    for (lv_obj_t* label : {network_label_, mute_label_, battery_label_, status_label_,
++                            notification_label_, chat_message_label_}) {
++        if (label != nullptr) {
++            lv_obj_set_style_text_color(label, face_cyan, 0);
++        }
++    }
++}
++
++void JarvisFaceDisplay::CreateFace() {
++    if (face_root_ != nullptr) {
++        return;
++    }
++    lv_obj_t* screen = lv_screen_active();
++    face_root_ = lv_obj_create(screen);
++    lv_obj_remove_style_all(face_root_);
++    lv_obj_set_size(face_root_, LV_PCT(100), LV_PCT(100));
++    lv_obj_set_style_bg_color(face_root_, lv_color_black(), 0);
++    lv_obj_set_style_bg_opa(face_root_, LV_OPA_COVER, 0);
++    lv_obj_remove_flag(face_root_, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_remove_flag(face_root_, LV_OBJ_FLAG_CLICKABLE);
++
++    for (size_t i = 0; i < eyes_.size(); ++i) {
++        eyes_[i] = lv_obj_create(face_root_);
++        lv_obj_remove_style_all(eyes_[i]);
++        lv_obj_set_style_bg_opa(eyes_[i], LV_OPA_COVER, 0);
++        lv_obj_remove_flag(eyes_[i], LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_set_style_radius(eyes_[i], 40, 0);
++        lv_obj_set_style_transform_pivot_x(eyes_[i], lv_pct(50), 0);
++        lv_obj_set_style_transform_pivot_y(eyes_[i], lv_pct(50), 0);
++    }
++
++    mouth_arc_ = lv_arc_create(face_root_);
++    lv_obj_remove_style_all(mouth_arc_);
++    lv_obj_set_style_arc_width(mouth_arc_, 10, LV_PART_MAIN);
++    lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_MAIN);
++    lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_MAIN);
++    lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_TRANSP, LV_PART_INDICATOR);
++    lv_obj_set_style_bg_opa(mouth_arc_, LV_OPA_TRANSP, LV_PART_KNOB);
++    lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_CLICKABLE);
++
++    for (lv_obj_t*& bar : mouth_bars_) {
++        bar = lv_obj_create(face_root_);
++        lv_obj_remove_style_all(bar);
++        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
++        lv_obj_set_style_radius(bar, 12, 0);
++        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++    }
++
++    if (emoji_box_ != nullptr) {
++        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
++    }
++
++    // Keep the existing status/subtitle layout, but let the black face canvas
++    // show through instead of drawing the light theme's white translucent bars.
++    ApplyFaceOverlayStyle();
++    for (lv_obj_t* overlay : {top_bar_, status_bar_, bottom_bar_, low_battery_popup_}) {
++        if (overlay != nullptr) {
++            lv_obj_move_foreground(overlay);
++        }
++    }
++
++    last_tick_us_ = esp_timer_get_time();
++    ScheduleBlink(last_tick_us_);
++    ScheduleGaze(last_tick_us_);
++    face_timer_ = lv_timer_create(TimerThunk, kTickMs, this);
++    ESP_LOGI(TAG, "Animated OpenClaw face enabled");
++}
++
++void JarvisFaceDisplay::TimerThunk(lv_timer_t* timer) {
++    auto* self = static_cast<JarvisFaceDisplay*>(lv_timer_get_user_data(timer));
++    if (self != nullptr) {
++        self->Tick();
++    }
++}
++
++void JarvisFaceDisplay::ScheduleBlink(int64_t now_us) {
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    next_blink_us_ = now_us + (2200 + rng_ % 2600) * 1000LL;
++}
++
++void JarvisFaceDisplay::ScheduleGaze(int64_t now_us) {
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    int32_t x = static_cast<int32_t>(rng_ % 31) - 15;
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    int32_t y = static_cast<int32_t>(rng_ % 19) - 9;
++    if (face_state_ == FaceState::Connecting) {
++        x -= 9;
++        y -= 8;
++    }
++    StartTween(gaze_x_, x, 260);
++    StartTween(gaze_y_, y, 260);
++    next_gaze_us_ = now_us + (1500 + rng_ % 2400) * 1000LL;
++}
++
++void JarvisFaceDisplay::SetFaceState(FaceState state) {
++    if (face_state_ == state) {
++        return;
++    }
++    face_state_ = state;
++    if (state == FaceState::Listening) {
++        StartTween(eye_height_, 112, 220);
++        StartTween(eye_width_, 105, 220);
++    } else if (state == FaceState::Connecting) {
++        StartTween(eye_height_, 82, 260);
++        StartTween(eye_width_, 96, 260);
++        ApplyMood("thinking");
++    } else {
++        StartTween(eye_height_, 100, 260);
++        StartTween(eye_width_, 100, 260);
++    }
++}
++
++void JarvisFaceDisplay::SetStatus(const char* status) {
++    RgbLcdDisplay::SetStatus(status);
++    DisplayLockGuard lock(this);
++    if (status == nullptr) {
++        return;
++    }
++    if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
++        SetFaceState(FaceState::Listening);
++    } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
++        // TTS "start" arrives before decoded PCM reaches the speaker. Show a
++        // thinking face during that short gap; the audio callback below starts
++        // the mouth exactly with physical playback.
++        SetFaceState(FaceState::Connecting);
++    } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
++        SetFaceState(FaceState::Connecting);
++    } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
++        SetFaceState(FaceState::Idle);
++    }
++}
++
++void JarvisFaceDisplay::OnAudioPlaybackStarted() {
++    DisplayLockGuard lock(this);
++    SetFaceState(FaceState::Speaking);
++}
++
++void JarvisFaceDisplay::ApplyMood(const char* emotion) {
++    uint32_t color = kFaceCyan;
++    int32_t eye_h = face_state_ == FaceState::Listening ? 112 : 100;
++    int32_t eye_w = face_state_ == FaceState::Listening ? 105 : 100;
++    int32_t smile = 24;
++    if (emotion != nullptr && std::strcmp(emotion, "happy") == 0) {
++        color = 0xffd166;
++        eye_h = 76;
++        eye_w = 106;
++        smile = 92;
++    } else if (emotion != nullptr && (std::strcmp(emotion, "excited") == 0 ||
++                                      std::strcmp(emotion, "surprised") == 0)) {
++        color = 0xff7a4d;
++        eye_h = 120;
++        eye_w = 98;
++        smile = 78;
++    } else if (emotion != nullptr && std::strcmp(emotion, "thinking") == 0) {
++        color = 0x9b8cff;
++        eye_h = 82;
++        eye_w = 96;
++        smile = 8;
++    } else if (emotion != nullptr && std::strcmp(emotion, "sleepy") == 0) {
++        color = 0x62b8a8;
++        eye_h = 62;
++        eye_w = 102;
++        smile = 14;
++    } else if (emotion != nullptr && std::strcmp(emotion, "sad") == 0) {
++        color = 0x5f8bff;
++        eye_h = 80;
++        eye_w = 94;
++        smile = -72;
++    }
++    StartTween(eye_height_, eye_h, 280);
++    StartTween(eye_width_, eye_w, 280);
++    StartTween(smile_, smile, 280);
++    StartTween(red_, (color >> 16) & 0xff, 280);
++    StartTween(green_, (color >> 8) & 0xff, 280);
++    StartTween(blue_, color & 0xff, 280);
++}
++
++void JarvisFaceDisplay::SetEmotion(const char* emotion) {
++    DisplayLockGuard lock(this);
++    ApplyMood(emotion);
++}
++
++void JarvisFaceDisplay::Tick() {
++    if (face_root_ == nullptr) {
++        return;
++    }
++    const int64_t now_us = esp_timer_get_time();
++    uint16_t dt_ms = static_cast<uint16_t>(std::clamp<int64_t>((now_us - last_tick_us_) / 1000, 4, 80));
++    last_tick_us_ = now_us;
++    ++tick_count_;
++
++    if (blink_phase_ == 0 && now_us >= next_blink_us_) {
++        blink_phase_ = 1;
++        blink_elapsed_ms_ = 0;
++        ScheduleBlink(now_us);
++    }
++    int32_t blink_q10 = 1024;
++    if (blink_phase_ != 0) {
++        blink_elapsed_ms_ += dt_ms;
++        if (blink_phase_ == 1) {
++            blink_q10 = std::max<int32_t>(0, 1024 - blink_elapsed_ms_ * 1024 / 75);
++            if (blink_elapsed_ms_ >= 75) {
++                blink_phase_ = 2;
++                blink_elapsed_ms_ = 0;
++            }
++        } else if (blink_phase_ == 2) {
++            blink_q10 = 0;
++            if (blink_elapsed_ms_ >= 35) {
++                blink_phase_ = 3;
++                blink_elapsed_ms_ = 0;
++            }
++        } else {
++            blink_q10 = std::min<int32_t>(1024, blink_elapsed_ms_ * 1024 / 140);
++            if (blink_elapsed_ms_ >= 140) {
++                blink_phase_ = 0;
++                blink_q10 = 1024;
++            }
++        }
++    }
++    if (now_us >= next_gaze_us_) {
++        ScheduleGaze(now_us);
++    }
++
++    for (Tween* tween : {&eye_height_, &eye_width_, &gaze_x_, &gaze_y_, &smile_, &red_,
++                         &green_, &blue_}) {
++        StepTween(*tween, dt_ms);
++    }
++
++    static constexpr int8_t kBreath[] = {0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -1};
++    const int32_t breath = kBreath[(tick_count_ / 4) % std::size(kBreath)];
++    const int32_t base_eye_w = width_ * 23 / 100;
++    const int32_t base_eye_h = height_ * 23 / 100;
++    int32_t eye_w = base_eye_w * (eye_width_.value + breath) / 100;
++    int32_t eye_h = base_eye_h * (eye_height_.value + breath) / 100;
++    eye_h = std::max<int32_t>(6, eye_h * blink_q10 / 1024);
++    const int32_t center_x = width_ / 2 + gaze_x_.value;
++    const int32_t center_y = height_ * 40 / 100 + gaze_y_.value + breath;
++    const int32_t gap = width_ * 19 / 100;
++    const uint32_t color_rgb = (static_cast<uint32_t>(red_.value) << 16) |
++                               (static_cast<uint32_t>(green_.value) << 8) |
++                               static_cast<uint32_t>(blue_.value);
++    if (color_rgb != rendered_color_) {
++        const lv_color_t color = lv_color_hex(color_rgb);
++        for (lv_obj_t* eye : eyes_) {
++            lv_obj_set_style_bg_color(eye, color, 0);
++        }
++        lv_obj_set_style_arc_color(mouth_arc_, color, LV_PART_MAIN);
++        for (lv_obj_t* bar : mouth_bars_) {
++            lv_obj_set_style_bg_color(bar, color, 0);
++        }
++        rendered_color_ = color_rgb;
++    }
++
++    for (size_t i = 0; i < eyes_.size(); ++i) {
++        const int32_t x = center_x + (i == 0 ? -gap : gap) - eye_w / 2;
++        const int32_t y = center_y - eye_h / 2;
++        if (rendered_eye_w_[i] != eye_w || rendered_eye_h_[i] != eye_h) {
++            lv_obj_set_size(eyes_[i], eye_w, eye_h);
++            rendered_eye_w_[i] = eye_w;
++            rendered_eye_h_[i] = eye_h;
++        }
++        if (rendered_eye_x_[i] != x || rendered_eye_y_[i] != y) {
++            lv_obj_set_pos(eyes_[i], x, y);
++            rendered_eye_x_[i] = x;
++            rendered_eye_y_[i] = y;
++        }
++    }
++    const int32_t tilt = smile_.value / 3;
++    if (tilt != rendered_tilt_) {
++        lv_obj_set_style_transform_rotation(eyes_[0], tilt, 0);
++        lv_obj_set_style_transform_rotation(eyes_[1], -tilt, 0);
++        rendered_tilt_ = tilt;
++    }
++
++    const int32_t mouth_y = height_ * 69 / 100;
++    if (face_state_ == FaceState::Speaking) {
++        if (rendered_mouth_mode_ != 1) {
++            lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++            for (lv_obj_t* bar : mouth_bars_) {
++                lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
++            }
++            rendered_mouth_mode_ = 1;
++        }
++        for (size_t i = 0; i < mouth_bars_.size(); ++i) {
++            const uint32_t phase = tick_count_ * (i + 2) + i * 7;
++            const int32_t h = 12 + static_cast<int32_t>((phase * 17 + phase * phase) % 48);
++            const int32_t w = 30 - h / 8;
++            const int32_t x = width_ / 2 + (static_cast<int32_t>(i) - 1) * 58 - w / 2;
++            const int32_t y = mouth_y - h / 2;
++            if (rendered_bar_w_[i] != w || rendered_bar_h_[i] != h) {
++                lv_obj_set_size(mouth_bars_[i], w, h);
++                rendered_bar_w_[i] = w;
++                rendered_bar_h_[i] = h;
++            }
++            if (rendered_bar_x_[i] != x || rendered_bar_y_[i] != y) {
++                lv_obj_set_pos(mouth_bars_[i], x, y);
++                rendered_bar_x_[i] = x;
++                rendered_bar_y_[i] = y;
++            }
++        }
++    } else {
++        if (rendered_mouth_mode_ != 0) {
++            for (lv_obj_t* bar : mouth_bars_) {
++                lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++            }
++            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++            rendered_mouth_mode_ = 0;
++        }
++        int32_t curve = smile_.value;
++        if (curve > -8 && curve < 8) curve = curve < 0 ? -8 : 8;
++        if (curve != rendered_curve_) {
++            const int32_t diameter = 300 - std::abs(curve);
++            lv_obj_set_size(mouth_arc_, diameter, diameter);
++            if (curve > 0) {
++                lv_arc_set_bg_angles(mouth_arc_, 55, 125);
++                lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - diameter + 22);
++            } else {
++                lv_arc_set_bg_angles(mouth_arc_, 235, 305);
++                lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - 22);
++            }
++            rendered_curve_ = curve;
++        }
++    }
++}
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
+new file mode 100644
+index 0000000..d326bfa
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
+@@ -0,0 +1,85 @@
++#pragma once
++
++#include "display/lcd_display.h"
++
++#include <array>
++#include <climits>
++#include <cstdint>
++#include <string>
++
++class JarvisFaceDisplay final : public RgbLcdDisplay {
++public:
++    JarvisFaceDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
++                      int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
++                      bool swap_xy);
++    ~JarvisFaceDisplay() override;
++
++    void SetupUI() override;
++    void SetTheme(Theme* theme) override;
++    void SetStatus(const char* status) override;
++    void SetEmotion(const char* emotion) override;
++    void OnAudioPlaybackStarted() override;
++
++private:
++    enum class FaceState : uint8_t { Idle, Connecting, Listening, Speaking };
++
++    struct Tween {
++        int32_t from = 0;
++        int32_t to = 0;
++        int32_t value = 0;
++        uint16_t elapsed_ms = 1;
++        uint16_t duration_ms = 1;
++    };
++
++    static void TimerThunk(lv_timer_t* timer);
++    static int32_t EaseOutCubic(int32_t q10);
++    static void StartTween(Tween& tween, int32_t target, uint16_t duration_ms);
++    static void StepTween(Tween& tween, uint16_t dt_ms);
++
++    void CreateFace();
++    void ApplyFaceOverlayStyle();
++    void Tick();
++    void SetFaceState(FaceState state);
++    void ApplyMood(const char* emotion);
++    void ScheduleBlink(int64_t now_us);
++    void ScheduleGaze(int64_t now_us);
++
++    lv_obj_t* face_root_ = nullptr;
++    std::array<lv_obj_t*, 2> eyes_{};
++    lv_obj_t* mouth_arc_ = nullptr;
++    std::array<lv_obj_t*, 3> mouth_bars_{};
++    lv_timer_t* face_timer_ = nullptr;
++
++    FaceState face_state_ = FaceState::Idle;
++    Tween eye_height_{100, 100, 100};
++    Tween eye_width_{100, 100, 100};
++    Tween gaze_x_{};
++    Tween gaze_y_{};
++    Tween smile_{24, 24, 24};
++    Tween red_{83, 83, 83};
++    Tween green_{215, 215, 215};
++    Tween blue_{255, 255, 255};
++    int64_t last_tick_us_ = 0;
++    int64_t next_blink_us_ = 0;
++    int64_t next_gaze_us_ = 0;
++    uint16_t blink_elapsed_ms_ = 0;
++    uint8_t blink_phase_ = 0;
++    uint32_t tick_count_ = 0;
++    uint32_t rng_ = 0x9d2c5680;
++
++    // Last values actually submitted to LVGL. Geometry setters already reject
++    // equal values internally, but style setters do not: they refresh styles
++    // and invalidate the object even when the value is unchanged.
++    uint32_t rendered_color_ = UINT32_MAX;
++    int32_t rendered_tilt_ = INT32_MIN;
++    int32_t rendered_curve_ = INT32_MIN;
++    int8_t rendered_mouth_mode_ = -1;
++    std::array<int32_t, 2> rendered_eye_x_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_y_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_w_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_h_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_x_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_y_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_w_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_h_{INT32_MIN, INT32_MIN, INT32_MIN};
++};
+diff --git a/main/display/display.h b/main/display/display.h
+index e7fa6fa..72d7256 100644
+--- a/main/display/display.h
++++ b/main/display/display.h
+@@ -44,6 +44,9 @@ public:
+     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
+     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
+     virtual void SetEmotion(const char* emotion);
++    // Visual-only hook fired when the first TTS audio packet reaches the
++    // device. Displays that do not animate speech ignore it.
++    virtual void OnAudioPlaybackStarted() {}
+     virtual void SetChatMessage(const char* role, const char* content);
+     virtual void ClearChatMessages();
+     virtual void SetTheme(Theme* theme);
+diff --git a/main/display/lcd_display.cc b/main/display/lcd_display.cc
+index 3462ac0..f8a20b6 100644
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -229,7 +229,8 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
+     ESP_LOGI(TAG, "Initialize LVGL port");
+     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+     port_cfg.task_priority = 1;
+-    port_cfg.timer_period_ms = 50;
++    port_cfg.task_affinity = 1;
++    port_cfg.timer_period_ms = 5;
+     lvgl_port_init(&port_cfg);
+ 
+     ESP_LOGI(TAG, "Adding LCD display");
+diff --git a/main/idf_component.yml b/main/idf_component.yml
+index 2473f56..17d0797 100644
+--- a/main/idf_component.yml
++++ b/main/idf_component.yml
+@@ -26,11 +26,12 @@ dependencies:
+   espressif/esp_audio_codec: ~2.5.0
+   78/esp-ml307: ~3.7.3
+   78/uart-uhci:
+-    version: ^0.3.3
++    version: ^0.4.0
++    override_path: /opt/xiaozhi-esp32/local_components/uart-uhci
+     rules:
+     - if: target not in [esp32]
+   78/uart-eth-modem:
+-    version: ~0.6.5
++    version: ^0.7.0
+     rules:
+     - if: target not in [esp32]
+   78/xiaozhi-fonts: ~2.0.0
+diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
+index ac591b5..7d562a2 100644
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -105,6 +105,19 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+     SendText(message);
+ }
+ 
++void Protocol::SendPlaybackDrained() {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"playback_drained\"}";
++    SendText(message);
++}
++
++void Protocol::SendDeviceState(const std::string& state) {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"state\",\"state\":\"" +
++                          state + "\"}";
++    SendText(message);
++}
++
+ bool Protocol::IsTimeout() const {
+     const int kTimeoutSeconds = 120;
+     auto now = std::chrono::steady_clock::now();
+diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
+index cfa0dd2..6d63ec3 100644
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -47,6 +47,12 @@ public:
+     inline int server_sample_rate() const { return server_sample_rate_; }
+     inline int server_frame_duration() const { return server_frame_duration_; }
+     inline const std::string& session_id() const { return session_id_; }
++    /** Seconds since the last inbound message/audio packet (0 = just now). */
++    inline int SecondsSinceLastIncoming() const {
++        auto now = std::chrono::steady_clock::now();
++        return static_cast<int>(
++            std::chrono::duration_cast<std::chrono::seconds>(now - last_incoming_time_).count());
++    }
+ 
+     void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket> packet)> callback);
+     void OnIncomingJson(std::function<void(const cJSON* root)> callback);
+@@ -66,6 +72,8 @@ public:
+     virtual void SendStopListening();
+     virtual void SendAbortSpeaking(AbortReason reason);
+     virtual void SendMcpMessage(const std::string& message);
++    virtual void SendPlaybackDrained();
++    virtual void SendDeviceState(const std::string& state);
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;
+diff --git a/scripts/build.py b/scripts/build.py
+index b0fcd1b..1dd2c87 100755
+--- a/scripts/build.py
++++ b/scripts/build.py
+@@ -361,12 +361,30 @@ def _wake_word_sdkconfig_options(
+         options.append("CONFIG_WAKE_WORD_DISABLED=y")
+         return normalized, options, ["CONFIG_WAKE_WORD_DISABLED"]
+ 
++    if normalized == "hey_jarvis":
++        if target not in _AFE_WAKE_WORD_TARGETS:
++            raise ValueError(
++                f"Custom MultiNet wake words are not supported for target {target}"
++            )
++        options.extend([
++            "CONFIG_USE_CUSTOM_WAKE_WORD=y",
++            'CONFIG_CUSTOM_WAKE_WORD="HEY JARVIS"',
++            'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="Hey Jarvis"',
++            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=30",
++            "CONFIG_SR_MN_EN_NONE=n",
++            "CONFIG_SR_MN_EN_MULTINET7_QUANT=y",
++        ])
++        return normalized, options, [
++            "CONFIG_USE_CUSTOM_WAKE_WORD",
++            "CONFIG_SR_MN_EN_MULTINET7_QUANT",
++        ]
++
+     if target not in _ESP_WAKE_WORD_TARGETS | _AFE_WAKE_WORD_TARGETS:
+         raise ValueError(f"Wake-word selection is not supported for target {target}")
+     if not _WAKE_WORD_MODEL_PATTERN.fullmatch(normalized):
+         raise ValueError(
+             f"Invalid wake word {wake_word!r}. Use 'disabled', "
+-            "'nihaoxiaozhi', or an ESP-SR model name such as "
++            "'hey_jarvis', 'nihaoxiaozhi', or an ESP-SR model name such as "
+             "'wn9_jarvis_tts'."
+         )
+     if target in _LITE_WAKE_WORD_TARGETS and not normalized.startswith("wn9s_"):

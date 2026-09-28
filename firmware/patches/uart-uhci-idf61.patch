@@ -1,0 +1,16 @@
+diff --git a/src/uart_uhci.cc b/src/uart_uhci.cc
+index 03ef6b8..58868f4 100644
+--- a/src/uart_uhci.cc
++++ b/src/uart_uhci.cc
+@@ -202,8 +202,9 @@ esp_err_t UartUhci::InitGdma(const Config& config) {
+     transfer_cfg.access_ext_mem = true;
+     ESP_RETURN_ON_ERROR(gdma_config_transfer(rx_dma_chan_, &transfer_cfg), kTag, "RX DMA config failed");
+ 
+-    // Get RX alignment constraints
+-    gdma_get_alignment_constraints(rx_dma_chan_, &rx_int_mem_align_, &rx_ext_mem_align_);
++    ESP_RETURN_ON_ERROR(
++        gdma_get_alignment_constraints(rx_dma_chan_, &rx_int_mem_align_, &rx_ext_mem_align_),
++        kTag, "RX DMA alignment query failed");
+ 
+     // Create RX DMA link list with buffer pool size and owner checking enabled
+     // Each buffer gets one DMA node, owner mechanism manages buffer availability
