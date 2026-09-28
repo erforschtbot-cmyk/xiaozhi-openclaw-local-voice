@@ -58,6 +58,7 @@ class XiaozhiSession:
         # von main() hereingereicht.
         self.speaker = getattr(args, "speaker", None)
         self.tts_local = self.speaker is not None
+        self.stt_local = getattr(args, "stt_local", False)
         self.tts_text_buffer = ""
         self.tts_queue = None
         self.tts_worker_task = None
@@ -201,6 +202,8 @@ class XiaozhiSession:
             ),
             OPENCLAW_REALTIME_MODEL=self.args.model,
             OPENCLAW_REALTIME_VOICE=self.args.voice,
+            OPENCLAW_WHISPER_URI=getattr(self.args, "stt_uri", "127.0.0.1:10300"),
+            OPENCLAW_WHISPER_LANGUAGE=getattr(self.args, "stt_language", "de"),
             NODE_EXTRA_CA_CERTS=self.args.gateway_ca,
         )
         self.process = await asyncio.create_subprocess_exec(
@@ -770,7 +773,23 @@ async def main():
     )
     parser.add_argument(
         "--helper",
-        default=str(Path(__file__).resolve().with_name("openclaw-talk-realtime.mjs")),
+        default=None,
+        help="Pfad zum Sprachhelfer (Standard je nach Modus)",
+    )
+    parser.add_argument(
+        "--stt-local",
+        action="store_true",
+        help="Spracherkennung lokal ueber Wyoming-Whisper statt ueber OpenAI",
+    )
+    parser.add_argument(
+        "--stt-uri",
+        default="127.0.0.1:10300",
+        help="Adresse des Wyoming-Whisper-Dienstes",
+    )
+    parser.add_argument(
+        "--stt-language",
+        default="de",
+        help="Sprache fuer die lokale Erkennung",
     )
     parser.add_argument(
         "--tts-local",
@@ -793,6 +812,18 @@ async def main():
         help="Direkter Pfad zu einer .onnx-Stimme (uebersteuert --tts-voice)",
     )
     args = parser.parse_args()
+
+    # Lokale Erkennung bedeutet zwangslaeufig lokale Sprachausgabe: der
+    # lokale Helfer liefert gar kein Audio, es gaebe sonst nichts zu spielen.
+    if args.stt_local:
+        args.tts_local = True
+
+    if args.helper is None:
+        args.helper = str(
+            Path(__file__).resolve().with_name(
+                "local-voice.mjs" if args.stt_local else "openclaw-talk-realtime.mjs"
+            )
+        )
 
     if args.tts_local:
         if PiperSpeaker is None:

@@ -15,9 +15,11 @@ wurde ausschliesslich der Sprachausgabe-Pfad des Hosts.
 | Board | Waveshare ESP32-S3-Touch-LCD-4B |
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | **Lokale Sprachausgabe** | `piper-tts==1.4.2` (GPL-3.0-or-later), `numpy>=1.26` |
-| **Lokale Stimme** | `de_DE-thorsten-medium` (22,05 kHz, 60,3 MB) |
-| Realtime-Modell (Erkennung/Text) | `gpt-live-1-codex` |
-| Provider-Stimme | `cove` (wird im lokalen Modus verworfen) |
+| **Lokale Stimme** | `de_DE-kerstin-low` (16 kHz, 60,2 MB) |
+| **Lokale Erkennung** | `faster-whisper` **base**, int8, CPU (Wyoming-Dienst) |
+| Erkennungsdienst | `wyoming-faster-whisper`, Port `10300` |
+| Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |
+| Provider-Stimme (nur noch Rueckfall) | `cove` |
 | Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
 | Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
 
@@ -29,16 +31,35 @@ Werte unter 1,0 sind schneller als Echtzeit.
 
 | Stimme | Abtastrate | RTF | Bewertung |
 |---|---|---|---|
-| `de_DE-thorsten-medium` | 22,05 kHz | 0,05–0,06 | **Standard** — bester Kompromiss |
-| `de_DE-thorsten-high` | 22,05 kHz | ~0,41 | beste Qualitaet, 3x Rechenzeit |
-| `de_DE-thorsten-low` | 16 kHz | ~0,11 | schneller, schmalbandiger |
-| `de_DE-thorsten_emotional-medium` | 22,05 kHz | ~0,14 | emotionaler Klang |
-| `de_DE-mls-medium` | 22,05 kHz | ~0,10 | 236 Sprecher zur Auswahl |
-| `de_DE-kerstin-low` | 16 kHz | ~0,11 | weiblich, nur als `low` verfuegbar |
-| `de_DE-eva_k-x_low` | 16 kHz | ~0,08 | weiblich, kleinste Datei |
+| `de_DE-kerstin-low` | 16 kHz | 0,04 | **Standard** (so gewaehlt) |
+| `de_DE-thorsten-medium` | 22,05 kHz | 0,05–0,06 | bester Kompromiss aus Klang/Tempo |
+| `de_DE-thorsten-high` | 22,05 kHz | ~0,27 | beste Qualitaet, 5x Rechenzeit |
+| `de_DE-thorsten-low` | 16 kHz | ~0,04 | schnell, schmalbandiger |
+| `de_DE-thorsten_emotional-medium` | 22,05 kHz | ~0,05 | emotionaler Klang |
+| `de_DE-mls-medium` | 22,05 kHz | ~0,06 | 236 Sprecher zur Auswahl |
+| `de_DE-eva_k-x_low` | 16 kHz | ~0,04 | weiblich, kleinste Datei |
 
 Hinweis: Alle deutschen Frauenstimmen bei Piper existieren nur als `low`
 oder `x_low`; medium/high gibt es nur fuer Thorsten-Stimmen.
+
+## Erkennungs-Eignung auf dem Referenzhost
+
+Gemessen gegen den laufenden Wyoming-Dienst (CPU, int8) mit einem 3,12-s-Satz:
+
+| Modell | Zeit | RTF | Bewertung |
+|---|---|---|---|
+| `base` | 0,81 s | 0,26 | **Standard** — schnell |
+| `small` | 2,18 s | 0,70 | genauer, aber 2,7x langsamer |
+| `medium` | 7,3–15,0 s | 2,3–4,8 | **untauglich** fuer Sprache |
+
+Der frueher laufende `medium`-Dienst war 9- bis 18-mal langsamer als `base`.
+Auf diesem Host ist `base` die einzige Stufe, die sich fuer einen
+Sprachassistenten eignet.
+
+Genauigkeit `base` (Beispiel): „Schalte den Monitor an. Wie spaet ist es?"
+wurde als „Zeite den Monitor an, wie spaet es ist." erkannt — inhaltlich
+verstaendlich, aber nicht fehlerfrei. Wer mehr Genauigkeit braucht, nimmt
+`small` und bezahlt mit rund 1,4 s zusaetzlicher Wartezeit.
 
 ## Laufende Firmware (Geräte-Ist-Stand)
 

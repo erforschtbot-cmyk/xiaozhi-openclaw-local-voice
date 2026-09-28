@@ -1,12 +1,11 @@
-# Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal (lokale Stimme)
+# Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal (lokal)
 
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um ein funktionierendes Jarvis-System auf einem leeren Linux-/OpenClaw-Host
-exakt wiederherzustellen — mit **lokaler deutscher Sprachausgabe**.
-
-**Der einzige Unterschied zum Vorgängerprojekt** ist der Sprechpfad: Die Stimme
-entsteht nicht mehr bei OpenAI, sondern lokal auf dem Host mit **Piper**. Das
-Hören, der Agent, die Werkzeuge und die Firmware bleiben unverändert.
+exakt wiederherzustellen — mit **lokaler Erkenung und lokaler
+Sprachausgabe**. Das gesprochene Wort wird auf dem Host erkannt
+(faster-whisper) und gesprochen (Piper). **Kein Mikrofon-Audio und keine
+Stimme geht mehr an einen Cloud-Sprachdienst.**
 
 ## Architektur
 
@@ -17,29 +16,35 @@ Waveshare ESP32-S3-Touch-LCD-4B
           ↓
 Python-Bridge  (server.py, systemd: jarvis-realtime-bridge.service)
   ├─ Opus-Audio vom Gerät, Nachhör-Fenster, OTA auf :8766
-  ├─ startet Helfer: node openclaw-talk-realtime.mjs (konstante Session-Schlüssel)
+  ├─ startet Helfer: node local-voice.mjs        ← Erkenung + Agent + Text
+  │    ├─ Erkennt Aeusserungsgrenzen (Pegel, 700 ms Stille)
+  │    ├─ Transkribiert lokal: Wyoming-Whisper (127.0.0.1:10300)
+  │    └─ Ruft den OpenClaw-Agenten auf (chat.send)
   └─ vertont den Antworttext lokal: piper_speaker.py (Piper, CPU)
           ↓
 OpenClaw Gateway  (wss://127.0.0.1:18789)
-  └─ Talk / OpenAI GPT-Live (gpt-live-1-codex)
-       ├─ ERKENNT die Sprache und liefert den Gesprächstext
-       ├─ ruft bei Werkzeugbedarf den OpenClaw-Agenten auf
-       └─ dessen gesprochenes Audio wird VERWORFEN
+  └─ OpenClaw-Agent (Modell, Werkzeuge, Skills)
           ↓
 Piper spricht den Text lokal  →  als Opus zurück zum Gerät
 ```
 
-**Drei Skripte, klar getrennt:**
+Lokal sind: Wakeword, Mikrofonweg, Erkenung, Sprachausgabe und die
+Audioausgabe am Gerät. Ueber das Gateway laeuft nur noch das **Denken**
+(der Agent mit seinem Modell).
 
-1. `gateway/server.py` — dauerhafter WebSocket-Server auf Port 8765/8766.
-2. `gateway/openclaw-talk-realtime.mjs` — Kindprozess von `server.py`. Pro
-   Äußerung wird ein Helfer gestartet/weiterverwendet; er verbindet zum Gateway.
-   Der **Talk-Session-Schlüssel ist konstant**, sodass alle Äußerungen in
-   **derselben** OpenClaw-Session landen.
-3. `gateway/piper_speaker.py` — hält das Piper-Stimmmodell warm und wandelt
+**Vier Bausteine, klar getrennt:**
+
+1. `gateway/server.py` — WebSocket-Server auf Port 8765/8766, Taktung und
+   Nachhör-Fenster.
+2. `gateway/local-voice.mjs` — der lokale Helfer: erkennt Aeusserungen,
+   holt den Text vom lokalen Whisper, ruft den Agenten auf und meldet dessen
+   Antworttext.
+3. `gateway/local_stt.mjs` — Wyoming-Protokoll und Aeusserungsgrenzen.
+4. `gateway/piper_speaker.py` — haelt das Piper-Stimmmodell warm und wandelt
    Text in PCM mit der vom Gerät erwarteten Rate (24 kHz).
 
-Details zur lokalen Stimme: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md).
+Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
+[`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md).
 
 ## Was hier drin ist
 
@@ -50,9 +55,10 @@ Details zur lokalen Stimme: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.m
 | Wiederherstellungs-Watchdog (im Firmware-Patch) | `firmware/patches/xiaozhi-esp32-openclaw.patch` |
 | Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
-| Bridge-Skript (Python, WebSocket-Server) | `gateway/server.py` |
-| **Lokale Sprachausgabe (Piper)** | `gateway/piper_speaker.py` |
-| Bridge-Skript (Node, Gateway-Helfer) | `gateway/openclaw-talk-realtime.mjs` |
+| Bridge (Python, WebSocket-Server) | `gateway/server.py` |
+| Lokale Erkennung (Node) | `gateway/local-voice.mjs`, `gateway/local_stt.mjs` |
+| Lokale Sprachausgabe (Piper) | `gateway/piper_speaker.py` |
+| Provider-Helfer (Rückfallweg) | `gateway/openclaw-talk-realtime.mjs` |
 | OpenClaw-`dist`-Patches für den Voice-Pfad | `scripts/apply-openclaw-voice-dist-patches.py` |
 | Stimmen-Benchmark für die eigene Hardware | `scripts/benchmark-tts.py` |
 | Tests (Einheit + Ende-zu-Ende) | `tests/` |
@@ -61,25 +67,26 @@ Details zur lokalen Stimme: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.m
 | Prüfsummen | `CHECKSUMS.sha256` |
 | Verbindliche Versionen und Pins | `VERSIONS.md` |
 
-## Lokale Stimme in Kurzform
+## In Kurzform
 
-Standardstimme ist **`de_DE-thorsten-medium`** (22,05 kHz). Gemessen auf dem
-Referenzhost (Intel i5-8365U, nur CPU): **RTF 0,05–0,06**, erster Ton nach
-~70 ms. Die Stimme ist frei wählbar (siehe `VERSIONS.md` für die Eignungstabelle
-und `docs/07-LOKALE-STIMME.md` für Auswahl und Prüfung).
+| Stufe | Umsetzung | Messwert auf dem Referenzhost |
+|---|---|---|
+| Erkenung | faster-whisper `base`, int8, CPU | 0,81 s fuer 3,12 s Sprache |
+| Stimme | Piper `de_DE-kerstin-low` | RTF 0,04, erster Ton ~70 ms |
+| Aeusserungsende | 700 ms Stille | vorher 3000 ms beim Provider |
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143
-# → installiert Piper ins Bridge-Venv und aktiviert --tts-local
+# → lokale Erkennung + lokale Stimme
 
-./scripts/install-host.sh --public-host 192.168.178.143 --provider-voice
-# → laesst alles wie zuvor und spielt die OpenAI-Stimme ab
+./scripts/install-host.sh --public-host 192.168.178.143 --provider-stt --provider-voice
+# → Rueckweg: alles wieder wie zuvor ueber den Provider
 ```
 
-Stimmen müssen vorliegen:
+Voraussetzungen: laufender Wyoming-Whisper-Dienst und die Piper-Stimme:
 
 ```bash
-python3 -m piper.download_voices de_DE-thorsten-medium
+python3 -m piper.download_voices de_DE-kerstin-low
 ```
 
 ## Dauerhafte Talk-Sitzung (Ist-Stand)
@@ -123,6 +130,7 @@ auf dem OpenClaw-Host.
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
 7. [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md)
+8. [`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md)
 
 Für einen bereits eingerichteten Host genügt typischerweise:
 
@@ -131,7 +139,8 @@ Für einen bereits eingerichteten Host genügt typischerweise:
 ./scripts/apply-openclaw-voice-dist-patches.py
 ./scripts/verify-host.sh
 python3 tests/test_local_tts.py
-python3 tests/test_bridge_e2e.py
+node tests/test_local_stt.mjs
+python3 tests/test_bridge_local_stt_e2e.py
 systemctl --user restart openclaw-gateway.service
 ```
 

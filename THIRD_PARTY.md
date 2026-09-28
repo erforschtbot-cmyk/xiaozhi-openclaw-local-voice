@@ -20,11 +20,19 @@ Dieses Repository enthält Patchdateien und Anleitungen gegen folgende Projekte:
   Closed-Source-Produkte aber zu prüfen. Das frühere `rhasspy/piper`-Repository
   (MIT) ist archiviert.
 - **Piper-Stimmen** (`rhasspy/piper-voices`) — MIT-Lizenz. Die Stimme
-  `de_DE-thorsten-medium` stammt aus dem Thorsten-Voice-Projekt
-  (CC0-1.0). Stimmen werden nicht mitgeliefert; Installationsanleitung siehe
-  `docs/07-LOKALE-STIMME.md`.
-- `faster-whisper` / `wyoming-faster-whisper` — nur relevant, wenn die
-  Erkennung ebenfalls lokal laufen soll (nicht Teil dieses Aufbaus).
+  `de_DE-kerstin-low` sowie die weiteren deutschen Stimmen stammen aus dem
+  Thorsten-Voice-Projekt (CC0-1.0) bzw. dem MLS-Projekt. Stimmen werden nicht
+  mitgeliefert; Installationsanleitung siehe `docs/07-LOKALE-STIMME.md`.
+- **faster-whisper** (`SYSTRAN/faster-whisper`) — MIT-Lizenz. Lokale
+  Spracherkennung; wird als Wyoming-Dienst betrieben
+  (`wyoming-faster-whisper`, Paket `wyoming-faster-whisper`). Weder Code noch
+  Modelle liegen in diesem Repository.
+- **Whisper-Modelle** (`Systran/faster-whisper-base` u. a.) — MIT-Lizenz.
+  Werden zur Laufzeit geladen; die Einrichtung beschreibt
+  `docs/08-LOKALE-ERKENNUNG.md`.
+- **Wyoming** (`rhasspy/wyoming`) — MIT-Lizenz. Protokoll fuer den
+  Austausch mit dem Erkennungsdienst; die Bridge spricht es direkt
+  (`gateway/local_stt.mjs`).
 
 ## Enthaltene Binärdateien
 

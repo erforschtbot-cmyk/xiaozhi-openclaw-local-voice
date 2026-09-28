@@ -24,6 +24,8 @@ Gemessen auf dem Referenzhost (Intel i5-8365U, nur CPU):
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 try:  # Piper >= 1.3 (aktuelle piper-tts-Pakete)
@@ -33,6 +35,46 @@ except ImportError:  # pragma: no cover - aeltere Installationen
 
 # Das Geraet erwartet 24 kHz mono, 16 Bit little endian.
 DEVICE_SAMPLE_RATE = 24000
+
+
+# Markdown-Reste, die nicht vorgelesen werden duerfen. Der Agent antwortet
+# haeufig formatiert (`**13:28 Uhr**`, Aufzaehlungen, Links); eine
+# Sprachausgabe darf davon nichts aussprechen.
+_MARKDOWN_RULES = (
+    (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),        # Bilder -> Alt-Text
+    (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),          # Links -> Text
+    (re.compile(r"```[^`]*```", re.DOTALL), " "),                 # Codebloecke
+    (re.compile(r"`([^`]*)`"), r"\1"),                          # Inline-Code
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),                    # fett
+    (re.compile(r"__([^_]+)__"), r"\1"),                        # fett (alt)
+    (re.compile(r"(?<![\w])\*([^*\n]+)\*(?![\w])"), r"\1"),     # kursiv
+    (re.compile(r"(?<![\w])_([^_\n]+)_(?![\w])"), r"\1"),       # kursiv (alt)
+    (re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE), ""),        # Ueberschriften
+    (re.compile(r"^\s{0,3}[-*+]\s+", re.MULTILINE), ""),         # Aufzaehlung
+    (re.compile(r"^\s{0,3}>\s?", re.MULTILINE), ""),             # Zitat
+    (re.compile(r"\s*\|[^\n]*\|"), " "),                       # Tabellenzeilen
+)
+# Absatzgrenzen: ein Satzzeichen ergaenzen, aber nur wenn noch keines steht.
+_PARAGRAPH = re.compile(r"([^.!?:;,\s])\s*\n{2,}\s*")
+
+
+def strip_markdown(text: str) -> str:
+    """Entfernt Formatierungszeichen, die sonst Buchstabe fuer Buchstabe
+    vorgelesen wuerden. Der reine Inhalt bleibt erhalten."""
+    if not text:
+        return ""
+    cleaned = text
+    for pattern, replacement in _MARKDOWN_RULES:
+        cleaned = pattern.sub(replacement, cleaned)
+    # Absatzgrenzen werden zu einer Sprechpause mit Satzzeichen.
+    cleaned = _PARAGRAPH.sub(r"\1. ", cleaned)
+    # Sternchen/Unterstriche, die uebrig blieben, sind Formatierungsreste.
+    cleaned = cleaned.replace("*", "").replace("#", "")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    # Mehrfache Satzzeichen zusammenziehen (z. B. ".." aus Absatzgrenzen).
+    cleaned = re.sub(r"([.!?,;:])\1+", r"\1", cleaned)
+    cleaned = re.sub(r"\.\s*\.", ".", cleaned)
+    return cleaned.strip()
 
 
 class PiperSpeaker:
