@@ -57,6 +57,48 @@ deshalb sendet das Referenzgerät die Rahmen und deshalb standen „Job es." und
 Der `#else`-Zweig ist ein **vorgesehener** Weg, kein Notbehelf. Er spielt beim
 Aktivieren einen kurzen Ton statt Audio zu senden.
 
+### Der Ton beim Aktivieren (gewollt, nicht abschaltbar)
+
+Wer den Schalter umlegt, hört danach bei **jedem** Wachwort einen kurzen Ton.
+Das ist kein Fehler, sondern die unmittelbare Folge des `#else`-Zweigs:
+
+```c
+#if CONFIG_SEND_WAKE_WORD_DATA      // vorher: sendet Wachwort-Audio, kein Ton
+    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        protocol_->SendAudio(std::move(packet));
+    }
+    protocol_->SendWakeWordDetected(wake_word);
+    SetListeningMode(GetDefaultListeningMode());
+#else                               // jetzt: setzt nur das Ton-Flag
+    play_popup_on_listening_ = true;
+    SetListeningMode(GetDefaultListeningMode());
+#endif
+```
+
+Abgespielt wird er in `EnableVoiceProcessing` (`main/application.cc`):
+
+```c
+if (play_popup_on_listening_) {
+    play_popup_on_listening_ = false;
+    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+}
+```
+
+Wichtig ist **wo** er spielt: genau in dem Moment, in dem das Mikrofon
+wirklich aufgeht. Der Ton markiert also den echten Beginn des Zuhörens.
+
+Das ist praktisch, weil die Anzeige „Zuhören“ das **nicht** tut — sie steht
+schon, während die Talk-Sitzung noch aufwärmt (siehe
+`docs/05-FEHLERSUCHE.md`, „erster Satz geht verloren“). Mit dem
+Vorwärmen fallen Ton und echtes Zuhören zusammen; vorher lagen sie um die
+Anlaufzeit auseinander.
+
+**Abschalten:** Es gibt dafür **keine** Kconfig-Option (geprüft in allen
+`Kconfig*`-Dateien). Man müsste die Zeile `play_popup_on_listening_ = true;`
+im Patch entfernen und die Firmware neu bauen und flashen. Bewusst nicht
+gemacht: der Ton ist die verlässlichste Rückmeldung dafür, wann gesprochen
+werden darf.
+
 Auf der Host-Seite hängt nichts an der Nachricht `SendWakeWordDetected`; die
 Bridge startet ihren Helfer über den `listen`-Status. Das wurde geprüft
 (`grep` in `gateway/server.py`). Der Wegfall ist damit für den Ablauf
