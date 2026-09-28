@@ -7,6 +7,17 @@ Sprachausgabe**. Das gesprochene Wort wird auf dem Host erkannt
 (faster-whisper) und gesprochen (Piper). **Kein Mikrofon-Audio und keine
 Stimme geht mehr an einen Cloud-Sprachdienst.**
 
+> **Variante: komplett lokal.** Kein OpenAI-Abo nötig; über das Gateway läuft nur
+> noch das „Denken" des Agenten.
+>
+> Die **Cloud-Variante** (Realtime-Stimme über OpenAI, `gpt-live-1-codex`) steht in
+> [`erforschtbot-cmyk/xiaozhi-openclaw-voice-terminal`](https://github.com/erforschtbot-cmyk/xiaozhi-openclaw-voice-terminal).
+> Die **Firmware ist in beiden Repos identisch** — es unterscheidet sich nur die
+> Host-Konfiguration.
+
+Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
+[Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
+
 ## Architektur
 
 ```text
