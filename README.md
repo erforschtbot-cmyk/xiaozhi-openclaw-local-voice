@@ -3,10 +3,16 @@
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um ein funktionierendes Jarvis-System auf einem leeren Linux-/OpenClaw-Host
 exakt wiederherzustellen — mit **lokaler Erkenung und lokaler
-Sprachausgabe**. Das gesprochene Wort wird auf dem Host erkannt
-(faster-whisper) und gesprochen (Piper). **Kein Mikrofon-Audio und keine
-Stimme geht mehr an einen Cloud-Sprachdienst.**
+Sprachausgabe**. Das gesprochene Wort wird auf dem Host erkannt und
+gesprochen (Piper). **Kein Mikrofon-Audio und keine Stimme geht mehr an
+einen Cloud-Sprachdienst.**
 
+> **Favorit fuer die Erkennung: NVIDIA Canary 180M Flash (INT8) + Silero-VAD.**
+> Es versteht kurze deutsche Alltagsbefehle am Geraet besser als
+> `faster-whisper small` und laeuft auf einem eigenen Port parallel dazu.
+> Anleitung: [`docs/10-CANARY-FAVORIT.md`](docs/10-CANARY-FAVORIT.md).
+> `faster-whisper small` bleibt als Rueckfall installiert.
+>
 > **Variante: komplett lokal.** Kein OpenAI-Abo nötig; über das Gateway läuft nur
 > noch das „Denken" des Agenten.
 >
@@ -29,7 +35,7 @@ Python-Bridge  (server.py, systemd: jarvis-realtime-bridge.service)
   ├─ Opus-Audio vom Gerät, Nachhör-Fenster, OTA auf :8766
   ├─ startet Helfer: node local-voice.mjs        ← Erkenung + Agent + Text
   │    ├─ Erkennt Aeusserungsgrenzen (Pegel, 700 ms Stille)
-  │    ├─ Transkribiert lokal: Wyoming-Whisper (127.0.0.1:10300)
+  │    ├─ Transkribiert lokal: Wyoming (127.0.0.1:10301, Canary  ← Favorit)
   │    └─ Ruft den OpenClaw-Agenten auf (chat.send)
   └─ vertont den Antworttext lokal: piper_speaker.py (Piper, CPU)
           ↓
@@ -43,19 +49,32 @@ Lokal sind: Wakeword, Mikrofonweg, Erkenung, Sprachausgabe und die
 Audioausgabe am Gerät. Ueber das Gateway laeuft nur noch das **Denken**
 (der Agent mit seinem Modell).
 
+**Fuer die Erkennung stehen zwei Dienste bereit** (gleiches Protokoll):
+
+| Dienst | Port | Rolle |
+|---|---|---|
+| Canary 180M Flash INT8 + Silero-VAD | `10301` | **Favorit** |
+| faster-whisper small + Silero-VAD | `10300` | Rueckfall |
+
+Die Bridge waehlt per `--stt-uri`. Umstellen ist ein Einzeiler — siehe
+[`docs/10-CANARY-FAVORIT.md`](docs/10-CANARY-FAVORIT.md).
+
 **Vier Bausteine, klar getrennt:**
 
 1. `gateway/server.py` — WebSocket-Server auf Port 8765/8766, Taktung und
    Nachhör-Fenster.
 2. `gateway/local-voice.mjs` — der lokale Helfer: erkennt Aeusserungen,
-   holt den Text vom lokalen Whisper, ruft den Agenten auf und meldet dessen
-   Antworttext.
+   holt den Text vom lokalen STT-Dienst, ruft den Agenten auf und meldet
+   dessen Antworttext.
 3. `gateway/local_stt.mjs` — Wyoming-Protokoll und Aeusserungsgrenzen.
 4. `gateway/piper_speaker.py` — haelt das Piper-Stimmmodell warm und wandelt
    Text in PCM mit der vom Gerät erwarteten Rate (24 kHz).
+5. `gateway/wyoming_canary.py` — **Wyoming-Server fuer Canary 180M Flash**
+   mit Silero-VAD (Favorit, Port `10301`).
 
 Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 [`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md),
+[`docs/10-CANARY-FAVORIT.md`](docs/10-CANARY-FAVORIT.md),
 [`docs/09-FIRMWARE-WACHWORT.md`](docs/09-FIRMWARE-WACHWORT.md).
 
 ## Was hier drin ist
@@ -69,6 +88,7 @@ Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
 | Bridge (Python, WebSocket-Server) | `gateway/server.py` |
 | Lokale Erkennung (Node) | `gateway/local-voice.mjs`, `gateway/local_stt.mjs` |
+| Lokale Erkennung (Canary, Favorit) | `gateway/wyoming_canary.py` |
 | Lokale Sprachausgabe (Piper) | `gateway/piper_speaker.py` |
 | Provider-Helfer (Rückfallweg) | `gateway/openclaw-talk-realtime.mjs` |
 | OpenClaw-`dist`-Patches für den Voice-Pfad | `scripts/apply-openclaw-voice-dist-patches.py` |

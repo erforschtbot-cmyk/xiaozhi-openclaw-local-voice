@@ -263,6 +263,9 @@ umgebaut werden; beide Pfade sind im Code erhalten.
 - **`small` verhört sich gelegentlich.** Beispiele: „Schalte" → „Zeite".
   Bei Werkzeugbefehlen kann das Folgen haben. `base` ist schneller, aber
   ungenauer; die Wahl ist ein Abwägen zwischen Wartezeit und Treffsicherheit.
+  **Fuer den Alltagsbetrieb empfehlen wir stattdessen Canary** — siehe
+  [`10-CANARY-FAVORIT.md`](10-CANARY-FAVORIT.md): es versteht kurze deutsche
+  Befehle am Gerät besser und ist vergleichbar schnell.
 - **Die Stille-Erkennung ist schwellwertbasiert.** In sehr lauter Umgebung
   kann sie eine Äußerung zu früh oder zu spät beenden. Die Schwellen sind
   über Umgebungsvariablen einstellbar (`OPENCLAW_VAD_RMS`,
@@ -272,3 +275,17 @@ umgebaut werden; beide Pfade sind im Code erhalten.
   der Sprechpause.
 - **Erkennung braucht den Dienst.** Läuft `wyoming-stt` nicht, schlägt jede
   Äußerung fehl; die Bridge meldet dann einen Fehler und spricht nichts.
+
+## Zwei Erkennungsdienste betreiben
+
+Die Bridge ist nicht auf Whisper festgelegt. Jeder Dienst, der das
+Wyoming-ASR-Protokoll spricht, passt hinter `--stt-uri`. Damit lässt sich
+Whisper (Rueckfall) und der Favorit **parallel** betreiben und mit
+`scripts/compare-stt.sh` direkt vergleichen:
+
+| Dienst | Port | Rolle |
+|---|---|---|
+| Canary 180M Flash INT8 + Silero-VAD | `10301` | **Favorit** |
+| faster-whisper small + Silero-VAD | `10300` | Rueckfall |
+
+Einzelheiten, Installation und Umschalten: [`10-CANARY-FAVORIT.md`](10-CANARY-FAVORIT.md).

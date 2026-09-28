@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 --public-host LAN_IP [--install-dir PATH] [--tts-voice NAME] [--tts-voice-dir PATH]" >&2
-  echo "       --stt-uri HOST:PORT  Adresse des lokalen Whisper-Dienstes (Standard 127.0.0.1:10300)" >&2
+  echo "       --stt-uri HOST:PORT  Adresse des lokalen STT-Dienstes (Standard 127.0.0.1:10301 = Canary, Favorit)" >&2
   echo "       --tts-split MODUS    clause | sentence | whole (Standard: sentence)" >&2
   echo "       --provider-stt       installiert ohne lokale Erkennung (OpenAI hoert zu)" >&2
   echo "       --provider-voice     installiert ohne lokale Sprachausgabe (OpenAI-Stimme)" >&2
@@ -14,7 +14,7 @@ public_host=""
 tts_voice="de_DE-kerstin-low"
 tts_voice_dir="$HOME/.local/share/piper-voices"
 tts_split="sentence"
-stt_uri="127.0.0.1:10300"
+stt_uri="127.0.0.1:10301"
 local_voice=1
 local_stt=1
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jarvis-realtime-bridge"

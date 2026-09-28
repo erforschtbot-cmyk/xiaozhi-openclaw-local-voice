@@ -19,7 +19,10 @@ Erkennung und Stimme laufen lokal auf dem Host.
 | **Lokale Sprachausgabe** | `piper-tts==1.4.2` (GPL-3.0-or-later), `numpy>=1.26` |
 | **Lokale Stimme** | `de_DE-kerstin-low` (16 kHz, 60,2 MB) |
 | **Lokale Erkennung** | `faster-whisper` **small**, int8, CPU (Wyoming-Dienst) |
-| Erkennungsdienst | `wyoming-faster-whisper`, Port `10300` |
+| Erkennungsdienst (Rueckfall) | `wyoming-faster-whisper`, Port `10300`, `--vad-filter` |
+| **Lokale Erkennung (Favorit)** | **NVIDIA Canary 180M Flash**, INT8 via `sherpa-onnx` |
+| Erkennungsdienst (Favorit) | `gateway/wyoming_canary.py`, Port `10301`, Silero-VAD |
+| Canary-Modellquelle | `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` |
 | Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |
 | Provider-Stimme (nur noch Rueckfall) | `cove` |
 | Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
@@ -51,12 +54,30 @@ Gemessen gegen den laufenden Wyoming-Dienst (CPU, int8) mit einem 3,12-s-Satz:
 | Modell | Zeit | RTF | Bewertung |
 |---|---|---|---|
 | `base` | 0,81 s | 0,26 | schnell, verhört sich gelegentlich |
-| `small` | 2,18 s | 0,70 | **Standard** — genauer |
+| `small` | 2,18 s | 0,70 | Rueckfall — solide, wird ueberholt |
 | `medium` | 7,3–15,0 s | 2,3–4,8 | **untauglich** fuer Sprache |
 
 Der frueher laufende `medium`-Dienst war 9- bis 18-mal langsamer als `base`.
-Gewaehlt wurde `small`, weil die Erkennungsfehler von `base` im Sprachbetrieb
-stoerten ("Schalte" -> "Zeite").
+
+### Canary 180M Flash INT8 + Silero-VAD (Favorit)
+
+Gemessen ueber `wyoming_canary.py` (Port `10301`, CPU, 8 Threads).
+
+| Signal | Dauer | Latenz | RTF |
+|---|---|---|---|
+| `de.wav` (Testwav) | 2,75 s | ~1,2–2,1 s | 0,44–0,76 |
+| Rauschen | 1,0 s | ~0,04–0,08 s | (leer, via VAD) |
+
+A/B gegen `faster-whisper small` mit identischem PCM (`scripts/compare-stt.sh`):
+Auf kurzen deutschen Alltagsbefehlen am Geraet **gewann Canary**. Bei langen,
+verwaschenen Aufnahmen war `small` teils robuster. Im Sprachterminal-Betrieb
+(wie hier) ist Canary die bessere Wahl; der Owner hat sich dafuer entschieden
+(„der versteht perfekt").
+
+**Wichtig — VAD:** Silero-VAD ist fuer Canary **Pflicht**. Canary hat kein
+eigenes VAD und transkribiert sonst Rauschen (Artefakte wie „T S F"). Das
+VAD dient als **Tor** (Sprache ja/nein), nicht zum Zuschneiden — Zuschneiden
+kostet den Wortanfang.
 
 ## Laufende Firmware (Geräte-Ist-Stand)
 

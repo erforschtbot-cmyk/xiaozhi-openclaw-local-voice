@@ -1,5 +1,5 @@
 [Unit]
-Description=Jarvis XiaoZhi voice bridge (local Whisper recognition + local Piper speech)
+Description=Jarvis XiaoZhi voice bridge (local recognition + local Piper speech)
 After=network-online.target openclaw-gateway.service
 
 [Service]

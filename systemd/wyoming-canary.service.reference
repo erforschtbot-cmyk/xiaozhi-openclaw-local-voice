@@ -1,0 +1,21 @@
+[Unit]
+Description=Wyoming Canary STT (NVIDIA canary-180m-flash INT8 via sherpa-onnx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/openclaw/wyoming-canary
+ExecStart=/home/openclaw/wyoming-canary/.venv/bin/python /home/openclaw/wyoming-canary/wyoming_canary.py \
+  --uri tcp://0.0.0.0:10301 \
+  --model-dir /home/openclaw/wyoming-canary/model \
+  --language de \
+  --src-lang de \
+  --tgt-lang de \
+  --num-threads 8 \
+  --vad-model /home/openclaw/wyoming-canary/silero_vad.onnx
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

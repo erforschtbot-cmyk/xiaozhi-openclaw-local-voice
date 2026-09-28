@@ -222,75 +222,80 @@ function dispatchUtterance(frame) {
   void handleUtterance(frame);}
 
 async function handleUtterance(pcm) {
-  let text = "";
   try {
-    text = await transcribePcm(pcm, {
-      uri: WHISPER_URI,
-      language: LANGUAGE,
-      rate,
-      width,
-      channels,
-    });
-  } catch (error) {
-    log(`Erkennung fehlgeschlagen: ${error.message}`);
-    emit("error", { message: String(error.message || error) });
-    return;
-  }
-  if (!text) {
-    log("Leere Erkennung; keine Antwort angefordert");
-    return;
-  }
-  const cleaned = cleanTranscript(text);
-  if (!cleaned) {
-    log(`Wachwort-Rest verworfen: ${text}`);
-    return;
-  }
-  if (cleaned !== text) {
-    log(`Wachwort-Rest entfernt: ${text} -> ${cleaned}`);
-  }
-  text = cleaned;
+    let text = "";
+    try {
+      text = await transcribePcm(pcm, {
+        uri: WHISPER_URI,
+        language: LANGUAGE,
+        rate,
+        width,
+        channels,
+      });
+    } catch (error) {
+      log(`Erkennung fehlgeschlagen: ${error.message}`);
+      emit("error", { message: String(error.message || error) });
+      return;
+    }
+    if (!text) {
+      log("Leere Erkennung; keine Antwort angefordert");
+      return;
+    }
+    const cleaned = cleanTranscript(text);
+    if (!cleaned) {
+      log(`Wachwort-Rest verworfen: ${text}`);
+      return;
+    }
+    if (cleaned !== text) {
+      log(`Wachwort-Rest entfernt: ${text} -> ${cleaned}`);
+    }
+    text = cleaned;
 
-  emit("user_transcript", { text });
-  log(`Erkannt: ${text}`);
+    emit("user_transcript", { text });
+    log(`Erkannt: ${text}`);
 
-  // Textzustand fuer die Delta-Berechnung zuruecksetzen.
-  assistantText = "";
-  try {
-    const started = await client.request("chat.send", {
-      sessionKey: SESSION_KEY,
-      message: text,
-      idempotencyKey: `xiaozhi-local-${Date.now()}`,
-      // Kein `suppressCommandInterpretation`: dieses Feld verlangt
-      // Admin-Rechte am Gateway, die der Token hier nicht hat. Fuer eine
-      // gesprochene Aeusserung ist es nicht erforderlich.
-    });
-    const runId = started.runId ?? started.idempotencyKey;
-    activeRun = { runId };
-    const answer = await new Promise((resolve, reject) => {
-      pendingRuns.set(runId, { resolve, reject });
-    });
-    if (!answer) {
-      // Ohne Text nicht sprechen; die Bridge soll trotzdem sauber abschliessen.
-      log("Leere Antwort; kein Sprechauftrag");
+    // Textzustand fuer die Delta-Berechnung zuruecksetzen.
+    assistantText = "";
+    try {
+      const started = await client.request("chat.send", {
+        sessionKey: SESSION_KEY,
+        message: text,
+        idempotencyKey: `xiaozhi-local-${Date.now()}`,
+        // Kein `suppressCommandInterpretation`: dieses Feld verlangt
+        // Admin-Rechte am Gateway, die der Token hier nicht hat. Fuer eine
+        // gesprochene Aeusserung ist es nicht erforderlich.
+      });
+      const runId = started.runId ?? started.idempotencyKey;
+      activeRun = { runId };
+      const answer = await new Promise((resolve, reject) => {
+        pendingRuns.set(runId, { resolve, reject });
+      });
+      if (!answer) {
+        // Ohne Text nicht sprechen; die Bridge soll trotzdem sauber abschliessen.
+        log("Leere Antwort; kein Sprechauftrag");
+        emit("assistant_done", {
+          text: "",
+          audioFrameCount: 0,
+          audioByteCount: 0,
+          msSinceLastAudio: null,
+        });
+        return;
+      }
       emit("assistant_done", {
-        text: "",
+        text: answer,
         audioFrameCount: 0,
         audioByteCount: 0,
         msSinceLastAudio: null,
       });
-      return;
+      log(`Antwort: ${answer.slice(0, 120)}`);
+    } catch (error) {
+      log(`Agent-Aufruf fehlgeschlagen: ${error.message}`);
+      emit("error", { message: String(error.message || error) });
     }
-    emit("assistant_done", {
-      text: answer,
-      audioFrameCount: 0,
-      audioByteCount: 0,
-      msSinceLastAudio: null,
-    });
-    log(`Antwort: ${answer.slice(0, 120)}`);
-  } catch (error) {
-    log(`Agent-Aufruf fehlgeschlagen: ${error.message}`);
-    emit("error", { message: String(error.message || error) });
   } finally {
+    // WICHTIG: `busy` muss auch bei leerer Erkennung/Fehler zurueckgesetzt
+    // werden. Ein frueheres `return` vor diesem finally liess `busy` sonst
+    // dauerhaft auf true stehen und die Bridge nahm nie wieder etwas an.
     activeRun = null;
     busy = false;
     // Eine waehrend der Verarbeitung erkannte Aeusserung jetzt nachholen.
