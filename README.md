@@ -44,7 +44,8 @@ Audioausgabe am Gerät. Ueber das Gateway laeuft nur noch das **Denken**
    Text in PCM mit der vom Gerät erwarteten Rate (24 kHz).
 
 Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
-[`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md).
+[`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md),
+[`docs/09-FIRMWARE-WACHWORT.md`](docs/09-FIRMWARE-WACHWORT.md).
 
 ## Was hier drin ist
 
@@ -132,6 +133,7 @@ auf dem OpenClaw-Host.
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
 7. [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md)
 8. [`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md)
+9. [`docs/09-FIRMWARE-WACHWORT.md`](docs/09-FIRMWARE-WACHWORT.md)
 
 Für einen bereits eingerichteten Host genügt typischerweise:
 
@@ -153,15 +155,20 @@ Aus dem Boot-Log und dem App-Deskriptor des Geräts gelesen:
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | **Sep 27 2026 14:13:36** |
-| ELF-SHA256 | `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362` |
+| Compile time | **Sep 28 2026 13:08:52** |
+| ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
 | ESP-IDF | `v6.1` |
 | Board | `esp32-s3-touch-lcd-4b` |
 | Sprache | `de-DE` |
 
-Dieser Stand enthält den **Wiederherstellungs-Watchdog** und das animierte,
-board-spezifische OpenClaw-Gesicht. Der komplette Sprach-, Wakeword-, Netzwerk-
-und Bridge-Pfad ist gegenüber dem vorherigen Watchdog-Build unverändert.
+Dieser Stand enthält den **Wiederherstellungs-Watchdog**, das animierte
+board-spezifische OpenClaw-Gesicht und den Eingriff, dass das **Wachwort-Audio
+nicht mehr an den Server** geschickt wird (`CONFIG_SEND_WAKE_WORD_DATA=n`,
+siehe [`docs/09-FIRMWARE-WACHWORT.md`](docs/09-FIRMWARE-WACHWORT.md)). Mikrofon,
+Erkennung und Mithören sind davon nicht betroffen.
+
+Der Stand **vor** diesem Eingriff liegt als `firmware/prebuilt/previous/xiaozhi.bin`
+bereit (`Sep 27 2026 14:13:36`, ELF `77fd991a…`) — ein Befehl als Rückweg.
 
 Verwechslungsgefahr: Es existieren weitere `xiaozhi 2.5.0`-Builds, u. a. der
 vorherige bewährte Stand **23.09. 08:43** (ELF `b6bf3e74…`) und ein weiterer vom
@@ -174,8 +181,9 @@ sie — nur Compile-Zeit und ELF-Hash.
 
 | Datei | Inhalt | Schreibziel |
 |---|---|---|
-| `xiaozhi.bin` | Nur App-Partition (`ota_0`) des laufenden Watchdog-Builds | `0x20000` |
+| `xiaozhi.bin` | Nur App-Partition (`ota_0`) des laufenden Builds (Wachwort-Audio abgeschaltet) | `0x20000` |
 | `merged-binary.bin` | Vollständiges Image, **NVS auf `0xFF` geleert** | `0x0` (nur Rettungsfall) |
+| `previous/xiaozhi.bin` | Stand **vor** dem Wachwort-Eingriff (`77fd991a…`) | `0x20000` |
 | `previous-watchdog-smiley/xiaozhi.bin` | Vorheriger Watchdog-Stand mit statischem Smiley (`2d817b23…`) | `0x20000` |
 | `previous-no-watchdog/xiaozhi.bin` | Vorheriger bewährter Stand (`b6bf3e74…`), ohne Watchdog | `0x20000` |
 | `previous-face-v2-30fps/xiaozhi.bin` | Direkter Rückweg zum Gesicht vor der finalen LVGL-Optimierung | `0x20000` |

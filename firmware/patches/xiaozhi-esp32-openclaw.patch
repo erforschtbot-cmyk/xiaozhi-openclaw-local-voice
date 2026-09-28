@@ -270,13 +270,14 @@ diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json b/main/boar
 index 42fbf22..b70bcc8 100644
 --- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
 +++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
-@@ -7,8 +7,9 @@
+@@ -7,8 +7,10 @@
              "name": "esp32-s3-touch-lcd-4b",
              "sdkconfig_append": [
                  "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
 -                "CONFIG_USE_DEVICE_AEC=y"
 +                "CONFIG_USE_DEVICE_AEC=y",
-+                "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\""
++                "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\"",
++                "CONFIG_SEND_WAKE_WORD_DATA=n"
              ]
          }
      ]

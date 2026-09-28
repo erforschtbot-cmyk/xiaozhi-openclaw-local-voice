@@ -15,6 +15,7 @@ Aufruf:
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import struct
 import subprocess
@@ -30,17 +31,41 @@ def field(block: bytes, offset: int, length: int) -> str:
 
 
 def find_esptool() -> pathlib.Path:
-    candidates = [
-        pathlib.Path.home() / ".openclaw/workspace-allgemein/.tmp/jarvis-esptool-venv/bin/esptool",
-        pathlib.Path.home() / ".openclaw/workspace-allgemein/.venv-esptool/bin/esptool",
+    """Findet esptool, auch wenn das Skript per sudo laeuft.
+
+    Unter sudo ist `Path.home()` das Home von root, nicht das des aufrufenden
+    Nutzers — dort liegt die venv nicht. Deshalb werden zusaetzlich das Home
+    aus SUDO_USER und der Pfad der Skriptinstallation geprueft. Ohne das
+    scheitert der Aufruf mit "esptool nicht gefunden", obwohl es existiert.
+    """
+    homes = [pathlib.Path.home()]
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        try:
+            homes.append(pathlib.Path(f"~{sudo_user}").expanduser())
+        except RuntimeError:
+            pass
+
+    relative = [
+        ".openclaw/workspace-allgemein/.tmp/jarvis-esptool-venv/bin/esptool",
+        ".openclaw/workspace-allgemein/.venv-esptool/bin/esptool",
+        ".venv-esptool/bin/esptool",
     ]
+    candidates = [home / rel for home in homes for rel in relative]
+    # Auch neben dem Skript selbst suchen (Repo-Wurzel).
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    candidates.append(repo_root / ".venv-esptool/bin/esptool")
+
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    found = subprocess.run(["bash", "-lc", "command -v esptool || command -v esptool.py"],
-                           text=True, capture_output=True)
-    if found.returncode != 0:
-        raise SystemExit("esptool nicht gefunden. 'pip install esptool==5.4.0' in eine venv.")
+    found = subprocess.run("[ -n \"$SUDO_USER\" ] && sudo -u \"$SUDO_USER\" bash -lc 'command -v esptool || command -v esptool.py' || bash -lc 'command -v esptool || command -v esptool.py'",
+                           shell=True, text=True, capture_output=True)
+    if found.returncode != 0 or not found.stdout.strip():
+        raise SystemExit(
+            "esptool nicht gefunden. 'pip install esptool==5.4.0' in eine venv "
+            "oder scripts/backup-device-firmware.sh ausfuehren, das es anlegt."
+        )
     return pathlib.Path(found.stdout.strip())
 
 

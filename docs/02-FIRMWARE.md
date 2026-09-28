@@ -142,3 +142,19 @@ Der bestätigte funktionierende Komplettstand wurde aus einer funktionierenden
 Basis aufgebaut. Frühere vollständige Neubauten konnten Mikrofon/Audio verlieren.
 Darum ist das verifizierte Image der Recovery-Anker; neue Builds müssen erst den
 vollständigen Testplan bestehen.
+
+Deshalb gilt bei **jeder** Firmware-Änderung:
+
+1. Vorher den Ist-Stand vom Gerät sichern
+   (`scripts/backup-device-firmware.sh`) — der Voll-Dump ist der Rückweg.
+2. Das bisherige `firmware/prebuilt/xiaozhi.bin` nach
+   `firmware/prebuilt/previous/` verschieben, bevor es ersetzt wird.
+3. Im Patch `--check` prüfen, ob er gegen die gepinnte Revision sauber
+   anwendbar ist, **bevor** gebaut wird.
+4. Nach dem Flashen den App-Deskriptor zurücklesen und mit dem erwarteten
+   ELF-Hash vergleichen (`scripts/read-device-info.py`).
+
+Der Wachwort-Eingriff vom 2026-09-28 ist ein Beispiel: Der Vorgängerstand liegt
+unter `firmware/prebuilt/previous/`, und der neue Hash ist in `VERSIONS.md`
+vermerkt. Details zur Änderung und ihrer Risikoabgrenzung:
+[`docs/09-FIRMWARE-WACHWORT.md`](09-FIRMWARE-WACHWORT.md).

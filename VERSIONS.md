@@ -1,8 +1,10 @@
 # Verbindliche Versionen
 
 Diese Werte beschreiben den **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
-Die Firmware ist gegenueber dem Vorgaengerprojekt **unveraendert**; geaendert
-wurde ausschliesslich der Sprachausgabe-Pfad des Hosts.
+Die Firmware enthaelt gegenueber dem Vorgaengerprojekt **eine** Aenderung:
+Das Wachwort-Audio wird nicht mehr an den Server geschickt
+(`CONFIG_SEND_WAKE_WORD_DATA=n`, siehe `docs/09-FIRMWARE-WACHWORT.md`).
+Erkennung und Stimme laufen lokal auf dem Host.
 
 | Komponente | Version / Pin |
 |---|---|
@@ -48,18 +50,13 @@ Gemessen gegen den laufenden Wyoming-Dienst (CPU, int8) mit einem 3,12-s-Satz:
 
 | Modell | Zeit | RTF | Bewertung |
 |---|---|---|---|
-| `base` | 0,81 s | 0,26 | **Standard** — schnell |
-| `small` | 2,18 s | 0,70 | genauer, aber 2,7x langsamer |
+| `base` | 0,81 s | 0,26 | schnell, verhört sich gelegentlich |
+| `small` | 2,18 s | 0,70 | **Standard** — genauer |
 | `medium` | 7,3–15,0 s | 2,3–4,8 | **untauglich** fuer Sprache |
 
 Der frueher laufende `medium`-Dienst war 9- bis 18-mal langsamer als `base`.
-Auf diesem Host ist `base` die einzige Stufe, die sich fuer einen
-Sprachassistenten eignet.
-
-Genauigkeit `base` (Beispiel): „Schalte den Monitor an. Wie spaet ist es?"
-wurde als „Zeite den Monitor an, wie spaet es ist." erkannt — inhaltlich
-verstaendlich, aber nicht fehlerfrei. Wer mehr Genauigkeit braucht, nimmt
-`small` und bezahlt mit rund 1,4 s zusaetzlicher Wartezeit.
+Gewaehlt wurde `small`, weil die Erkennungsfehler von `base` im Sprachbetrieb
+stoerten ("Schalte" -> "Zeite").
 
 ## Laufende Firmware (Geräte-Ist-Stand)
 
@@ -67,16 +64,26 @@ verstaendlich, aber nicht fehlerfrei. Wer mehr Genauigkeit braucht, nimmt
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | `Sep 27 2026 14:13:36` (de-DE, Watchdog + optimiertes animiertes Gesicht) |
-| ELF-SHA256 | `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362` |
+| Compile time | `Sep 28 2026 13:08:52` (de-DE, Wachwort-Audio abgeschaltet) |
+| ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
 | ESP-IDF | `v6.1` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
+| App-Partition | `0x20000`, 4.128.768 Bytes; belegt 2.905.488 (29 % frei) |
 
-Direkter Rückweg zum vorherigen Watchdog-Stand mit statischem Smiley:
-`Sep 26 2026 19:10:55`, ELF `2d817b23a349060d`
-(`firmware/prebuilt/previous-watchdog-smiley/xiaozhi.bin`).
+Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo und wurde am
+2026-09-28 auf das Gerät geflasht; die Prüfsumme nach dem Schreiben wurde
+zurückgelesen und stimmte.
 
-Rückweg ohne Watchdog: `Sep 23 2026 08:43:24`, ELF `b6bf3e74cef7c701`
+### Rückwege (vorherige Stände)
+
+Direkter Rückweg — der Stand **vor** dem Wachwort-Eingriff:
+`Sep 27 2026 14:13:36`, ELF `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362`
+(`firmware/prebuilt/previous/xiaozhi.bin`).
+
+Watchdog-Stand mit statischem Smiley: `Sep 26 2026 19:10:55`,
+ELF `2d817b23a349060d` (`firmware/prebuilt/previous-watchdog-smiley/xiaozhi.bin`).
+
+Ohne Watchdog: `Sep 23 2026 08:43:24`, ELF `b6bf3e74cef7c701`
 (`firmware/prebuilt/previous-no-watchdog/xiaozhi.bin`).
 
 **Nicht verwechseln:** Es gibt weitere `xiaozhi 2.5.0`-Builds, u. a. vom
