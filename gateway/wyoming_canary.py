@@ -138,9 +138,23 @@ class CanaryEngine:
         rec.decode_stream(stream)
 
     def transcribe(self, samples: np.ndarray, lang: str) -> str:
+        # VAD-Gate: verhindert, dass Canary Rauschen als Text ausgibt. Das Gate
+        # darf aber eine ECHTE Aeusserung nicht wegwerfen: bei leise/fern
+        # gesprochenen ersten Saetzen (genau der Fall nach frischem Kanal)
+        # meldete Silero "keine Sprache" und die Aufnahme war verloren, bevor
+        # Canary sie ueberhaupt sah.
+        #
+        # Deshalb: nur KURZE Aufnahmen ohne erkannte Sprache werden verworfen.
+        # Ist genug Audio da (>= 1.5 s), bekommt Canary es trotzdem — es ist
+        # gerade im Fernfeld und bei Stoergeraeuschen deutlich staerker als der
+        # VAD. Kommt dabei kein Text heraus, bleibt das Ergebnis leer.
         if self.vad is not None and not self.vad.has_speech(samples):
-            _LOGGER.debug("VAD: keine Sprache erkannt")
-            return ""
+            if len(samples) < int(1.5 * _RATE):
+                _LOGGER.info("VAD: keine Sprache erkannt (kurz, %.2fs) -> verworfen",
+                             len(samples) / _RATE)
+                return ""
+            _LOGGER.info("VAD: keine Sprache erkannt, aber %.2fs Audio -> Canary trotzdem",
+                         len(samples) / _RATE)
         rec = self._get(lang)
         stream = rec.create_stream()
         stream.accept_waveform(_RATE, samples)
@@ -206,7 +220,7 @@ async def main() -> None:
     parser.add_argument("--num-threads", type=int, default=4)
     parser.add_argument("--vad-model", default=None,
                         help="Pfad zu silero_vad.onnx (aktiviert VAD-Filter)")
-    parser.add_argument("--vad-threshold", type=float, default=0.5)
+    parser.add_argument("--vad-threshold", type=float, default=0.3)
     parser.add_argument("--vad-min-speech-ms", type=int, default=100)
     parser.add_argument("--vad-min-silence-ms", type=int, default=250)
     parser.add_argument("--zeroconf", nargs="?", const="canary")

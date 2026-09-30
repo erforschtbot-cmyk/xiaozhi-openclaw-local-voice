@@ -190,11 +190,20 @@ emit("ready", { sessionId: `local-voice`, consultSessionKey: null });
 
 const detector = new UtteranceDetector({
   rate,
-  // Gemessene Werte am Gerät: Sprache RMS 40-110, Stille 14-20. Die
-  // Schwelle muss deutlich darunter liegen, sonst wird Sprache verworfen.
-  speechRms: Number(process.env.OPENCLAW_VAD_RMS || 35),
+  // Gemessene Werte am Gerät: Sprache RMS 40-110 (leise/fern auch 16-34),
+  // Stille 14-20. Die Schwelle muss auch die leisen ersten Silben durchlassen,
+  // sonst wird Sprache verworfen.
+  speechRms: Number(process.env.OPENCLAW_VAD_RMS || 30),
   silenceMs: Number(process.env.OPENCLAW_VAD_SILENCE_MS || 700),
   minSpeechMs: Number(process.env.OPENCLAW_VAD_MIN_SPEECH_MS || 200),
+  // Eine verworfene (zu kurze/leise) Aeusserung sichtbar machen. Ohne diese
+  // Zeile verschwand sie voellig spurlos — genau das machte den Fehler
+  // "Gerät hört zu, es kommt nichts" so schwer auffindbar.
+  onDiscard: ({ speechMs, silenceMs, reason }) =>
+    log(
+      `Aeusserung verworfen (${reason}): speechMs=${speechMs.toFixed(0)} ` +
+      `silenceMs=${silenceMs.toFixed(0)}`,
+    ),
 });
 
 let busy = false;

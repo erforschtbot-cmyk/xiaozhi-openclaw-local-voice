@@ -116,12 +116,39 @@ Bridge selbst (`UtteranceDetector` in `gateway/local_stt.mjs`):
 - Der **Effektivwert (RMS)** je 60-ms-Rahmen entscheidet, ob gerade gesprochen
   wird.
 - Das **Grundrauschen** wird laufend gelernt, solange niemand spricht. Der
-  Schwellwert liegt darüber, damit leises Brummen nicht als Sprache gilt.
+  Schwellwert liegt bei `max(speechRms, noiseFloor * 1.6)` — bewusst nur
+  das **1,6-fache** des Grundrauschens. Beim Zweifachen lag die Schwelle auf
+  Höhe leiser Sprache und schnitt die ersten (leisen) Silben weg.
 - Bleibt es **700 ms** still, gilt die Äußerung als beendet und wird an
   Whisper geschickt.
 
 Der frühere Provider wartete **3000 ms** Stille. Diese 2,3 Sekunden fallen
 hier weg — das ist der größte Latenzgewinn des Umbaus.
+
+### Das Ende hängt NUR an der Stille — nicht an der Sprechdauer
+
+Eine Äußerung endet, sobald `silence >= 700 ms` erreicht ist, **unabhängig**
+davon, wie viel Sprache erkannt wurde. Ist die gesammelte Sprache kürzer als
+`minSpeechMs` (Standard 200 ms), wird sie verworfen — aber **mit Logzeile**:
+
+```text
+[local-voice] Aeusserung verworfen (too-short): speechMs=120 silenceMs=780
+```
+
+Für das Verwerfen gibt es den Hook `onDiscard` (in `gateway/local-voice.mjs`
+verdrahtet). Er ist **kein** Beiwerk: Ohne ihn verschwand eine zu leise oder zu
+kurze Äußerung völlig spurlos.
+
+> **Der gefährlichste Fehler dieses Umbaus (behoben):** Früher verlangte die
+> Endebedingung zusätzlich `speechMs >= minSpeechMs`. Ein einzelner lauter
+> Transient setzte damit `speaking = true`, sammelte aber nur ~120 ms Sprache.
+> Die Endebedingung griff dann **nie** (kein Rahmen war still *und* lang genug),
+> der Detektor sammelte bis `maxUtteranceMs` (20 s) und verwarf **still**.
+> In diesen 20 s war die Erkennung komplett blind — Symptom: *„Gerät hört zu,
+> es kommt nichts, kein Request, und es geht nicht weg."*
+>
+> Regel: **Stille beendet eine Äußerung; die Mindest-Sprechdauer entscheidet nur,
+> ob sie verwendet oder verworfen wird — nie, ob das Ende überhaupt erkannt wird.**
 
 ## Zerlegung steuern (`--tts-split`)
 
@@ -191,7 +218,8 @@ künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
    liefert für Sprache nur RMS 40–110 bei Stille 14–20. Folge: Sprache wurde
    fast nie erkannt, Äußerungen still verworfen — das Gerät blieb im
    Zustand „hört zu", ohne dass etwas geschah. Richtig ist
-   `speechRms: 35` plus Grundrauschen-Adaption.
+   `speechRms: 30` plus Grundrauschen-Adaption — nicht 35; auch der Wert 35
+   lag noch über leise gesprochenen ersten Sätzen.
 2. **Falsches Feld für den Antworttext.** Der Agent liefert Text in
    `payload.message.content` (Liste von Teilen), nicht in `payload.text`.
    Ein `payload.text`-Zugriff ergibt immer leer — die Stimme verstummt still.

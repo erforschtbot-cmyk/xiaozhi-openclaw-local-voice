@@ -38,8 +38,9 @@ Geraet --PCM--> Bridge (local-voice.mjs)
                    |       (wyoming_canary.py)
                    |          |
                    |          +-- Silero-VAD: hat das Signal ueberhaupt Sprache?
-                   |          +-- Ja  -> komplettes Audio an Canary (NeMo)
-                   |          +-- Nein -> leerer Text
+                   |          +-- Ja           -> komplettes Audio an Canary (NeMo)
+                   |          +-- Nein, >=1.5s -> komplettes Audio an Canary (NeMo)
+                   |          +-- Nein, <1.5s  -> leerer Text
                    |
                    +--> Transkript -> Agent (chat.send)
 ```
@@ -50,6 +51,34 @@ dient das VAD hier ausschliesslich als **Tor**: Sprache erkannt -> das
 komplette Audio an Canary; keine Sprache -> leer. Das entfernt
 Halluzinationen auf Rauschen (Canary lieferte sonst z. B. „T S F"), ohne den
 Anfang abzuschneiden.
+
+### Das VAD-Tor darf eine echte Aeusserung nicht wegwerfen
+
+Das Tor ist eine **Vor**stufe. Genau deshalb kann es die groesste Staerke von
+Canary zunichte machen: leise und aus der Ferne gesprochene erste Saetze.
+Meldet Silero dort „keine Sprache", war die Aufnahme verloren, **bevor**
+Canary sie ueberhaupt sah — obwohl Canary sie problemlos verstanden haette.
+Beobachtet direkt nach einem frischen Kanal: alle Fehlschlaege leise
+(peak 60–250), alle Erfolge laut (peak 300–1400).
+
+**Verhalten:**
+
+| VAD-Ergebnis | Aufnahmedauer | Ergebnis |
+|---|---|---|
+| Sprache erkannt | egal | komplettes Audio an Canary |
+| **keine** Sprache | **>= 1,5 s** | **komplettes Audio an Canary** (Canary entscheidet) |
+| keine Sprache | < 1,5 s | leer (echtes Rauschen/Klicken) |
+
+Die Logzeile macht den Unterschied sichtbar:
+
+```text
+VAD: keine Sprache erkannt, aber 3.90s Audio -> Canary trotzdem
+VAD: keine Sprache erkannt (kurz, 0.80s) -> verworfen
+```
+
+**Regel:** Ein VAD-Tor darf filtern, aber keine Aufnahme verwerfen, die lang
+genug ist, um ein echter Satz zu sein. Die Entscheidung „ist das Text?" gehoert
+an Canary, nicht an den VAD.
 
 ## Installation
 

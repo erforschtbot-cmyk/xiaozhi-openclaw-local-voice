@@ -41,6 +41,61 @@ Audio-Turn und Talk-Session dürfen nicht blind gekoppelt werden. Der bestätigt
 Stand hält bei einer Werkzeug-Rückfrage dieselbe Talk-Session offen und öffnet nach
 physischem `playback_drained` den Eingang erneut. Keine Timer auf Verdacht ändern.
 
+### Erster Befehl nach frischem Kanal geht verloren (zwei Ursachen)
+
+Symptom: Nach frischem Kanal (Geräteneustart, lange Pause, Gateway-Neustart)
+wirkt **der erste Befehl** nicht. Anzeige springt auf „Zuhören", es kommt kein
+Request und keine Aktion; „Sprechen" geht nicht weg. Später — oft nach einem
+lauteren, längeren Satz — läuft alles, und danach **dauerhaft** fehlerfrei.
+Der zweite Versuch funktioniert, der erste nicht.
+
+Das ist ausdrücklich **kein** Schwellenwert-Zufall („mal zu leise"): Es sind
+zwei unabhängige Defekte, die zusammen genau dieses Muster ergeben.
+
+**Ursache 1 — STT-VAD-Tor verwirft die Aufnahme vor der Transkription.**
+`gateway/wyoming_canary.py` prüft Silero-VAD, *bevor* Canary das Audio sieht.
+Meldet der VAD „keine Sprache" (leise/fern gesprochener erster Satz), war die
+Aufnahme verloren. Im Log erkennbar am Tempo: leere Treffer in **12–34 ms**
+(reiner VAD-Abbruch), echte Treffer in **300–430 ms** (echte Inferenz).
+
+```text
+09:04:32  Audio empfangen: 23040 Samples (1.44s)
+09:04:32  Erkannt (de):            ← leer nach 18 ms
+09:06:59  Audio empfangen: 31680 Samples (1.98s)
+09:06:59  Erkannt (de): Scheit de Monitoren .   ← echt nach 300 ms
+```
+
+Maßnahme: Das Tor verwirft nur noch **kurze** Aufnahmen ohne Sprache. Ab
+**1,5 s** geht das komplette Audio trotzdem an Canary — es entscheidet, nicht der
+VAD. Details: `docs/10-CANARY-FAVORIT.md`.
+
+**Ursache 2 — der Äußerungsdetektor konnte 20 s blind sammeln.**
+`gateway/local_stt.mjs` beendete eine Äußerung nur bei `silence >= 700 ms`
+**und** `speechMs >= 200 ms`. Ein einzelner lauter Transient setzte
+`speaking = true`, sammelte aber nur ~120 ms Sprache — die Endebedingung griff
+**nie**, der Detektor sammelte bis `maxUtteranceMs` (20 s) und verwarf **still**.
+
+```text
+09:04:37  speaking=true speechMs=120 silence=1080
+09:04:44  speaking=true speechMs=120 silence=3960   ← wächst weiter
+09:05:01  speaking=false                            ← nach 20 s still verworfen
+```
+
+Maßnahme: **Stille beendet die Äußerung.** `quietEnough` hängt nur noch an
+`silence >= silenceMs`; zu kurze Äußerungen werden verworfen, aber mit Logzeile
+über `onDiscard`:
+
+```text
+[local-voice] Aeusserung verworfen (too-short): speechMs=120 silenceMs=780
+```
+
+Zusätzlich: `speechRms` 35 → **30** und der Grundrauschen-Faktor 2.0 → **1.6**,
+weil auch 35 über leise gesprochenen ersten Sätzen lag.
+
+**Prüfregel:** Bei „Gerät hört zu, es kommt nichts" zuerst diese beiden Zeilen
+suchen — `Aeusserung verworfen` (Detektor) und `VAD: keine Sprache erkannt`
+(Canary-Tor). Erst danach Erkennung oder Bridge verdächtigen.
+
 ## „Sprechen" oder „Zuhören" bleibt hängen
 
 Seit dem Watchdog-Patch (siehe `docs/02-FIRMWARE.md`) löst die Firmware das selbst:

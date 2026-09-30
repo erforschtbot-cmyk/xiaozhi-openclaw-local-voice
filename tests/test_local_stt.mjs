@@ -91,6 +91,49 @@ check("Leise Sprache (RMS ~45) wird erkannt", faintUtterances === 1,
       `gezaehlt: ${faintUtterances}`);
 
 // --------------------------------------------------------------------------
+// Regression: kurzer lauter Transient darf den Detektor NICHT 20 s blockieren.
+//
+// Fehlerbild vor dem Fix: ein einzelner lauter Rahmen setzte speaking=true,
+// sammelte aber nur speechMs < minSpeechMs. Weil die Endebedingung zusaetzlich
+// speechMs >= minSpeechMs verlangte, griff sie nie; der Detektor sammelte bis
+// maxUtteranceMs (20 s) und verwarf dann STILL. In diesen 20 s war die
+// Erkennung blind ("Geraet hoert zu, es kommt nichts").
+const discardLog = [];
+const stuckDetector = new UtteranceDetector({
+  rate: RATE,
+  onDiscard: (info) => discardLog.push(info),
+});
+for (let index = 0; index < 10; index += 1) stuckDetector.push(frame(QUIET_AMPLITUDE));
+
+// 2 laute Rahmen = 120 ms Sprache, danach dauerhafte Stille.
+stuckDetector.push(frame(SPEECH_AMPLITUDE));
+stuckDetector.push(frame(SPEECH_AMPLITUDE));
+let stuckUtterances = 0;
+let framesUntilReset = 0;
+for (let index = 0; index < 40; index += 1) {          // 2,4 s Stille
+  framesUntilReset += 1;
+  if (stuckDetector.push(frame(QUIET_AMPLITUDE))) stuckUtterances += 1;
+  if (!stuckDetector.speaking) break;
+}
+check("Kurzer Transient blockiert den Detektor nicht",
+      framesUntilReset <= 20, `erst nach ${framesUntilReset} Rahmen frei`);
+check("Kurzer Transient erzeugt keine Aeusserung", stuckUtterances === 0,
+      `gezaehlt: ${stuckUtterances}`);
+check("Verworfene Aeusserung wird gemeldet (onDiscard)", discardLog.length === 1,
+      `Meldungen: ${discardLog.length}`);
+
+// Nach dem Verwerfen muss eine echte Aeusserung wieder sauber erkannt werden.
+let afterUtterances = 0;
+for (let index = 0; index < 25; index += 1) {
+  if (stuckDetector.push(frame(SPEECH_AMPLITUDE))) afterUtterances += 1;
+}
+for (let index = 0; index < 30; index += 1) {
+  if (stuckDetector.push(frame(QUIET_AMPLITUDE))) afterUtterances += 1;
+}
+check("Nach dem Verwerfen wird die naechste Aeusserung erkannt",
+      afterUtterances === 1, `gezaehlt: ${afterUtterances}`);
+
+// --------------------------------------------------------------------------
 console.log();
 console.log("=== 2. Erkennung ueber den lokalen Dienst ===");
 

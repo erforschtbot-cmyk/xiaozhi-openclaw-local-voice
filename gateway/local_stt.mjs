@@ -219,16 +219,18 @@ export class UtteranceDetector {
   constructor(options = {}) {
     const {
       rate = 16000,
-      speechRms = 35,
+      speechRms = 30,
       silenceMs = 700,
       minSpeechMs = 200,
       maxUtteranceMs = 20000,
+      onDiscard = null,
     } = options;
     this.rate = rate;
     this.speechRms = speechRms;
     this.silenceMs = silenceMs;
     this.minSpeechMs = minSpeechMs;
     this.maxUtteranceMs = maxUtteranceMs;
+    this.onDiscard = onDiscard;
     // Startwert des Grundrauschens: gemessen liegt Stille am Geraet bei
     // RMS 14-20. Ein hoeherer Startwert wuerde die ersten Sekunden Sprache
     // unterdruecken, weil die Schwelle erst langsam absinkt.
@@ -273,11 +275,12 @@ export class UtteranceDetector {
     this.rmsSamples.push(rms);
     if (this.rmsSamples.length > 50) this.rmsSamples.shift();
 
-    // Zwei Huerden: eine absolute Mindestschwelle und das Doppelte des
-    // gelernten Grundrauschens. Der Faktor ist bewusst 2, nicht 3: bei
-    // Sprache um RMS 40-110 und Stille um 15-20 waere das Dreifache des
-    // Grundrauschens bereits ueber der halben Sprache.
-    const threshold = Math.max(this.speechRms, this.noiseFloor * 2);
+    // Zwei Huerden: eine absolute Mindestschwelle und das Vielfache des
+    // gelernten Grundrauschens. Der Faktor ist 1.6 statt 2: bei Sprache um
+    // RMS 40-110 und Stille um 15-20 liegt das Doppelte des Grundrauschens
+    // bereits auf Hoehe leiser Sprache und schnitt die ersten (leisen)
+    // Silben weg. 1.6 laesst leise Sprache durch, ohne Raumbrummen zu greifen.
+    const threshold = Math.max(this.speechRms, this.noiseFloor * 1.6);
     this.lastThreshold = threshold;
     const speakingNow = rms > threshold;
 
@@ -306,14 +309,31 @@ export class UtteranceDetector {
     }
 
     const tooLong = Date.now() - this.startedAtMs > this.maxUtteranceMs;
-    const quietEnough =
-      this.silenceMsAccum >= this.silenceMs && this.speechMs >= this.minSpeechMs;
+    // Eine Aeusserung endet, sobald genug STILLE war — unabhaengig davon, wie
+    // viel Sprache erkannt wurde. Vorher verlangte die Bedingung zusaetzlich
+    // speechMs >= minSpeechMs. Ein einzelner lauter Transient setzte damit
+    // speaking=true, sammelte aber nur ~120 ms Sprache; die Endebedingung
+    // griff nie, der Detektor sammelte bis maxUtteranceMs (20 s) und verwarf
+    // dann STILL. In diesen 20 s war die Erkennung komplett blind — genau das
+    // Symptom "Gerät hört zu, es kommt nichts, kein Request".
+    const quietEnough = this.silenceMsAccum >= this.silenceMs;
 
     if (!tooLong && !quietEnough) return null;
 
-    const utterance = Buffer.concat(this.chunks);
     const hadSpeech = this.speechMs >= this.minSpeechMs;
+    const stats = {
+      speechMs: this.speechMs,
+      silenceMs: this.silenceMsAccum,
+      reason: tooLong ? "too-long" : "too-short",
+    };
+    const utterance = hadSpeech ? Buffer.concat(this.chunks) : null;
     this.reset();
-    return hadSpeech ? utterance : null;
+    if (!hadSpeech) {
+      // Sichtbar machen, statt still zu verwerfen: sonst faellt ein zu leiser
+      // oder zu kurzer Aussetzer nie auf.
+      if (this.onDiscard) this.onDiscard(stats);
+      return null;
+    }
+    return utterance;
   }
 }
