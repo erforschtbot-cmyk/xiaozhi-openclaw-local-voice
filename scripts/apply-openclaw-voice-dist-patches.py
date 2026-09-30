@@ -17,7 +17,17 @@ Patch B - handlers-*.mjs  (Marker voice-no-tool-both-sides-v1)
           wenn ein Consult den Turn besitzt (Merker danach verbrauchen);
           Sicherheitsnetz-Reset bei neuer Frage nur ohne aktiven Run
 
-Beide Patches liegen in kompilierten dist-Dateien und werden von jedem
+Patch C - builtin-openclaw-*.mjs  (Marker keep-spoken-test)
+    Haelt den eigenen gesprochenen Satz in der sichtbaren Session. Ohne den
+    Ausstieg haengt die Orphan-Repair den Leaf auf den letzten Assistant
+    zurueck; die gesprochene Aeusserung (provenance.kind=realtime_voice) bleibt
+    dann auf einem Seitenast und verschwindet.
+
+Patch D - capability-catalog.js + realtime-quicksilver-delegation-controller-*.mjs
+    Setzt den Apostroph in der Zwischenansage auf ASCII: I’ll -> I'll
+    (rein kosmetisch, kein Sprachwechsel).
+
+Alle Patches liegen in kompilierten dist-Dateien und werden von jedem
 OpenClaw-Update ueberschrieben. Nach jedem Update erneut anwenden.
 """
 from __future__ import annotations
@@ -135,6 +145,29 @@ B_NEEDLES = (
     ("interimAck", "Zwischenansage-Filter"),
 )
 
+# ---------------------------------------------------------------- Patch C
+MARK_C = 'keep-spoken-test'
+ANCHOR_C = (
+    '\tconst candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);\n'
+    '\tif (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) return;\n'
+)
+PATCH_C = (
+    ANCHOR_C
+    + '\t// keep-spoken-test (Owner-Test 2026-09-27)\n'
+    + '\t// Die eigene gesprochene Sprache kommt als provenance.kind=realtime_voice.\n'
+    + '\t// Ohne diesen Ausstieg haengt die Orphan-Repair den Leaf auf den letzten\n'
+    + '\t// Assistant zurueck — der gesprochene Satz bleibt dann auf einem Seitenast\n'
+    + '\t// und verschwindet aus der sichtbaren Instanz. Zum Zuruecksetzen diese\n'
+    + '\t// if-Zeile einfach entfernen.\n'
+    + '\tconst keepSpokenProvenance = candidate.messageEntry.message.provenance;\n'
+    + '\tif (keepSpokenProvenance && keepSpokenProvenance.kind === "realtime_voice") return;\n'
+)
+
+# ---------------------------------------------------------------- Patch D
+MARK_D = '"I\'ll check that request."'
+ANCHOR_D = 'buildRealtimeVoiceAgentControlSpeechMessage("I\u2019ll check that request.")'
+PATCH_D = 'buildRealtimeVoiceAgentControlSpeechMessage("I\'ll check that request.")'
+
 
 def patch(path: pathlib.Path, anchor: str, replacement: str, marker: str, label: str) -> str:
     text = path.read_text()
@@ -189,6 +222,20 @@ def main() -> int:
     for path in handler_files:
         if "enqueueRelayVoiceTranscript" in path.read_text():
             result[f"transcript:{path.name}"] = patch_handlers(path)
+
+    builtin_files = [p for p in sorted(dist.glob("builtin-openclaw-*.mjs"))
+                     if "resolveOrphanRepairPlan" in p.read_text()]
+    for path in builtin_files:
+        result[f"keep-spoken:{path.name}"] = patch(path, ANCHOR_C, PATCH_C, MARK_C, "keep-spoken")
+
+    apostrophe_files = sorted(dist.glob("**/capability-catalog.js")) + \
+        sorted(dist.glob("realtime-quicksilver-delegation-controller-*.mjs"))
+    apostrophe_files = [p for p in apostrophe_files
+                        if "buildRealtimeVoiceAgentControlSpeechMessage" in p.read_text()]
+    for path in apostrophe_files:
+        text = path.read_text()
+        if ANCHOR_D in text or MARK_D in text:
+            result[f"apostrophe:{path.name}"] = patch(path, ANCHOR_D, PATCH_D, MARK_D, "apostrophe")
 
     if not result:
         raise SystemExit("Keine passende OpenClaw-Implementierung gefunden.")
