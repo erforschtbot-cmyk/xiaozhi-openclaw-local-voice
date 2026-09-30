@@ -91,7 +91,7 @@ Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 | Lokale Erkennung (Canary, Favorit) | `gateway/wyoming_canary.py` |
 | Lokale Sprachausgabe (Piper) | `gateway/piper_speaker.py` |
 | Provider-Helfer (Rückfallweg) | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-`dist`-Patches für den Voice-Pfad | `scripts/apply-openclaw-voice-dist-patches.py` |
+| OpenClaw-`dist`-Patches für den Voice-Pfad (**nur Notfall-Hilfe**) | `scripts/apply-openclaw-voice-dist-patches.py` |
 | Stimmen-Benchmark für die eigene Hardware | `scripts/benchmark-tts.py` |
 | Tests (Einheit + Ende-zu-Ende) | `tests/` |
 | systemd-Userdienst | `systemd/` |
@@ -158,7 +158,7 @@ auf dem OpenClaw-Host.
 
 1. [`docs/01-HOST-INSTALLATION.md`](docs/01-HOST-INSTALLATION.md)
 2. [`docs/02-FIRMWARE.md`](docs/02-FIRMWARE.md)
-3. [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
+3. *(optional, nur bei Problemen)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
@@ -170,7 +170,6 @@ Für einen bereits eingerichteten Host genügt typischerweise:
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143
-./scripts/apply-openclaw-voice-dist-patches.py
 ./scripts/verify-host.sh
 python3 tests/test_local_tts.py
 node tests/test_local_stt.mjs

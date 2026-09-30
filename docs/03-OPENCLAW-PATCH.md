@@ -1,8 +1,13 @@
-# 3. OpenClaw: Voice-Patches in `dist`
+# 3. OpenClaw: Voice-Patches in `dist` (nur Notfall-Hilfe)
 
-OpenClaw wird für den Voice-Pfad an **vier** Stellen verändert. Alle liegen in
-**kompilierten `dist`-Dateien** und werden von **jedem OpenClaw-Update
-überschrieben**. Nach jedem Update erneut anwenden und verifizieren.
+> **Nicht routinemäßig anwenden.** Der Voice-Betrieb funktioniert **ohne** diese
+> Patches. Sie sind ausschließlich eine **Hilfe/Notfallmaßnahme** und werden
+> **nur bei den unten jeweils genannten konkreten Symptomen** angewendet — kein
+> Pflichtschritt, nicht nach jedem Update. Tritt keines der Symptome auf: nichts tun.
+
+Falls die Patches angewendet wurden: Sie liegen in **kompilierten `dist`-Dateien**
+und werden von **jedem OpenClaw-Update überschrieben** und müssen danach erneut
+angewendet und verifiziert werden.
 
 Anwenden/Prüfen übernimmt das Repo-Skript (idempotent, legt vor jeder Änderung
 eine Sicherung `<datei>.bak-<marker>-<zeitstempel>` an):
@@ -25,6 +30,10 @@ OpenClaw würde verändernde Voice-Werkzeugaktionen zusätzlich per gesprochenem
 Ja/Nein absichern. Der Owner hat das ausdrücklich abgeschaltet. Der Patch setzt die
 Funktion früh auf `{ allowed: true }` — **ohne** Text-, Befehls-, Satzzeichen- oder
 Wortfilter.
+
+**Symptom (nur dann anwenden):** Das Gerät fragt vor einer verändernden Aktion
+gesprochen nach („Soll ich das wirklich? Sag ja."). Tritt das nicht auf, ist der
+Patch unnötig.
 
 ---
 
@@ -51,6 +60,11 @@ Umsetzung an drei Stellen:
 *Persistieren* auslassen. Ein früher `return` ließ das Gerät im Zustand „spricht"
 hängen und schnitt den Ton ab. Das ist die Regel, die diesen Patch von früheren,
 verworfenen Versuchen unterscheidet.
+
+**Symptom (nur dann anwenden):** Nach einem Werkzeugbefehl kommt „Es hat leider
+nicht geklappt … soll ich es nochmal?" bzw. ein Transkript-Konflikt beim ersten
+Werkzeugaufruf (`SqliteTranscriptMutationConflictError`). Tritt das nicht auf, ist
+der Patch unnötig.
 
 > Hinweis: Eine ältere Fassung dieses Dokuments beschrieb unter diesem Punkt etwas
 > anderes („Assistant-Transkript wird nicht persistiert", Marker
