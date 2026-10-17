@@ -182,3 +182,33 @@ vollständig gebaut. Der Build endete mit 2182/2182 Schritten erfolgreich.
 Geflasht wurde ausschließlich die App-Partition bei `0x20000`. Der anschließende
 Read-back über exakt 2.906.160 Bytes war byteidentisch (`cmp=0`, gleicher SHA256).
 Der Owner bestätigte anschließend Funktion und keine bemerkbare Verzögerung.
+
+## Erneute Patch-Probe (2026-10-17)
+
+Gegen einen frischen Checkout des gepinnten Upstream-Stands geprueft
+(`git clone --shared` aus dem Build-Baum, dann `git checkout 4632dc51…`):
+
+```text
+git apply --check -v firmware/patches/xiaozhi-esp32-openclaw.patch
+  Pruefe Patch docker/firmware-builder/firmware_builder.py...
+  Pruefe Patch main/application.cc ...
+  (15 Dateien, alle OK)
+  EXIT=0
+```
+
+Der Patch wendet auf dem gepinnten Upstream (`4632dc51f0a5ad26e08542e131e6e48da41e4ff3`)
+sauber an. Ein Vollbuild wurde 2026-10-17 nicht wiederholt; die Zahlen oben
+stammen vom Referenzbuild 2026-09-28 (siehe `firmware/prebuilt/manifest.json`).
+
+## Aktiver dist-Patch-Satz des Hosts (2026-10-17)
+
+Nur zwei Voice-dist-Patches sind auf dem Referenzhost aktiv:
+
+| Patch | Datei | Status |
+|---|---|---|
+| A `voice-confirmation-disabled-by-owner-v1` | `agent-tools.before-tool-call-*.mjs` | aktiv |
+| B `voice-persist-split-v4` | `handlers-*.mjs` | aktiv (fuenf Stellen) |
+| C `keep-spoken-test` | `builtin-openclaw-*.mjs` | **nicht** aktiv |
+| D Apostroph `I'll` | `capability-catalog.js`, `realtime-quicksilver-*.mjs` | **nicht** aktiv |
+
+`scripts/verify-openclaw-voice-dist-patches.py` prueft genau diesen Satz.
