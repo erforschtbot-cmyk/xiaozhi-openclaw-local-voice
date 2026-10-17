@@ -24,6 +24,30 @@ einen Cloud-Sprachdienst.**
 Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 [Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
 
+## Was hier drin ist
+
+| Bestandteil | Datei(en) |
+|---|---|
+| Firmware-Patches gegen den gepinnten Upstream | `firmware/patches/` |
+| Wiederherstellungs-Watchdog (im Firmware-Patch) | `firmware/patches/xiaozhi-esp32-openclaw.patch` |
+| Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
+| **Zweites Gerät: Audio-Board** (Ring-LED statt Display) | `firmware/audio-board/`, `docs/11-AUDIO-BOARD.md` |
+| Audio-Board-Patch (7 LEDs + RGB-Farbordnung) | `firmware/patches/jarvis-audio-board-ring.patch` |
+| Audio-Board-Anchor (nur App-Partition) | `firmware/prebuilt/audio-board/xiaozhi.bin` |
+| Bridge-Skript 1 (Python, WebSocket-Server) | `gateway/server.py` |
+| Bridge-Skript 2 (Node, lokale Erkennung + Piper) | `gateway/local-voice.mjs` |
+| Lokale Erkennung (Wyoming-STT) | `gateway/local_stt.mjs` |
+| Lokale Stimme (Piper) | `gateway/piper_speaker.py` |
+| systemd-Userdienst | `systemd/` |
+| Bau-/Flash-/Installationsskripte | `scripts/` |
+| Prüfsummen | `CHECKSUMS.sha256` |
+| Verbindliche Versionen und Pins | `VERSIONS.md` |
+
+Quellen und Anleitungen only — keine Laufzeitdaten, keine Zugangsdaten, keine
+WLAN-Passwörter. Die veröffentlichten Firmware-Images sind **App-Partitionen**,
+partition-weise auf Zugangsdaten geprüft; WLAN-Name und -Passwort stecken nur in
+der NVS, die **nicht** im Repo liegt.
+
 ## Architektur
 
 ```text

@@ -1,0 +1,173 @@
+diff --git a/main/boards/waveshare/esp32-s3-audio-board/config.json b/main/boards/waveshare/esp32-s3-audio-board/config.json
+index 1e69597..18e71ae 100644
+--- a/main/boards/waveshare/esp32-s3-audio-board/config.json
++++ b/main/boards/waveshare/esp32-s3-audio-board/config.json
+@@ -14,8 +14,10 @@
+                 "CONFIG_CAMERA_OV5640=y",
+                 "CONFIG_CAMERA_OV5640_AUTO_DETECT_DVP_INTERFACE_SENSOR=y",
+                 "CONFIG_CAMERA_OV5640_DVP_YUV422_800X600_10FPS=y",
+-                "CONFIG_CAMERA_OV5640_DVP_IF_FORMAT_INDEX_DEFAULT=0"
++                "CONFIG_CAMERA_OV5640_DVP_IF_FORMAT_INDEX_DEFAULT=0",
++                "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\"",
++                "CONFIG_SEND_WAKE_WORD_DATA=n"
+             ]
+         }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
+index e983fb4..20be383 100644
+--- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
++++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
+@@ -17,6 +17,7 @@
+ #include "esp_io_expander_tca95xx_16bit.h"
+ #include "esp_video.h"
+ #include "led/circular_strip.h"
++#include "jarvis_ring_led.h"
+ #include "esp_lcd_jd9853.h"
+ 
+ #define TAG "waveshare_s3_audio_board"
+@@ -212,7 +213,9 @@ public:
+     }
+ 
+     virtual Led* GetLed() override {
+-        static CircularStrip led(BUILTIN_LED_GPIO, 6);
++        // 7 Ring-LEDs laut Waveshare-Doku. Der Ring ist auf dieser Platine
++        // die einzige Ausgabe (kein Display) und traegt die Zustandssprache.
++        static JarvisRingLed led(BUILTIN_LED_GPIO, 7);
+         return &led;
+     }
+ 
+diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
+new file mode 100644
+index 0000000..f29e2cd
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
+@@ -0,0 +1,96 @@
++#include "jarvis_ring_led.h"
++#include "application.h"
++#include "device_state.h"
++
++// Visuelle Zustandssprache des 7er-RGB-Rings.
++//
++// Leitidee: Auch ohne Blick auf ein Display soll sofort erkennbar sein, was
++// das Geraet gerade tut. Farbe = Rolle, Bewegung = Aktivitaet.
++//
++//   Bereitschaft    gedimmt blau, ruhig atmend (nicht aus -> im Dunkeln findbar)
++//   WLAN fehlt      blau, blinkend
++//   Verbinden       weiss, blinkend (schneller)
++//   Zuhören         gruen, laufendes Licht im Kreis ("jetzt sprechen")
++//   Sprechen        cyan, ruhig atmend
++//   Hinweis/Audio   cyan, atmend (wie Sprechen)
++//   Update          violett, schnell laufend
++//   Aktivierung     bernstein, blinkend
++//   Fehler          rot, stehend (aus jeder Entfernung sichtbar)
++//   Start           weisses Licht zieht einmal durch
++//
++// WICHTIG: In OnStateChanged() darf NICHT SetBrightness() gerufen werden —
++// jene Methode ruft ihrerseits OnStateChanged() und erzeugt damit eine
++// Endlos-Rekursion (Stack-Ueberlauf, belegter Absturz). Die Helligkeit wird
++// deshalb einmalig im Konstruktor gesetzt.
++//
++// FARBORDNUNG: Der LED-Treiber (led_strip) ist auf GRB eingestellt, weil das
++// fuer WS2812 ueblich ist. Der Ring auf dieser Platine arbeitet aber in
++// RGB-Reihenfolge. Ohne Anpassung landen Rot und Gruen vertauscht: "gruen"
++// leuchtet rot, waehrend Blau korrekt bleibt (Blau liegt in beiden Ordnungen
++// auf Position 2). Deshalb laufen alle Farben hier durch PanelColor(), das
++// die beiden Kanaele passend zur Platine tauscht. Farben werden im Aufruf
++// weiterhin in der natuerlichen Reihenfolge Rot, Gruen, Blau angegeben.
++//
++// Dasselbe Vorgehen nutzen die anderen Waveshare-Boards im Upstream
++// (z. B. esp32-c6-lcd-0.85, esp32-s3-lcd-0.85): sie rufen ihre Farbhelfer
++// ebenfalls mit (gruen, rot, blau).
++
++static const uint8_t HI  = 96;   // kraeftig, aber nicht blendend
++static const uint8_t MED = 40;
++static const uint8_t LO  = 6;
++
++// Natuerliche Farbeingabe (r, g, b) -> Treiber-/Platinenreihenfolge.
++static inline StripColor PanelColor(uint8_t r, uint8_t g, uint8_t b) {
++    // Platine ist RGB, Treiber GRB: Rot und Gruen tauschen.
++    return StripColor{g, r, b};
++}
++
++void JarvisRingLed::OnStateChanged() {
++    auto& app = Application::GetInstance();
++    switch (app.GetDeviceState()) {
++        case kDeviceStateStarting:
++            // Hochfahren: helles Licht zieht einmal durch den Ring.
++            Scroll(PanelColor(0, 0, 0), PanelColor(HI, HI, HI), 2, 90);
++            break;
++
++        case kDeviceStateWifiConfiguring:
++            Blink(PanelColor(0, 0, HI), 700);
++            break;
++
++        case kDeviceStateIdle:
++            // Bereitschaft: gedimmt blau, ruhiges Atmen.
++            Breathe(PanelColor(0, 0, LO), PanelColor(0, 0, MED), 60);
++            break;
++
++        case kDeviceStateConnecting:
++            Blink(PanelColor(MED, MED, MED), 250);
++            break;
++
++        case kDeviceStateListening:
++        case kDeviceStateAudioTesting:
++            // Zuhören: gruenes Licht laeuft im Kreis — eindeutig "ich bin
++            // jetzt fuer dich da". Die Bewegung unterscheidet es von Idle.
++            Scroll(PanelColor(0, LO, 0), PanelColor(0, HI, 0), 2, 120);
++            break;
++
++        case kDeviceStateSpeaking:
++        case kDeviceStateNotifying:
++            Breathe(PanelColor(0, LO, LO), PanelColor(0, HI, HI), 45);
++            break;
++
++        case kDeviceStateUpgrading:
++            Scroll(PanelColor(LO, 0, LO), PanelColor(HI, 0, HI), 3, 70);
++            break;
++
++        case kDeviceStateActivating:
++            Blink(PanelColor(HI, MED, 0), 300);
++            break;
++
++        case kDeviceStateFatalError:
++        case kDeviceStateUnknown:
++        default:
++            // Fehler/unbekannt: rot, stehend. Bleibt an, bis der Zustand wechselt.
++            SetAllColor(PanelColor(HI, 0, 0));
++            break;
++    }
++}
+diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
+new file mode 100644
+index 0000000..d4850b7
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
+@@ -0,0 +1,24 @@
++#ifndef _JARVIS_RING_LED_H_
++#define _JARVIS_RING_LED_H_
++
++#include "led/circular_strip.h"
++
++// Visuelle Zustandssprache fuer den RGB-Ring des Waveshare
++// ESP32-S3-AUDIO-Board (kein Display auf der nackten Platine).
++//
++// Der Ring ist die einzige Ausgabe: Farbe UND Bewegung unterscheiden die
++// Zustaende, damit man auch aus einiger Entfernung erkennt, was gerade
++// passiert (wartet / hoert zu / denkt nach / spricht / Fehler).
++class JarvisRingLed : public CircularStrip {
++public:
++    explicit JarvisRingLed(gpio_num_t gpio, uint16_t max_leds)
++        : CircularStrip(gpio, max_leds) {
++        // Helligkeit genau EINMAL setzen: SetBrightness() ruft seinerseits
++        // OnStateChanged(); ein Aufruf darin waere eine Endlos-Rekursion.
++        SetBrightness(96, 6);
++    }
++
++    void OnStateChanged() override;
++};
++
++#endif // _JARVIS_RING_LED_H_

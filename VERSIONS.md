@@ -15,6 +15,7 @@ Erkennung und Stimme laufen lokal auf dem Host.
 | uart-uhci Upstream | `78/uart-uhci@6ea5f576af84640209aa6b98e27be92b8ce418c5` |
 | ESP-IDF Build-Image | `espressif/idf:v6.1` (Digest `sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c`) |
 | Board | Waveshare ESP32-S3-Touch-LCD-4B |
+| Zweites Gerät | Waveshare ESP32-S3-AUDIO-Board (SKU 32184/32185), kein Display, 7 RGB-Ring-LEDs |
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | **Lokale Sprachausgabe** | `piper-tts==1.4.2` (GPL-3.0-or-later), `numpy>=1.26` |
 | **Lokale Stimme** | `de_DE-kerstin-low` (16 kHz, 60,2 MB) |
@@ -94,6 +95,30 @@ kostet den Wortanfang.
 Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo und wurde am
 2026-09-28 auf das Gerät geflasht; die Prüfsumme nach dem Schreiben wurde
 zurückgelesen und stimmte.
+
+## Zweites Gerät: Audio-Board
+
+Dasselbe Bridge-, Gateway- und Host-Setup wie oben; es unterscheidet sich nur die
+Firmware. Vollständige Anleitung: `docs/11-AUDIO-BOARD.md`.
+
+| Merkmal | Wert |
+|---|---|
+| Gerät | Waveshare ESP32-S3-AUDIO-Board (SKU 32184/32185) |
+| Chip | ESP32-S3R8, 16 MB Flash, 8 MB PSRAM |
+| Audio | ES8311 (DAC), ES7210 (Dual-Mic) |
+| Anzeige | **kein Display** — 7 RGB-Ring-LEDs (WS2812, GPIO 38) |
+| Boardziel | `waveshare/esp32-s3-audio-board` |
+| Patch | `firmware/patches/jarvis-audio-board-ring.patch` |
+| Sprache / Wakeword | `de-DE` / `wn9_jarvis_tts` (wie 4B) |
+| Geräte-MAC | `90:70:69:eb:1e:b4` |
+| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 17 2026 20:57:38` |
+| Veröffentlichter Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (App-Partition) |
+| Anker-SHA256 | `0336d2f036e03128710c2185115af92a537db28b86c34496330be360066da231` |
+
+Der Anker ist die **App-Partition** (2.830.576 B), nicht das Vollimage. Er enthält
+**keine** Zugangsdaten — WLAN-Name und -Passwort liegen ausschließlich in der NVS,
+die nicht im Repo ist. Geschrieben wird bei `0x20000`; NVS und Assets bleiben
+unangetastet, das Gerät verbindet sich danach **ohne** Neu-Provisionierung.
 
 ### Rückwege (vorherige Stände)
 

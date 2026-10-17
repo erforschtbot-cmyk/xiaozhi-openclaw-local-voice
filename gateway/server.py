@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import collections
 import json
 import os
 import re
@@ -24,6 +25,76 @@ except ImportError:  # pragma: no cover
     find_default_voice = None  # type: ignore[assignment]
 
 
+class WakeArbiter:
+    """Nur das lauteste Geraet fuehrt den Dialog - ohne Zeitfenster.
+
+    Alle Geraete hoeren das Wachwort und schicken ihren verstandenen Satz an
+    die Bridge. Hier wird der Mikrofonpegel verglichen: kommt spaeter ein
+    Geraet mit hoeherem Pegel, wird das bisher aktive einfach in Bereitschaft
+    geschickt. Damit spricht immer das Geraet, das den Nutzer wirklich gehoert
+    hat, und ein Befehl kann nicht doppelt ausgefuehrt werden.
+
+    Ohne Konkurrenz gibt es keinerlei Verzoegerung: das erste Geraet gewinnt
+    sofort.
+    """
+
+    def __init__(self):
+        self._sessions = {}
+        self._lock = asyncio.Lock()
+        self._winner = None
+        self._winner_peak = 0
+
+    def register(self, session):
+        self._sessions[session.session_id] = session
+
+    def unregister(self, session):
+        self._sessions.pop(session.session_id, None)
+        if self._winner == session.session_id:
+            self._winner = None
+            self._winner_peak = 0
+
+    async def claim(self, session, peak):
+        """True, wenn dieses Geraet den Dialog fuehren soll.
+
+        Der bisherige Gewinner wird dabei in Bereitschaft geschickt, sobald ein
+        Geraet mit hoeherem Pegel dazukommt.
+        """
+        superseded = None
+        previous_peak = 0
+        async with self._lock:
+            if self._winner == session.session_id:
+                # Dieses Geraet fuehrt bereits; Folgeaeusserungen bleiben bei ihm.
+                return True
+            if self._winner is None or peak > self._winner_peak:
+                previous = self._sessions.get(self._winner) if self._winner else None
+                previous_peak = self._winner_peak
+                self._winner = session.session_id
+                self._winner_peak = peak
+                if previous is not None and previous is not session:
+                    superseded = previous
+                print(
+                    f"{session.tag} Wake arbitration won (peak={peak}); "
+                    f"active devices now: "
+                    f"{', '.join(s.tag for s in self._sessions.values() if s is not session) or 'none'}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"{session.tag} Wake arbitration lost (peak={peak} < "
+                    f"{self._winner_peak}); returning to standby",
+                    flush=True,
+                )
+                return False
+        if superseded is not None:
+            print(
+                f"{superseded.tag} superseded by louder device "
+                f"({peak} > {previous_peak}); returning to standby",
+                flush=True,
+            )
+            await superseded.return_to_standby("superseded_by_louder_device")
+        return True
+
+
 class XiaozhiSession:
     ALEXA_TEXT_COMMAND_ENDPOINT = (
         "http://192.168.178.24:8087/set/"
@@ -45,7 +116,30 @@ class XiaozhiSession:
     def __init__(self, websocket, args):
         self.websocket = websocket
         self.args = args
+        # Geraete-Kennung fuer das Log. Zwei Geraete schreiben sonst wortgleich
+        # ins Log und sind nicht auseinanderzuhalten.
+        try:
+            peer = websocket.remote_address
+            peer_ip = str(peer[0]) if peer else "?"
+        except Exception:
+            peer_ip = "?"
+        self.peer_ip = peer_ip
+        self.tag = f"[{peer_ip.split('.')[-1]}]"
+        self.arbiter = getattr(args, "arbiter", None)
+        # Pegel des laufenden Befehls: wird beim Wecken zurueckgesetzt und
+        # bis zum fertigen Transkript hochgehalten. Grundlage des Vergleichs,
+        # welches Geraet den Nutzer wirklich gehoert hat.
+        self.turn_peak = 0
+        self.awaiting_command = False
+        self.drained_watchdog = None
+        self.speaking_guard = None
+        self.pending_tool = False
+        self.pending_tool_since = 0.0
         self.session_id = str(uuid.uuid4())
+        # Erst nach dem Setzen der Session-ID registrieren - der Schiedsrichter
+        # merkt sich die Sitzung unter dieser Kennung.
+        if self.arbiter is not None:
+            self.arbiter.register(self)
         self.turn_id = str(uuid.uuid4())
         self.decoder = opuslib.Decoder(16000, 1)
         self.encoder = opuslib.Encoder(24000, 1, opuslib.APPLICATION_VOIP)
@@ -128,9 +222,9 @@ class XiaozhiSession:
             if "error" in response:
                 raise RuntimeError(response["error"])
             self.mcp_ready.set()
-            print("Device MCP initialized", flush=True)
+            print(f"{self.tag} Device MCP initialized", flush=True)
         except Exception as exc:
-            print(f"Device MCP initialization failed: {exc}", flush=True)
+            print(f"{self.tag} Device MCP initialization failed: {exc}", flush=True)
 
     async def call_device_tool(self, name, arguments):
         await asyncio.wait_for(self.mcp_ready.wait(), timeout=3.0)
@@ -230,7 +324,7 @@ class XiaozhiSession:
             dedupe_key = self._normalize_alexa_command(command)
             if self._alexa_already_sent(dedupe_key):
                 print(
-                    f"Smart-home fast path deduplicated (Agent already sent): {command!r}",
+                    f"{self.tag} Smart-home fast path deduplicated (Agent already sent): {command!r}",
                     flush=True,
                 )
                 return True
@@ -252,11 +346,11 @@ class XiaozhiSession:
                     raise RuntimeError(f"ioBroker HTTP {status}")
                 self._alexa_record_sent(dedupe_key)
                 print(
-                    f"Smart-home fast path accepted by Alexa: {command!r} http={status}",
+                    f"{self.tag} Smart-home fast path accepted by Alexa: {command!r} http={status}",
                     flush=True,
                 )
             except Exception as exc:
-                print(f"Smart-home fast path failed: {exc!r}", flush=True)
+                print(f"{self.tag} Smart-home fast path failed: {exc!r}", flush=True)
                 return False
             return True
 
@@ -295,11 +389,11 @@ class XiaozhiSession:
             raw_value = match.group(1)
             value = int(raw_value) if raw_value.isdigit() else number_words[raw_value]
             if not 0 <= value <= 100:
-                print(f"Rejected device {label} outside 0-100: {value}", flush=True)
+                print(f"{self.tag} Rejected device {label} outside 0-100: {value}", flush=True)
                 return True
             try:
                 await self.call_device_tool(tool_name, {argument_name: value})
-                print(f"Device {label} set to {value}% via MCP", flush=True)
+                print(f"{self.tag} Device {label} set to {value}% via MCP", flush=True)
                 display_label = "Lautstärke" if label == "volume" else "Helligkeit"
                 await self.send_json({
                     "type": "stt",
@@ -307,7 +401,7 @@ class XiaozhiSession:
                 })
                 await asyncio.sleep(1.0)
             except Exception as exc:
-                print(f"Device {label} MCP call failed: {exc!r}", flush=True)
+                print(f"{self.tag} Device {label} MCP call failed: {exc!r}", flush=True)
             return True
         return False
 
@@ -344,11 +438,11 @@ class XiaozhiSession:
         """
         loop = asyncio.get_running_loop()
         self.helper_started_at = loop.time()
-        print("Prewarm: starting talk helper before first microphone packet", flush=True)
+        print(f"{self.tag} Prewarm: starting talk helper before first microphone packet", flush=True)
         try:
             await self.start_realtime()
         except Exception as exc:  # noqa: BLE001
-            print(f"Prewarm failed: {exc!r}", flush=True)
+            print(f"{self.tag} Prewarm failed: {exc!r}", flush=True)
 
     async def _start_realtime_process(self):
         self.turn_id = str(uuid.uuid4())
@@ -425,12 +519,13 @@ class XiaozhiSession:
                     # Do not wait for transcript text or segment classification.
                     await self.send_pcm(pcm)
         except Exception as exc:
-            print(f"audio relay failed: {exc}", flush=True)
+            print(f"{self.tag} audio relay failed: {exc}", flush=True)
 
     async def send_pcm(self, pcm):
         if not self.tts_started:
             await self.send_json({"type": "tts", "state": "start"})
             self.tts_started = True
+            self.arm_speaking_guard()
         packet = self.encoder.encode(pcm, 1440)
         async with self.send_lock:
             await self.websocket.send(packet)
@@ -487,14 +582,140 @@ class XiaozhiSession:
             self.followup_task.cancel()
         self.followup_task = None
 
+    def cancel_drained_watchdog(self):
+        if self.drained_watchdog is not None and not self.drained_watchdog.done():
+            self.drained_watchdog.cancel()
+        self.drained_watchdog = None
+
+    # Nach dieser Zeit ohne neues Audio gilt eine Sprachausgabe als haengend.
+    SPEAKING_STALL_SECONDS = 45.0
+    # Ein laufendes Werkzeug pausiert die Pruefung. Kommt aber selbst nach
+    # dieser Zeit kein Ergebnis (abgebrochener Consult), wird trotzdem beendet.
+    SPEAKING_TOOL_MAX_SECONDS = 150.0
+
+    def cancel_speaking_guard(self):
+        if self.speaking_guard is not None and not self.speaking_guard.done():
+            self.speaking_guard.cancel()
+        self.speaking_guard = None
+
+    def arm_speaking_guard(self):
+        """Verhindert, dass ein Geraet dauerhaft auf 'Sprechen' stehen bleibt.
+
+        Die Bridge sendet 'tts start', sobald das erste Audioframe rausgeht.
+        Kommt danach kein sauberes 'tts stream_end' (z. B. weil eine Sitzung
+        ohne Abschluss endet), wartete das Geraet frueher unbegrenzt weiter -
+        es blieb auf 'Sprechen' stehen und befreite sich erst, wenn der Nutzer
+        etwas Neues sagte.
+
+        Dieser Waechter schliesst die Sprachausgabe, wenn laenger kein Audio
+        mehr fliesst und kein Ende gesetzt wurde. Waehrend ein Werkzeug
+        (Agent-Consult) laeuft, pausiert die Pruefung bewusst, damit eine
+        laengere Werkzeuglaufzeit die Antwort nicht abschneidet.
+        """
+        self.cancel_speaking_guard()
+
+        async def guard():
+            loop = asyncio.get_running_loop()
+            while True:
+                await asyncio.sleep(1.0)
+                if self.stream_end_sent or not self.tts_started:
+                    return
+                if self.pending_tool:
+                    tool_age = loop.time() - self.pending_tool_since
+                    if tool_age < self.SPEAKING_TOOL_MAX_SECONDS:
+                        continue
+                    print(
+                        f"{self.tag} Tool still pending after {tool_age:.0f}s; "
+                        "closing this speaking round anyway",
+                        flush=True,
+                    )
+                if self.last_sent_audio_at <= 0:
+                    continue
+                idle = loop.time() - self.last_sent_audio_at
+                if idle >= self.SPEAKING_STALL_SECONDS:
+                    print(
+                        f"{self.tag} Speaking stalled {idle:.0f}s without "
+                        "stream_end; sending tts stop so the device returns "
+                        "to standby",
+                        flush=True,
+                    )
+                    try:
+                        await self.send_json({"type": "tts", "state": "stop"})
+                    except Exception:
+                        pass
+                    return
+
+        self.speaking_guard = asyncio.create_task(guard())
+
+    async def win_command_arbitration(self):
+        """Nur das lauteste Geraet fuehrt den Dialog - Vergleich der Pegel.
+
+        Kein Zeitfenster: das erste Geraet gewinnt sofort. Kommt spaeter ein
+        Geraet mit hoeherem Pegel dazu, wird das bisher aktive in Bereitschaft
+        geschickt (siehe WakeArbiter).
+        """
+        if self.arbiter is None:
+            return True
+        peak = self.turn_peak
+        self.awaiting_command = False
+        won = await self.arbiter.claim(self, peak)
+        if not won:
+            await self.return_to_standby("wake_arbitration_lost")
+        return won
+
+    async def return_to_standby(self, reason="standby"):
+        """Ein Geraet sofort in Bereitschaft schicken, ohne Dialog."""
+        self.cancel_followup_timeout()
+        self.cancel_session_finish()
+        self.cancel_drained_watchdog()
+        self.input_stopped = True
+        try:
+            await asyncio.wait_for(
+                self.websocket.close(code=1000, reason=reason),
+                timeout=2.0,
+            )
+        except Exception:
+            try:
+                self.websocket.transport.abort()
+            except Exception:
+                pass
+
+    def schedule_drained_watchdog(self, playback_bytes=0):
+        """Geraete ohne playback_drained trotzdem in Bereitschaft holen.
+
+        Das Audio-Board meldet das Ende der Wiedergabe nicht. Ohne diesen
+        Wecker bliebe es nach der Antwort im Sprech-/Zuhoerzustand stehen.
+        Geraete, die das Ereignis senden (der 4B), sind hier laengst weiter -
+        dann ist der Wecker ein wirkungsloser No-Op.
+
+        Gewartet wird die geschaetzte Wiedergabedauer (24 kHz, 16 Bit, mono
+        = 48000 Byte/s) plus Reserve, damit die Antwort nicht abgeschnitten
+        wird.
+        """
+        self.cancel_drained_watchdog()
+        playback_seconds = max(0.0, playback_bytes / 48000.0)
+
+        async def fallback_after_playback():
+            await asyncio.sleep(playback_seconds + 0.8)
+            if not self.followup_open:
+                print(
+                    f"{self.tag} No playback_drained from device; "
+                    f"opening follow-up window anyway (waited "
+                    f"{playback_seconds + 0.8:.1f}s)",
+                    flush=True,
+                )
+                await self.open_followup_window()
+
+        self.drained_watchdog = asyncio.create_task(fallback_after_playback())
+
     def schedule_followup_timeout(self):
         self.cancel_followup_timeout()
 
         async def close_after_followup_window():
-            print("Follow-up window open for 10 seconds", flush=True)
+            print(f"{self.tag} Follow-up window open for 10 seconds", flush=True)
             await asyncio.sleep(10.0)
             print(
-                "Follow-up window expired; returning to standby "
+                f"{self.tag} Follow-up window expired; returning to standby "
                 f"(audio packets received={self.followup_audio_packets}, "
                 f"forwarded={self.followup_forwarded_packets}, "
                 f"peak={self.followup_peak})",
@@ -588,7 +809,7 @@ class XiaozhiSession:
             await asyncio.wait_for(wait_until_stdout_is_consumed(), timeout=3.0)
         except asyncio.TimeoutError:
             print(
-                f"PCM relay stalled at {self.pcm_bytes_received}/{expected_pcm_bytes} bytes",
+                f"{self.tag} PCM relay stalled at {self.pcm_bytes_received}/{expected_pcm_bytes} bytes",
                 flush=True,
             )
             await self.send_json({"type": "tts", "state": "stop"})
@@ -598,9 +819,11 @@ class XiaozhiSession:
             return
 
         self.stream_end_sent = True
+        self.cancel_speaking_guard()
         await self.send_json({"type": "tts", "state": "stream_end"})
+        self.schedule_drained_watchdog(expected_pcm_bytes)
         print(
-            f"Audio stream complete at {expected_pcm_bytes} PCM bytes; "
+            f"{self.tag} Audio stream complete at {expected_pcm_bytes} PCM bytes; "
             "device will switch after physical playback drain",
             flush=True,
         )
@@ -649,7 +872,7 @@ class XiaozhiSession:
                         None, self.speaker.synthesize_pcm, text
                     )
                 except Exception as exc:  # noqa: BLE001
-                    print(f"local TTS failed: {exc!r}", flush=True)
+                    print(f"{self.tag} local TTS failed: {exc!r}", flush=True)
                     pcm = b""
                 if pcm:
                     await self.send_pcm_paced(pcm)
@@ -743,15 +966,17 @@ class XiaozhiSession:
         try:
             await asyncio.wait_for(self.tts_drain_event.wait(), timeout=30.0)
         except asyncio.TimeoutError:
-            print("local TTS drain timed out", flush=True)
+            print(f"{self.tag} local TTS drain timed out", flush=True)
         self.tts_worker_task = None
         if not self.tts_started:
             # Nichts zu sprechen (leere Antwort). Kein stream_end noetig.
             return
         self.stream_end_sent = True
+        self.cancel_speaking_guard()
         await self.send_json({"type": "tts", "state": "stream_end"})
+        self.schedule_drained_watchdog(self.local_pcm_bytes_sent)
         print(
-            f"Local voice stream complete at {self.local_pcm_bytes_sent} PCM bytes; "
+            f"{self.tag} Local voice stream complete at {self.local_pcm_bytes_sent} PCM bytes; "
             "device will switch after physical playback drain",
             flush=True,
         )
@@ -770,18 +995,24 @@ class XiaozhiSession:
                 try:
                     event = json.loads(text)
                 except json.JSONDecodeError:
-                    print(text, flush=True)
+                    print(f"{self.tag} {text}", flush=True)
                     continue
                 kind = event.get("type")
                 if kind == "user_transcript":
                     self.cancel_followup_timeout()
                     self.followup_open = False
                     transcript = event.get("text", "")
+                    # Nur das lauteste Geraet darf antworten. Ein Geraet mit
+                    # hoeherem Pegel uebernimmt und schickt dieses hier in
+                    # Bereitschaft - so kann kein Befehl doppelt laufen.
+                    if not await self.win_command_arbitration():
+                        self.input_stopped = True
+                        continue
                     # A finalized new utterance starts the next response. Only
                     # now may provider audio be forwarded again; until here,
                     # trailing frames from the previous response stay dropped.
                     self.stream_end_sent = False
-                    print(f"User transcript: {transcript}", flush=True)
+                    print(f"{self.tag} User transcript: {transcript}", flush=True)
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)
                     if device_command_handled:
@@ -794,7 +1025,7 @@ class XiaozhiSession:
                         # after the acknowledgement has physically finished.
                         self.input_stopped = True
                         print(
-                            "Device command complete; waiting for spoken acknowledgement",
+                            f"{self.tag} Device command complete; waiting for spoken acknowledgement",
                             flush=True,
                         )
                         self.schedule_fast_path_stream_end(process)
@@ -818,7 +1049,7 @@ class XiaozhiSession:
                         self.feed_tts_text(event["text"])
                 elif kind == "audio_done":
                     print(
-                        "OpenClaw realtime event: "
+                        f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
@@ -832,23 +1063,26 @@ class XiaozhiSession:
                             int(event.get("audioByteCount") or 0),
                         )
                 elif kind == "error":
-                    print(f"OpenClaw realtime error: {event.get('message')}", flush=True)
+                    print(f"{self.tag} OpenClaw realtime error: {event.get('message')}", flush=True)
                 elif kind == "tool_call":
+                    if not self.pending_tool:
+                        self.pending_tool_since = asyncio.get_running_loop().time()
+                    self.pending_tool = True
                     self.cancel_session_finish()
                     print(
-                        "OpenClaw realtime event: "
+                        f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
                 elif kind == "audio_after_assistant_done":
                     print(
-                        "OpenClaw realtime event: "
+                        f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
                 elif kind == "assistant_done":
                     print(
-                        "OpenClaw realtime event: "
+                        f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
@@ -858,22 +1092,24 @@ class XiaozhiSession:
                         else:
                             self.schedule_stream_end(process)
                 elif kind in {"ready", "tool_result"}:
+                    if kind == "tool_result":
+                        self.pending_tool = False
                     if kind == "ready":
                         self.helper_ready.set()
                         if self.helper_started_at:
                             self.helper_ready_at = asyncio.get_running_loop().time()
                             print(
-                                "Prewarm: helper ready after "
+                                f"{self.tag} Prewarm: helper ready after "
                                 f"{self.helper_ready_at - self.helper_started_at:.2f}s",
                                 flush=True,
                             )
                     print(
-                        "OpenClaw realtime event: "
+                        f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
         except Exception as exc:
-            print(f"event relay failed: {exc}", flush=True)
+            print(f"{self.tag} event relay failed: {exc}", flush=True)
 
     async def feed_opus(self, packet):
         # A finalized utterance is already being answered. In particular, do
@@ -885,22 +1121,26 @@ class XiaozhiSession:
         if self.followup_open:
             self.followup_audio_packets += 1
             if self.followup_audio_packets == 1:
-                print("First follow-up microphone packet received", flush=True)
+                print(f"{self.tag} First follow-up microphone packet received", flush=True)
         try:
             pcm = self.decoder.decode(packet, 960, False)
         except opuslib.OpusError as exc:
-            print(f"invalid Opus packet: {exc}", flush=True)
+            print(f"{self.tag} invalid Opus packet: {exc}", flush=True)
             return
         if pcm:
             # Pegel mitschreiben: ein zu hoher Schwellwert in der
             # Aeusserungserkennung faellt sonst nicht auf.
             samples = memoryview(pcm).cast("h")
             peak = max((abs(sample) for sample in samples), default=0)
+            if self.awaiting_command:
+                # Laeuft der laufende Befehl, wird der hoechste Pegel seit dem
+                # Wecken festgehalten. Das ist die Grundlage des Vergleichs.
+                self.turn_peak = max(self.turn_peak, peak)
             self.audio_packets += 1
             self.audio_peak = max(self.audio_peak, peak)
             if self.audio_packets % 25 == 0:
                 print(
-                    f"Mic audio: packets={self.audio_packets} "
+                    f"{self.tag} Mic audio: packets={self.audio_packets} "
                     f"peak={self.audio_peak} followup={self.followup_open}",
                     flush=True,
                 )
@@ -930,6 +1170,10 @@ class XiaozhiSession:
     async def close(self, abort=False):
         self.cancel_session_finish()
         self.cancel_followup_timeout()
+        self.cancel_drained_watchdog()
+        self.cancel_speaking_guard()
+        if self.arbiter is not None:
+            self.arbiter.unregister(self)
         # Den Sprach-Arbeiter sauber beenden, damit kein Piper-Thread
         # beim Herunterfahren haengen bleibt.
         if self.tts_queue is not None:
@@ -994,6 +1238,11 @@ class XiaozhiSession:
                     if pending and not pending.done():
                         pending.set_result(mcp_payload)
                 elif kind == "listen" and payload.get("state") == "start":
+                    # Neuer Befehl: Pegelmessung neu starten und den Dialog
+                    # aufnehmen. Wer wirklich gehoert wurde, entscheidet sich
+                    # erst beim fertigen Transkript (Pegelvergleich).
+                    self.turn_peak = 0
+                    self.awaiting_command = True
                     await self.start_realtime()
                 elif (
                     kind == "device"
@@ -1005,7 +1254,7 @@ class XiaozhiSession:
                     # protokollieren ihn, damit sich Anzeige und Wirklichkeit
                     # bei Bedarf abgleichen lassen.
                     print(
-                        f"Device state: {payload.get('state')}",
+                        f"{self.tag} Device state: {payload.get('state')}",
                         flush=True,
                     )
                     # In the follow-up window, "speaking" means the device
@@ -1019,7 +1268,7 @@ class XiaozhiSession:
                         self.cancel_followup_timeout()
                         self.followup_open = False
                         print(
-                            "Follow-up utterance accepted; standby timeout cancelled",
+                            f"{self.tag} Follow-up utterance accepted; standby timeout cancelled",
                             flush=True,
                         )
                 elif kind == "listen" and payload.get("state") == "stop":
@@ -1032,8 +1281,9 @@ class XiaozhiSession:
                     kind == "device"
                     and payload.get("event") == "playback_drained"
                 ):
+                    self.cancel_drained_watchdog()
                     print(
-                        "Physical playback drained; opening follow-up listening window",
+                        f"{self.tag} Physical playback drained; opening follow-up listening window",
                         flush=True,
                     )
                     await self.open_followup_window()
@@ -1137,6 +1387,10 @@ async def main():
     )
     args = parser.parse_args()
 
+    # Ein gemeinsamer Schiedsrichter fuer alle Geraete dieser Bridge: nur das
+    # Geraet mit dem hoechsten Mikrofonpegel fuehrt einen Dialog.
+    args.arbiter = WakeArbiter()
+
     # Lokale Erkennung bedeutet zwangslaeufig lokale Sprachausgabe: der
     # lokale Helfer liefert gar kein Audio, es gaebe sonst nichts zu spielen.
     if args.stt_local:
@@ -1174,11 +1428,13 @@ async def main():
         args.speaker = None
 
     async def handler(websocket):
-        print(f"XiaoZhi connected from {websocket.remote_address}", flush=True)
+        peer_ip = websocket.remote_address[0] if websocket.remote_address else "?"
+        dev_tag = f"[{peer_ip.split('.')[-1]}]"
+        print(f"{dev_tag} XiaoZhi connected from {websocket.remote_address}", flush=True)
         try:
             await XiaozhiSession(websocket, args).run()
         except Exception as exc:
-            print(f"XiaoZhi session failed: {exc}", flush=True)
+            print(f"{dev_tag} XiaoZhi session failed: {exc}", flush=True)
 
     stop = asyncio.get_running_loop().create_future()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1192,9 +1448,28 @@ async def main():
                     content_length = int(line.split(":", 1)[1].strip())
             if content_length:
                 await reader.readexactly(content_length)
+            # Das Geraet kann uns aus einem anderen Subnetz erreichen
+            # (z. B. 192.168.68.0/24 statt 192.168.178.0/24). Wir antworten
+            # darum mit der lokalen Adresse, ueber die die OTA-Anfrage
+            # hereinkam: so liegt die WebSocket-URL immer im selben Netz wie
+            # das Geraet. --public-host dient nur noch als Rueckfall.
+            local_ip = None
+            try:
+                sockname = writer.get_extra_info("sockname")
+                if sockname and sockname[0]:
+                    local_ip = str(sockname[0])
+            except Exception:
+                local_ip = None
+            if not local_ip or local_ip in ("0.0.0.0", "::"):
+                local_ip = args.public_host
+            print(
+                f"OTA: handing out ws://{local_ip}:{args.port} "
+                f"to {writer.get_extra_info('peername')}",
+                flush=True,
+            )
             body = json.dumps({
                 "websocket": {
-                    "url": f"ws://{args.public_host}:{args.port}",
+                    "url": f"ws://{local_ip}:{args.port}",
                     "token": "local-openclaw",
                     "version": 1,
                 }
