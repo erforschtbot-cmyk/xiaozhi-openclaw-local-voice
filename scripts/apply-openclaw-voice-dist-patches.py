@@ -38,113 +38,46 @@ import subprocess
 import sys
 
 # ---------------------------------------------------------------- Patch A
-ANCHOR_A = (
-    'function resolveClientVoiceToolConfirmationPolicy(params, consume) {\n'
-    '\tif (!params.agentId || !params.voiceSessionId) return { allowed: true };\n'
-)
-PATCH_A = (
-    ANCHOR_A
-    + '\t// voice-confirmation-disabled-by-owner-v1\n'
-    + '\t// The owner explicitly disabled the additional Talk voice confirmation.\n'
-    + '\t// No command, argument, punctuation, quoting, or wording filter is used.\n'
-    + '\treturn { allowed: true };\n'
-)
+ANCHOR_A = 'function resolveClientVoiceToolConfirmationPolicy(params, consume) {\n\tif (!params.agentId || !params.voiceSessionId) return { allowed: true };\n'
+PATCH_A = 'function resolveClientVoiceToolConfirmationPolicy(params, consume) {\n\t// voice-confirmation-disabled-by-owner-v1 (reapply after update)\n\treturn { allowed: true };\n\tif (!params.agentId || !params.voiceSessionId) return { allowed: true };\n'
 MARK_A = 'voice-confirmation-disabled-by-owner-v1'
 
 # ---------------------------------------------------------------- Patch B
-MARK_B = 'voice-no-tool-both-sides-v1'
+MARK_B = 'voice-persist-split-v4'
 
 # B1: Relay-Feld
-B1_ANCHOR = (
-    '\t\tvoiceTranscriptSeq: 0,\n'
-    '\t\tvoiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),\n'
-)
-B1_REPLACE = (
-    '\t\tvoiceTranscriptSeq: 0,\n'
-    '\t\t// Wird gesetzt, sobald in diesem Turn ein Consult startet. Dann schreibt der\n'
-    '\t\t// Consult die Assistant-Antwort und der Relay schweigt (Tool-Fall). Ohne\n'
-    '\t\t// Consult schreibt der Relay die Antwort selbst (Ohne-Tool-Fall).\n'
-    '\t\tassistantOwnedByConsult: false,\n'
-    '\t\tvoiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),\n'
-)
+B1_ANCHOR = '\t\tvoiceTranscriptSeq: 0,\n\t\tvoiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),\n'
+B1_REPLACE = '\t\tvoiceTranscriptSeq: 0,\n\t\t// voice-persist-split-v4: consult and relay must not persist the same answer.\n\t\tassistantOwnedByConsult: false,\n\t\tvoiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),\n'
 
 # B2: provider-direct-Haken
-B2_ANCHOR = (
-    '\t\t...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {\n'
-    '\t\t\tconst relay = getActiveRelay();\n'
-    '\t\t\tif (!relay) return "control";\n'
-    '\t\t\treturn runControl.handleDelegationInput(text, (message) => {\n'
-    '\t\t\t\tif (getActiveRelay() === relay) respond(message);\n'
-    '\t\t\t});\n'
-    '\t\t} } : {},\n'
-)
-B2_REPLACE = (
-    '\t\t...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {\n'
-    '\t\t\tconst relay = getActiveRelay();\n'
-    '\t\t\tif (!relay) return "control";\n'
-    '\t\t\tconst outcome = runControl.handleDelegationInput(text, (message) => {\n'
-    '\t\t\t\tif (getActiveRelay() === relay) respond(message);\n'
-    '\t\t\t});\n'
-    '\t\t\t// voice-no-tool-both-sides-v1\n'
-    '\t\t\t// provider-direct: der Consult kommt nicht als Tool-Call an. Merker hier\n'
-    '\t\t\t// setzen, damit der Relay die Assistant-Antwort nicht doppelt schreibt.\n'
-    '\t\t\tif (outcome !== "control") relay.assistantOwnedByConsult = true;\n'
-    '\t\t\treturn outcome;\n'
-    '\t\t} } : {},\n'
-)
+B2_ANCHOR = '\t\t...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {\n\t\t\tconst relay = getActiveRelay();\n\t\t\tif (!relay) return "control";\n\t\t\treturn runControl.handleDelegationInput(text, (message) => {\n\t\t\t\tif (getActiveRelay() === relay) respond(message);\n\t\t\t});\n\t\t} } : {},\n'
+B2_REPLACE = '\t\t...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {\n\t\t\tconst relay = getActiveRelay();\n\t\t\tif (!relay) return "control";\n\t\t\tconst outcome = runControl.handleDelegationInput(text, (message) => {\n\t\t\t\tif (getActiveRelay() === relay) respond(message);\n\t\t\t});\n\t\t\t// voice-persist-split-v4: provider-direct has no visible consult tool call.\n\t\t\tif (outcome !== "control") relay.assistantOwnedByConsult = true;\n\t\t\treturn outcome;\n\t\t} } : {},\n'
 
 # B3: Transkript-Gate
 B3_ANCHOR = '\t\t\tif (final && !enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
-B3_REPLACE = (
-    '\t\t\t// voice-no-tool-both-sides-v1\n'
-    '\t\t\t// Ziel des Owners: Im Ohne-Tool-Fall stehen BEIDE Texte in der Session\n'
-    '\t\t\t// (seine Frage und die KI-Antwort). Im Tool-Fall schreibt der Consult die\n'
-    '\t\t\t// Antwort; der Relay schweigt dann, damit nichts doppelt entsteht.\n'
-    '\t\t\t//\n'
-    '\t\t\t// Reihenfolge (provider-direct): der Consult startet VOR dem User-Text und\n'
-    '\t\t\t// setzt assistantOwnedByConsult. Deshalb wird der Merker NICHT beim\n'
-    '\t\t\t// User-Text geloescht, sondern erst verbraucht, wenn eine\n'
-    '\t\t\t// Assistant-Zeile darueber entschieden hat. Danach ist der naechste Turn\n'
-    '\t\t\t// wieder frei fuer den Relay.\n'
-    '\t\t\tif (final) {\n'
-    '\t\t\t\t// Sicherheitsnetz: leckt der Merker aus einem vorigen Tool-Turn herein,\n'
-    '\t\t\t\t// wird er bei einer neuen Frage geloescht — aber nur, wenn gerade KEIN\n'
-    '\t\t\t\t// Consult laeuft. (provider-direct startet den Consult vor der Frage,\n'
-    '\t\t\t\t// deshalb ist der Merker im Tool-Turn zu diesem Zeitpunkt gewollt true.)\n'
-    '\t\t\t\tif (role === "user" && pruneInactiveRelayAgentRuns(relay) === 0) relay.assistantOwnedByConsult = false;\n'
-    '\t\t\t\tif (role === "assistant") {\n'
-    '\t\t\t\t\tconst spoken = String(text ?? "").trim();\n'
-    '\t\t\t\t\tconst interimAck = /^(i[\'\\u2019]?ll check that request\\.?|ich pr\\u00fcfe das( kurz)?\\.?|einen moment( bitte)?\\.?)$/i.test(spoken);\n'
-    '\t\t\t\t\tconst consultOwns = relay.assistantOwnedByConsult;\n'
-    '\t\t\t\t\t// Merker NUR bei einer echten Antwort verbrauchen, nicht schon bei\n'
-    '\t\t\t\t\t// der Zwischenansage. Sonst war der Merker weg, wenn die richtige\n'
-    '\t\t\t\t\t// Antwort kam, und der Relay schrieb sie zusaetzlich (Doppelung).\n'
-    '\t\t\t\t\tif (!interimAck && consultOwns) relay.assistantOwnedByConsult = false;\n'
-    '\t\t\t\t\t// WICHTIG: nur das Persistieren auslassen — der emit()-Block unten\n'
-    '\t\t\t\t\t// muss IMMER laufen. Ein return hier liess das Geraet im\n'
-    '\t\t\t\t\t// "spricht"-Zustand haengen und machte den Ton abgehackt.\n'
-    '\t\t\t\t\tif (!interimAck && !consultOwns) {\n'
-    '\t\t\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
-    '\t\t\t\t\t}\n'
-    '\t\t\t\t} else {\n'
-    '\t\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
-    '\t\t\t\t}\n'
-    '\t\t\t}\n'
-)
+B3_REPLACE = '\t\t\tif (final) {\n\t\t\t\tif (role === "user" && pruneInactiveRelayAgentRuns(relay) === 0) relay.assistantOwnedByConsult = false;\n\t\t\t\tif (role === "assistant") {\n\t\t\t\t\tconst spoken = String(text ?? "").trim();\n\t\t\t\t\tconst interimAck = /^(i[\'\\u2019]?ll check that request\\.?|ich pr\\u00fcfe das( kurz)?\\.?|einen moment( bitte)?\\.?)$/i.test(spoken);\n\t\t\t\t\tconst consultOwns = relay.assistantOwnedByConsult || pruneInactiveRelayAgentRuns(relay) > 0;\n\t\t\t\t\tif (!interimAck && relay.assistantOwnedByConsult) relay.assistantOwnedByConsult = false;\n\t\t\t\t\t// This gate controls persistence only. The event must still reach the device.\n\t\t\t\t\tif (!interimAck && !consultOwns && !enqueueRelayVoiceTranscript(relay, role, text)) return;\n\t\t\t\t} else if (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n\t\t\t}\n'
+
+B4_ANCHOR = '\t\tconst itemId = `forced-consult-item-${randomUUID()}`;\n'
+B4_REPLACE = '\t\tconst itemId = `forced-consult-item-${randomUUID()}`;\n\t\t// voice-persist-split-v4: the consult owns the assistant transcript.\n\t\tsession.assistantOwnedByConsult = true;\n'
+
+B5_ANCHOR = '\t\t\tif (toolCall.name === "openclaw_agent_consult") {\n'
+B5_REPLACE = '\t\t\tif (toolCall.name === "openclaw_agent_consult") {\n\t\t\t\trelay.assistantOwnedByConsult = true;\n'
 
 B_EDITS = (
-    ("field", B1_ANCHOR, B1_REPLACE),
+    ("relay-field", B1_ANCHOR, B1_REPLACE),
     ("delegation-hook", B2_ANCHOR, B2_REPLACE),
     ("transcript-gate", B3_ANCHOR, B3_REPLACE),
+    ("forced-consult", B4_ANCHOR, B4_REPLACE),
+    ("tool-call-hook", B5_ANCHOR, B5_REPLACE),
 )
 B_NEEDLES = (
-    ("assistantOwnedByConsult: false", "Relay-Feld"),
-    ("outcome !== \"control\"", "provider-direct-Haken"),
+    ("voice-persist-split-v4: consult and relay", "Relay-Feld"),
+    ("voice-persist-split-v4: provider-direct", "provider-direct-Haken"),
     ("pruneInactiveRelayAgentRuns(relay) === 0", "Reset nur ohne aktiven Run"),
     ("const consultOwns", "Consult-Uebernahme ohne emit-Abbruch"),
-    ("interimAck", "Zwischenansage-Filter"),
+    ("voice-persist-split-v4: the consult owns", "Forced-Consult-Merker"),
+    ("relay.assistantOwnedByConsult = true;\n\t\t\t\tconst forcedConsult", "Tool-Call-Haken"),
 )
-
 # ---------------------------------------------------------------- Patch C
 MARK_C = 'keep-spoken-test'
 ANCHOR_C = (
@@ -189,7 +122,7 @@ def patch_handlers(path: pathlib.Path) -> str:
     text = path.read_text()
     for label, anchor, _replacement in B_EDITS:
         if anchor not in text:
-            raise SystemExit(f"both-sides/{label}: Anker nicht gefunden in {path} — "
+            raise SystemExit(f"persist-split-v4/{label}: Anker nicht gefunden in {path} — "
                              "Layout hat sich geaendert.")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     path.with_name(path.name + f".bak-both-sides-{stamp}").write_text(text)
@@ -198,10 +131,10 @@ def patch_handlers(path: pathlib.Path) -> str:
     path.write_text(text)
     reread = path.read_text()
     if MARK_B not in reread:
-        raise SystemExit(f"both-sides: Verifikation nach dem Schreiben fehlgeschlagen: {path}")
+        raise SystemExit(f"persist-split-v4: Verifikation nach dem Schreiben fehlgeschlagen: {path}")
     for needle, what in B_NEEDLES:
         if needle not in reread:
-            raise SystemExit(f"both-sides: Teil fehlt ({what}): {path}")
+            raise SystemExit(f"persist-split-v4: Teil fehlt ({what}): {path}")
     return "changed"
 
 

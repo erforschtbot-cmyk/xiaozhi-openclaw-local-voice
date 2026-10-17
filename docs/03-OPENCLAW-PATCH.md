@@ -41,20 +41,22 @@ Patch unnötig.
 
 - Datei: `dist/handlers-*.mjs`
 - Ort: `onTranscript` im Realtime-Relay (+ Relay-Feld, provider-direct-Haken)
-- Marker: `voice-no-tool-both-sides-v1`
+- Marker: `voice-persist-split-v4`
 
 Ziel: Im **Ohne-Tool-Fall** stehen **beide** Texte in der Session — die gesprochene
 Frage **und** die KI-Antwort. Im **Mit-Tool-Fall** schreibt der Consult die Antwort;
 der Relay schweigt dann, damit nichts doppelt entsteht. Verworfen wird nur die
 Zwischenansage („I'll check that request." / „Ich prüfe das kurz.").
 
-Umsetzung an drei Stellen:
+Umsetzung an fuenf Stellen:
 
 | Teil | Was |
 |------|-----|
 | B1 | Relay-Feld `assistantOwnedByConsult` einführen |
 | B2 | Merker im provider-direct-Haken (`handleDelegationInput`) setzen |
 | B3 | Transkript-Gate: Zwischenansage verwerfen; Assistant überspringen, wenn ein Consult den Turn besitzt (Merker danach verbrauchen); Reset bei neuer Frage nur ohne aktiven Run |
+| B4 | Forced-Consult: Merker im erzwungenen Consult-Pfad setzen |
+| B5 | Tool-Call-Haken `openclaw_agent_consult`: Merker setzen |
 
 **Wichtig — kein `return` vor `emit()`:** Das Gate darf ausschließlich das
 *Persistieren* auslassen. Ein früher `return` ließ das Gerät im Zustand „spricht"
@@ -70,7 +72,7 @@ der Patch unnötig.
 > anderes („Assistant-Transkript wird nicht persistiert", Marker
 > `voice-test-suppress-assistant-persist-v1`). Dieser Weg wurde verworfen:
 > Unterdrückt man die Assistant-Seite ganz, fehlt im Ohne-Tool-Fall die Antwort.
-> Gültig ist allein der obige Stand (`voice-no-tool-both-sides-v1`).
+> Gültig ist allein der obige Stand (`voice-persist-split-v4`, fuenf Stellen).
 
 ---
 

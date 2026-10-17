@@ -8,7 +8,7 @@ Erkennung und Stimme laufen lokal auf dem Host.
 
 | Komponente | Version / Pin |
 |---|---|
-| OpenClaw | `2026.9.6` (`eb377ac`) |
+| OpenClaw | `2026.10.4` (Ist-Stand 2026-10-17) |
 | Node.js | `26.7.0` auf dem Referenzhost |
 | Python | `3.14.7` auf dem Referenzhost |
 | XiaoZhi Upstream | `78/xiaozhi-esp32@4632dc51f0a5ad26e08542e131e6e48da41e4ff3` |

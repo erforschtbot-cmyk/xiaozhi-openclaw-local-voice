@@ -92,6 +92,33 @@ function finalMessageText(message) {
     .join("");
 }
 
+const FASTPATH_DISABLE_FLAG =
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath";
+
+function isSmartHomeFastPath(text) {
+  // Muss dasselbe Flag wie server.py beachten: ist der Software-Direktpfad
+  // abgeschaltet, darf der Helper den KI-Consult NICHT unterdruecken, sonst
+  // schaltet niemand.
+  try {
+    if (fs.existsSync(FASTPATH_DISABLE_FLAG)) return false;
+  } catch {
+    /* ignore */
+  }
+  const normalized = String(text ?? "")
+    .toLowerCase()
+    .replaceAll("%", " prozent ")
+    .trim()
+    .replace(/\s+/g, " ");
+  const target = /[a-z\u00e4\u00f6\u00fc\u00df-]*(?:monitor|licht|lampe|steckdose|jalousie|rollladen|heizung|thermostat|ventilator)\b/;
+  const action = /\b(?:an|aus|ein|einschalten|ausschalten|hoch|runter|öffnen|oeffnen|schließen|schliessen|dimmen|stelle|stell|mach|schalte)\b/;
+  const question = /\b(?:ob|warum|wieso|weshalb)\b/;
+  const stateQuestion = /^(?:ist|sind|war|waren|steht|stehen|läuft|laeuft|geht)\b/;
+  return target.test(normalized)
+    && action.test(normalized)
+    && !question.test(normalized)
+    && !stateQuestion.test(normalized);
+}
+
 const [rateText, widthText, channelsText] = process.argv.slice(2);
 const rate = Number(rateText);
 const width = Number(widthText);
@@ -118,6 +145,8 @@ let audioByteCount = 0;
 let lastAudioAt = 0;
 let assistantFinalAt = 0;
 let loggedAudioAfterFinal = false;
+let lastUserTranscript = "";
+let assistantAudioGateUntil = 0;
 let stdoutWriteTail = Promise.resolve();
 const pendingRuns = new Map();
 
@@ -164,12 +193,23 @@ const client = new GatewayClient({
         });
       }
       stdoutWriteTail = stdoutWriteTail.then(
-        () => new Promise((resolve, reject) => {
+        async () => {
+          // The bridge classifies finalized transcripts in a separate process.
+          // Hold the first assistant audio very briefly so a direct smart-home
+          // command can terminate this helper before fragments of the generic
+          // "I'll check" acknowledgement reach the speaker. This does not
+          // delay transcript delivery or the direct Alexa HTTP request.
+          const gateDelay = assistantAudioGateUntil - Date.now();
+          if (gateDelay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, gateDelay));
+          }
+          await new Promise((resolve, reject) => {
           process.stdout.write(audio, (error) => {
             if (error) reject(error);
             else resolve();
           });
-        }),
+          });
+        },
       );
       return;
     }
@@ -187,6 +227,8 @@ const client = new GatewayClient({
     }
     if (event.type === "transcript") {
       if (event.role === "user" && event.final && event.text?.trim()) {
+        lastUserTranscript = event.text.trim();
+        assistantAudioGateUntil = Date.now() + 200;
         userFinal = true;
         assistantFinal = false;
         audioDone = false;
@@ -242,6 +284,25 @@ const client = new GatewayClient({
       void (async () => {
         try {
           if (event.name === "openclaw_agent_consult") {
+            if (isSmartHomeFastPath(lastUserTranscript)) {
+              // server.py executes this command directly as soon as the final
+              // transcript arrives. Never start a second agent run for the
+              // same utterance, even if the provider emitted its tool call in
+              // the few milliseconds before the helper is terminated.
+              await client.request("talk.session.submitToolResult", {
+                sessionId,
+                callId: event.callId,
+                result: {
+                  result: "Der Smart-Home-Befehl wurde bereits sofort und erfolgreich ausgeführt. Führe kein Werkzeug aus. Bestätige den Erfolg jetzt kurz auf Deutsch.",
+                },
+              });
+              emit("tool_call_suppressed", {
+                callId: event.callId,
+                name: event.name,
+                reason: "smart_home_fast_path",
+              });
+              return;
+            }
             let started;
             if (CONSULT_SESSION_KEY) {
               const args = event.args ?? {};
@@ -325,7 +386,9 @@ const session = await client.request("talk.session.create", {
   transport: "gateway-relay",
   brain: "agent-consult",
   vadThreshold: 0.2,
-  silenceDurationMs: 3000,
+  // Short home-control phrases should finalize quickly. 700 ms still tolerates
+  // normal pauses but removes the former three-second delay after speech.
+  silenceDurationMs: 700,
   prefixPaddingMs: 200,
   reasoningEffort: "minimal",
 });

@@ -4,8 +4,11 @@ import asyncio
 import json
 import os
 import re
+import time
 import signal
 import uuid
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import opuslib
@@ -22,6 +25,23 @@ except ImportError:  # pragma: no cover
 
 
 class XiaozhiSession:
+    ALEXA_TEXT_COMMAND_ENDPOINT = (
+        "http://192.168.178.24:8087/set/"
+        "alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value="
+    )
+    # Gemeinsame Dedupe-Zustandsdatei mit dem Agent-Wrapper
+    # (openclaw-voice-skill-action): derselbe Schaltbefehl wird innerhalb des
+    # Fensters nur einmal an Alexa geschickt, egal welcher Pfad zuerst kommt.
+    ALEXA_DEDUPE_STATE_PATH = (
+        "/home/openclaw/.local/share/jarvis-realtime-bridge/last-alexa-command.json"
+    )
+    ALEXA_DEDUPE_WINDOW_SECONDS = 8.0
+    # Modus-Schalter: liegt diese Datei vor, ist der Software-Direktpfad AUS
+    # und Smart-Home-Befehle gehen den offiziellen KI-Weg (Agent-Consult).
+    FASTPATH_DISABLE_FLAG = (
+        "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+    )
+
     def __init__(self, websocket, args):
         self.websocket = websocket
         self.args = args
@@ -47,6 +67,7 @@ class XiaozhiSession:
         self.followup_audio_packets = 0
         self.followup_forwarded_packets = 0
         self.followup_peak = 0
+        self.followup_audio_guard_until = 0.0
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
@@ -134,17 +155,128 @@ class XiaozhiSession:
             raise RuntimeError(result)
         return result
 
+    @staticmethod
+    def _normalize_alexa_command(command):
+        collapsed = " ".join(command.strip().casefold().split())
+        return collapsed.strip(" .,!?;:…-–—")
+
+    def _alexa_already_sent(self, key):
+        if not key:
+            return False
+        try:
+            with open(self.ALEXA_DEDUPE_STATE_PATH, encoding="utf-8") as handle:
+                state = json.load(handle)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(state, dict) or state.get("key") != key:
+            return False
+        try:
+            sent_at = float(state.get("ts"))
+        except (TypeError, ValueError):
+            return False
+        elapsed = time.time() - sent_at
+        return 0.0 <= elapsed < self.ALEXA_DEDUPE_WINDOW_SECONDS
+
+    def _alexa_record_sent(self, key):
+        if not key:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.ALEXA_DEDUPE_STATE_PATH), exist_ok=True)
+            with open(self.ALEXA_DEDUPE_STATE_PATH, "w", encoding="utf-8") as handle:
+                json.dump({"key": key, "ts": time.time()}, handle)
+        except OSError:
+            pass
+
+    @staticmethod
+    def is_smart_home_fast_path(transcript):
+        # Modus "ki": Direktpfad bewusst abgeschaltet lassen.
+        if os.path.exists(
+            "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+        ):
+            return False
+        normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
+        # German compounds are common device names ("Deckenventilator",
+        # "Kuechenlampe"). Match the target as a word SUFFIX so prefixed
+        # compounds hit the fast path instead of the slow cloud consult.
+        smart_home_target = (
+            r"[a-z\u00e4\u00f6\u00fc\u00df-]*"
+            r"(?:monitor|licht|lampe|steckdose|jalousie|rollladen|"
+            r"heizung|thermostat|ventilator)"
+        )
+        smart_home_action = (
+            r"an|aus|ein|einschalten|ausschalten|hoch|runter|öffnen|"
+            r"oeffnen|schließen|schliessen|dimmen|stelle|stell|mach|"
+            r"schalte"
+        )
+        return bool(
+            re.search(rf"(?:{smart_home_target})\b", normalized)
+            and re.search(rf"\b(?:{smart_home_action})\b", normalized)
+            and not re.search(r"\b(?:ob|warum|wieso|weshalb)\b", normalized)
+            and not re.match(
+                r"^(?:ist|sind|war|waren|steht|stehen|läuft|laeuft|geht)\b",
+                normalized,
+            )
+        )
+
     async def handle_device_voice_command(self, transcript):
         normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
+
+        # Smart-home fast path: clear imperative commands must not wait for an
+        # agent consult. Forward the original transcript once to the same fixed
+        # Alexa ioBroker datapoint as the iobroker_alexa plugin. Questions and
+        # ambiguous statements deliberately fall through to the cloud agent.
+        if self.is_smart_home_fast_path(transcript):
+            command = transcript.strip()
+            dedupe_key = self._normalize_alexa_command(command)
+            if self._alexa_already_sent(dedupe_key):
+                print(
+                    f"Smart-home fast path deduplicated (Agent already sent): {command!r}",
+                    flush=True,
+                )
+                return True
+
+            def send_alexa_command():
+                url = self.ALEXA_TEXT_COMMAND_ENDPOINT + urllib.parse.quote(
+                    command, safe=""
+                )
+                request = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(request, timeout=3.0) as response:
+                    response.read(1)
+                    return response.status
+
+            try:
+                status = await asyncio.wait_for(
+                    asyncio.to_thread(send_alexa_command), timeout=4.0
+                )
+                if status != 200:
+                    raise RuntimeError(f"ioBroker HTTP {status}")
+                self._alexa_record_sent(dedupe_key)
+                print(
+                    f"Smart-home fast path accepted by Alexa: {command!r} http={status}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Smart-home fast path failed: {exc!r}", flush=True)
+                return False
+            return True
+
         number_words = {
-            "null": 0, "zehn": 10, "zwanzig": 20, "dreißig": 30,
-            "dreissig": 30, "vierzig": 40, "fünfzig": 50,
-            "fuenfzig": 50, "sechzig": 60, "siebzig": 70,
-            "achtzig": 80, "neunzig": 90, "hundert": 100,
+            "null": 0, "eins": 1, "ein": 1, "zwei": 2, "drei": 3,
+            "vier": 4, "fünf": 5, "fuenf": 5, "sechs": 6,
+            "sieben": 7, "acht": 8, "neun": 9, "zehn": 10,
+            "zwanzig": 20, "dreißig": 30, "dreissig": 30,
+            "vierzig": 40, "fünfzig": 50, "fuenfzig": 50,
+            "sechzig": 60, "siebzig": 70, "achtzig": 80,
+            "neunzig": 90, "hundert": 100,
         }
+        # Mehrsilbige Zahlwoerter zuerst, damit "fuenfzig" nicht als "fuenf"
+        # gelesen wird. Die Einer (fuenf, acht, ...) fehlten zuvor ganz -
+        # dadurch fiel "Helligkeit fuenf Prozent" durch.
         value_pattern = (
-            r"(\d{1,3}|null|zehn|zwanzig|dreißig|dreissig|vierzig|"
-            r"fünfzig|fuenfzig|sechzig|siebzig|achtzig|neunzig|hundert)"
+            r"(\d{1,3}|hundert|zwanzig|dreißig|dreissig|vierzig|"
+            r"fünfzig|fuenfzig|sechzig|siebzig|achtzig|neunzig|"
+            r"zehn|null|eins|ein|zwei|drei|vier|fünf|fuenf|"
+            r"sechs|sieben|acht|neun)"
         )
         commands = (
             (
@@ -381,6 +513,26 @@ class XiaozhiSession:
 
         self.followup_task = asyncio.create_task(close_after_followup_window())
 
+    async def open_followup_window(self, audio_guard_seconds=0.0):
+        """Return the still-open device session to listening for 10 seconds."""
+        await self.send_json({"type": "tts", "state": "stop"})
+        self.tts_started = False
+        self.pcm_buffer = bytearray()
+        self.pcm_bytes_received = 0
+        self.audio_progress_event = asyncio.Event()
+        self.input_stopped = False
+        self.followup_open = True
+        self.followup_audio_packets = 0
+        self.followup_forwarded_packets = 0
+        self.followup_peak = 0
+        self.followup_audio_guard_until = (
+            asyncio.get_running_loop().time() + audio_guard_seconds
+        )
+        self.tts_text_buffer = ""
+        self.local_pcm_bytes_sent = 0
+        await self.start_realtime()
+        self.schedule_followup_timeout()
+
     def schedule_stream_end(self, process):
         self.cancel_session_finish()
 
@@ -393,6 +545,29 @@ class XiaozhiSession:
             await self.finish_audio_stream(process, self.pcm_bytes_received)
 
         self.finish_task = asyncio.create_task(finish_after_trailing_frames())
+
+    def schedule_fast_path_stream_end(self, process):
+        """Close a fast-path acknowledgement even if no final text arrives."""
+        self.cancel_session_finish()
+
+        async def finish_after_audio_idle():
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 8.0
+            while loop.time() < deadline:
+                if (
+                    self.tts_started
+                    and self.last_sent_audio_at > 0
+                    and loop.time() - self.last_sent_audio_at >= 0.45
+                ):
+                    await self.finish_audio_stream(process, self.pcm_bytes_received)
+                    return
+                await asyncio.sleep(0.05)
+            # No usable acknowledgement arrived. Never leave the firmware in
+            # speaking forever; end this command deterministically.
+            await self.send_json({"type": "tts", "state": "stop"})
+            self.websocket.transport.abort()
+
+        self.finish_task = asyncio.create_task(finish_after_audio_idle())
 
     async def finish_audio_stream(self, process, expected_pcm_bytes):
         if self.stream_end_sent:
@@ -610,24 +785,20 @@ class XiaozhiSession:
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)
                     if device_command_handled:
-                        # Device-local commands are complete after the MCP
-                        # response. Do not let GPT-Live delegate the same text
-                        # to the general agent and manufacture an approval turn.
-                        if not self.input_stopped:
-                            self.input_stopped = True
-                            await self.stop_input(process)
-                        if process.returncode is None:
-                            process.terminate()
-                            await process.wait()
-                        if self.process is process:
-                            self.process = None
-                        await self.send_json({"type": "tts", "state": "stop"})
+                        # The direct HTTP action is already complete. Keep the
+                        # realtime helper alive so its spoken acknowledgement
+                        # can finish cleanly. The helper suppresses the general
+                        # agent consult for this exact fast-path utterance, so
+                        # no second Alexa command can be emitted. Playback drain
+                        # will open the normal follow-up listening window only
+                        # after the acknowledgement has physically finished.
+                        self.input_stopped = True
                         print(
-                            "Device command complete; returning directly to standby",
+                            "Device command complete; waiting for spoken acknowledgement",
                             flush=True,
                         )
-                        self.websocket.transport.abort()
-                        return
+                        self.schedule_fast_path_stream_end(process)
+                        continue
                     # Pause microphone forwarding while the assistant speaks,
                     # but keep the pipe and Talk session open for the next turn.
                     if not self.input_stopped:
@@ -705,6 +876,11 @@ class XiaozhiSession:
             print(f"event relay failed: {exc}", flush=True)
 
     async def feed_opus(self, packet):
+        # A finalized utterance is already being answered. In particular, do
+        # not spawn a replacement helper after a fast-path helper exits while
+        # its acknowledgement is still playing.
+        if self.input_stopped:
+            return
         await self.start_realtime()
         if self.followup_open:
             self.followup_audio_packets += 1
@@ -714,8 +890,6 @@ class XiaozhiSession:
             pcm = self.decoder.decode(packet, 960, False)
         except opuslib.OpusError as exc:
             print(f"invalid Opus packet: {exc}", flush=True)
-            return
-        if self.input_stopped:
             return
         if pcm:
             # Pegel mitschreiben: ein zu hoher Schwellwert in der
@@ -742,6 +916,12 @@ class XiaozhiSession:
             and self.process.stdin
             and not self.process.stdin.is_closing()
         ):
+            if (
+                self.followup_open
+                and asyncio.get_running_loop().time()
+                < self.followup_audio_guard_until
+            ):
+                return
             if self.followup_open:
                 self.followup_forwarded_packets += 1
             self.process.stdin.write(pcm)
@@ -828,6 +1008,20 @@ class XiaozhiSession:
                         f"Device state: {payload.get('state')}",
                         flush=True,
                     )
+                    # In the follow-up window, "speaking" means the device
+                    # has accepted a new utterance and is waiting for its
+                    # result. Do not let the original idle timer close the
+                    # socket while that utterance is still being processed.
+                    if (
+                        self.followup_open
+                        and payload.get("state") == "speaking"
+                    ):
+                        self.cancel_followup_timeout()
+                        self.followup_open = False
+                        print(
+                            "Follow-up utterance accepted; standby timeout cancelled",
+                            flush=True,
+                        )
                 elif kind == "listen" and payload.get("state") == "stop":
                     # This device-state notification may arrive after
                     # playback_drained. The finalized user transcript already
@@ -842,22 +1036,7 @@ class XiaozhiSession:
                         "Physical playback drained; opening follow-up listening window",
                         flush=True,
                     )
-                    await self.send_json({"type": "tts", "state": "stop"})
-                    self.tts_started = False
-                    self.pcm_buffer = bytearray()
-                    self.pcm_bytes_received = 0
-                    self.audio_progress_event = asyncio.Event()
-                    self.input_stopped = False
-                    self.followup_open = True
-                    self.followup_audio_packets = 0
-                    self.followup_forwarded_packets = 0
-                    self.followup_peak = 0
-                    # Lokale Stimme: Textpuffer und Ergebniszaehler fuer die
-                    # naechste Antwort zuruecksetzen.
-                    self.tts_text_buffer = ""
-                    self.local_pcm_bytes_sent = 0
-                    await self.start_realtime()
-                    self.schedule_followup_timeout()
+                    await self.open_followup_window()
                 elif kind == "abort":
                     break
         finally:
