@@ -17,15 +17,19 @@ Patch B - handlers-*.mjs  (Marker voice-no-tool-both-sides-v1)
           wenn ein Consult den Turn besitzt (Merker danach verbrauchen);
           Sicherheitsnetz-Reset bei neuer Frage nur ohne aktiven Run
 
-Patch C - builtin-openclaw-*.mjs  (Marker keep-spoken-test)
-    Haelt den eigenen gesprochenen Satz in der sichtbaren Session. Ohne den
-    Ausstieg haengt die Orphan-Repair den Leaf auf den letzten Assistant
-    zurueck; die gesprochene Aeusserung (provenance.kind=realtime_voice) bleibt
-    dann auf einem Seitenast und verschwindet.
+Patch C - builtin-openclaw-*.mjs  (Marker keep-spoken-test)  -- NICHT AKTIV
+    Haelt den eigenen gesprochenen Satz in der sichtbaren Session.
+    Stand 2026-10-17 auf dem Referenzhost NICHT angewandt (0 Treffer in dist).
+    Nur bei Symptom setzen (gesprochener Satz fehlt im aktiven Pfad) und dann
+    hier wieder einkommentieren.
 
 Patch D - capability-catalog.js + realtime-quicksilver-delegation-controller-*.mjs
-    Setzt den Apostroph in der Zwischenansage auf ASCII: I’ll -> I'll
-    (rein kosmetisch, kein Sprachwechsel).
+    Setzt den Apostroph der Zwischenansage auf ASCII: I’ll -> I'll.
+    Stand 2026-10-17 auf dem Referenzhost NICHT angewandt (U+2019 liegt noch vor).
+    Rein kosmetisch; nur bei Bedarf setzen.
+
+    AKTIVER SATZ auf dem Referenzhost: nur A und B (voice-persist-split-v4).
+    Das Skript bildet genau diesen Satz ab.
 
 Alle Patches liegen in kompilierten dist-Dateien und werden von jedem
 OpenClaw-Update ueberschrieben. Nach jedem Update erneut anwenden.
@@ -156,19 +160,23 @@ def main() -> int:
         if "enqueueRelayVoiceTranscript" in path.read_text():
             result[f"transcript:{path.name}"] = patch_handlers(path)
 
-    builtin_files = [p for p in sorted(dist.glob("builtin-openclaw-*.mjs"))
-                     if "resolveOrphanRepairPlan" in p.read_text()]
-    for path in builtin_files:
-        result[f"keep-spoken:{path.name}"] = patch(path, ANCHOR_C, PATCH_C, MARK_C, "keep-spoken")
+    # Patch C (keep-spoken-test) ist auf dem Referenzhost NICHT aktiv.
+    # Nur bei Symptom einkommentieren:
+    # builtin_files = [p for p in sorted(dist.glob("builtin-openclaw-*.mjs"))
+    #                  if "resolveOrphanRepairPlan" in p.read_text()]
+    # for path in builtin_files:
+    #     result[f"keep-spoken:{path.name}"] = patch(path, ANCHOR_C, PATCH_C, MARK_C, "keep-spoken")
 
-    apostrophe_files = sorted(dist.glob("**/capability-catalog.js")) + \
-        sorted(dist.glob("realtime-quicksilver-delegation-controller-*.mjs"))
-    apostrophe_files = [p for p in apostrophe_files
-                        if "buildRealtimeVoiceAgentControlSpeechMessage" in p.read_text()]
-    for path in apostrophe_files:
-        text = path.read_text()
-        if ANCHOR_D in text or MARK_D in text:
-            result[f"apostrophe:{path.name}"] = patch(path, ANCHOR_D, PATCH_D, MARK_D, "apostrophe")
+    # Patch D (Apostroph) ist auf dem Referenzhost NICHT aktiv.
+    # Nur bei Symptom einkommentieren:
+    # apostrophe_files = sorted(dist.glob("**/capability-catalog.js")) + \
+    #     sorted(dist.glob("realtime-quicksilver-delegation-controller-*.mjs"))
+    # apostrophe_files = [p for p in apostrophe_files
+    #                     if "buildRealtimeVoiceAgentControlSpeechMessage" in p.read_text()]
+    # for path in apostrophe_files:
+    #     text = path.read_text()
+    #     if ANCHOR_D in text or MARK_D in text:
+    #         result[f"apostrophe:{path.name}"] = patch(path, ANCHOR_D, PATCH_D, MARK_D, "apostrophe")
 
     if not result:
         raise SystemExit("Keine passende OpenClaw-Implementierung gefunden.")
