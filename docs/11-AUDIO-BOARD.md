@@ -1,4 +1,4 @@
-# 7. Zweites Gerät: Waveshare ESP32-S3-AUDIO-Board
+# 11. Zweites Gerät: Waveshare ESP32-S3-AUDIO-Board
 
 Zusätzlich zum **Touch-LCD-4B** (Hauptgerät, `docs/02-FIRMWARE.md`) gibt es ein
 zweites Jarvis-Gerät: das **nackte** Waveshare **ESP32-S3-AUDIO-Board**
@@ -7,7 +7,31 @@ unterscheidet sich nur in der Firmware.
 
 > Die Firmware liegt in **beiden** Repositories identisch
 > (`xiaozhi-openclaw-voice-terminal` und `xiaozhi-openclaw-local-voice`) — genau
-> wie beim 4B. Es gibt keine Cloud-/Lokal-Variante des Board-Images.
+> wie beim 4B. Es gibt keine Cloud-/Lokal-Variante des Board-Images. Die Firmware
+> muss also **nicht** angepasst werden, wenn dieses Board an einer lokalen
+> Installation betrieben wird.
+
+## Lokale Variante: was zu beachten ist
+
+Die Firmware ist gleich — der **Host** unterscheidet sich:
+
+| | Cloud-Variante | **Lokale Variante** |
+|---|---|---|
+| Erkennung | extern (OpenAI) | **lokal**, CPU (Canary/Piper) |
+| Stimme | extern | **lokal**, CPU (Piper) |
+| Anzeige des Boards | Ring-LEDs | Ring-LEDs (identisch) |
+| Gesichtsanzeige des 4B | ja | ja (`jarvis_face_display.*`) — betrifft **nur** den 4B |
+
+Zwei Punkte, die im lokalen Betrieb zählen:
+
+1. **Der Sprechen-Wächter greift auch lokal.** Alle Audioausgaben laufen über
+   dieselbe Sendestelle; der Wächter gegen ein hängendes „Sprechen" ist damit in
+   beiden Varianten aktiv.
+2. **Zwei Geräte gleichzeitig kosten CPU.** Erkennung und Stimme laufen lokal.
+   Der Erkennungsdienst nimmt mehrere Verbindungen an (ein Handler je Gerät),
+   aber beide teilen sich dieselbe Rechenleistung. Für den Normalbetrieb
+   („ein Gerät pro Raum") ist das unkritisch; wer zwei Geräte **gleichzeitig**
+   betreibt, sollte die Antwortzeit beobachten.
 
 ## Unterschied zum 4B
 
