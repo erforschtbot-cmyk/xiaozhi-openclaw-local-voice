@@ -34,7 +34,7 @@ Upstream enthalten.
 
 | Gerät | Rolle in diesem Projekt | Preis | Bezug |
 |---|---|---|---|
-| **Waveshare ESP32-S3-Smart-86-Box** — identisch mit **ESP32-S3-Touch-LCD-4B** (Board-Ziel `esp32-s3-touch-lcd-4b`) | Hauptgerät: 480×480-IPS-Touchdisplay, animiertes Gesicht, Mikrofon, Lautsprecher | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) · [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
+| **Waveshare ESP32-S3-Smart-86-Box** — identisch mit **ESP32-S3-Touch-LCD-4B** (Board-Ziel `esp32-s3-touch-lcd-4b`) | Hauptgerät: 480×480 Pixel, quadratisches IPS-Touchdisplay, animiertes Gesicht, Mikrofon, Lautsprecher | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) · [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
 | **Waveshare ESP32-S3 AI Smart Speaker** — identisch mit **ESP32-S3-AUDIO-Board** (Board-Ziel `esp32-s3-audio-board`, SKU 32184/32185) | zweites Gerät: **kein Display**, 7 RGB-Ring-LEDs als Anzeige, Dual-Mikrofon | **unter 30 €** | [Amazon](https://link.amazon/B02n0BuFL) |
 
 > **Namensverwirrung vermeiden:** „Smart 86 Box" und „Touch-LCD-4B" bezeichnen
