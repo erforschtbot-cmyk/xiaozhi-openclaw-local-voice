@@ -24,6 +24,23 @@ einen Cloud-Sprachdienst.**
 Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 [Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
 
+## Hardware
+
+Welche Geräte das System bilden und woher sie kommen. Alle drei sind fertige
+Waveshare-Platinen mit ESP32-S3 — kein Eigenbau nötig.
+
+| Gerät | Rolle in diesem Projekt | Preis | Bezug |
+|---|---|---|---|
+| **Waveshare ESP32-S3-Touch-LCD-4B** | Hauptgerät mit Display und animiertem Gesicht | — | [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
+| **Waveshare ESP32-S3 AI Smart Speaker** (SKU 32184/32185, „ESP32-S3-AUDIO-Board") | zweites Gerät, **kein Display** — 7 RGB-Ring-LEDs als Anzeige | **unter 30 €** | [Amazon](https://link.amazon/B02n0BuFL) |
+| **Waveshare ESP32-S3-Smart-86-Box** | Gehäuse-Variante mit Runddisplay | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) |
+
+> **Unterstützungsstand ehrlich benannt:** Der gepinnte Upstream enthält
+> Board-Definitionen für das **Touch-LCD-4B** und das **Audio-Board** — beide
+> laufen mit diesem Projekt. Für die **Smart-86-Box** gibt es im gepinnten
+> Stand **keine** Board-Definition. Sie ist hier als Hardware-Option genannt,
+> nicht als getestetes Zielgerät; ein eigener Board-Port wäre nötig.
+
 ## Was hier drin ist
 
 | Bestandteil | Datei(en) |
