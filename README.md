@@ -26,21 +26,35 @@ Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 
 ## Hardware
 
-Welche Geräte das System bilden und woher sie kommen. Alle drei sind fertige
-Waveshare-Platinen mit ESP32-S3 — kein Eigenbau nötig.
+Zwei Geräte bilden das System. Beide sind fertige Waveshare-Produkte mit
+ESP32-S3 — kein Eigenbau nötig, und für beide ist die Board-Definition im
+gepinnten Upstream enthalten.
 
-Beide Geräte laufen mit diesem Projekt — Board-Definitionen sind im gepinnten
-Upstream enthalten.
+### Hauptgerät: Waveshare ESP32-S3-Smart-86-Box (= Touch-LCD-4B)
 
-| Gerät | Rolle in diesem Projekt | Preis | Bezug |
-|---|---|---|---|
-| **Waveshare ESP32-S3-Smart-86-Box** — identisch mit **ESP32-S3-Touch-LCD-4B** (Board-Ziel `esp32-s3-touch-lcd-4b`) | Hauptgerät: 480×480 Pixel, quadratisches IPS-Touchdisplay, animiertes Gesicht, Mikrofon, Lautsprecher | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) · [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
-| **Waveshare ESP32-S3 AI Smart Speaker** — identisch mit **ESP32-S3-AUDIO-Board** (Board-Ziel `esp32-s3-audio-board`, SKU 32184/32185) | zweites Gerät: **kein Display**, 7 RGB-Ring-LEDs als Anzeige, Dual-Mikrofon | **unter 30 €** | [Amazon](https://link.amazon/B02n0BuFL) |
+<img src="docs/images/jarvis-4b-86box.jpg" alt="Waveshare ESP32-S3-Smart-86-Box mit quadratischem Display" width="420">
+
+Weiße Box mit **quadratischem 480×480-IPS-Touchdisplay**, Mikrofon,
+Lautsprecher. Board-Ziel: `esp32-s3-touch-lcd-4b`.
+
+**Preis:** unter 50 € · **Bezug:** [Amazon](https://link.amazon/B0a9foEMG) ·
+[Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm)
+
+### Zweites Gerät: Waveshare ESP32-S3 AI Smart Speaker (= Audio-Board)
+
+<img src="docs/images/jarvis-audio-board.jpg" alt="Waveshare ESP32-S3 AI Smart Speaker, zylindrisches Gehäuse ohne Display" width="260">
+
+Zylindrisches Gehäuse mit Acryl-Deckel, **kein Display** — die Rückmeldung
+übernehmen **7 RGB-Ring-LEDs**. Dual-Mikrofon, Lautsprecher.
+Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
+
+**Preis:** unter 30 € · **Bezug:** [Amazon](https://link.amazon/B02n0BuFL)
 
 > **Namensverwirrung vermeiden:** „Smart 86 Box" und „Touch-LCD-4B" bezeichnen
 > **dasselbe** Gerät — Waveshare selbst nennt es im Board-README „intelligent 86
 > box with a 480×480 IPS capacitive touch screen". „AI Smart Speaker" ist
-> dagegen die nackte Platine **ohne** Display (das Audio-Board).
+> dagegen die Platine **ohne** Display (das Audio-Board). Die runde Form des
+> Gehäuses hat nichts mit dem Display zu tun: das des 4B ist **quadratisch**.
 
 ## Was hier drin ist
 
