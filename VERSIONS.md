@@ -111,9 +111,9 @@ Firmware. Vollständige Anleitung: `docs/11-AUDIO-BOARD.md`.
 | Patch | `firmware/patches/jarvis-audio-board-ring.patch` |
 | Sprache / Wakeword | `de-DE` / `wn9_jarvis_tts` (wie 4B) |
 | Geräte-MAC | `90:70:69:eb:1e:b4` |
-| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 18 2026 02:41` (mit Lautstärke-Tasten) |
+| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 18 2026 03:44` (Tasten + Ring-Anzeige + angehobene Kennlinie) |
 | Veröffentlichter Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (App-Partition) |
-| Anker-SHA256 | `1ff558d40d3130987b5b0f44d5c773b23e23b77f786f362dad1d1ad6167ce86c` |
+| Anker-SHA256 | `ea1b4abf6fd1f610942acdcff497294d8c02d5458e640e04fd5d6299b8bce3b2` |
 
 Der Anker ist die **App-Partition** (2.830.576 B), nicht das Vollimage. Er enthält
 **keine** Zugangsdaten — WLAN-Name und -Passwort liegen ausschließlich in der NVS,

@@ -9,25 +9,25 @@
   "wake_word": "wn9_jarvis_tts",
   "build_options": {},
   "firmware_version": "2.5.0",
-  "firmware_source_revision": "4632dc51f0a5ad26e08542e131e6e48da41e4ff3-jarvis-volkeys",
+  "firmware_source_revision": "4632dc51f0a5ad26e08542e131e6e48da41e4ff3-jarvis-volring",
   "idf_version": "ESP-IDF v6.1",
   "runtime_architecture": "x86_64",
   "runtime_cpu_count": 8,
-  "started_at": "2026-10-18T00:38:41.233558+00:00",
+  "started_at": "2026-10-18T01:43:41.582218+00:00",
   "artifacts": [
     {
       "kind": "ota",
       "file": "xiaozhi.bin",
-      "size": 2831584,
-      "sha256": "1ff558d40d3130987b5b0f44d5c773b23e23b77f786f362dad1d1ad6167ce86c"
+      "size": 2832224,
+      "sha256": "ea1b4abf6fd1f610942acdcff497294d8c02d5458e640e04fd5d6299b8bce3b2"
     },
     {
       "kind": "full",
       "file": "merged-binary.bin",
       "size": 9603259,
-      "sha256": "2c780ec3d0b06eee00259d58ccd7185c95d3435adda680cf1f6854155533b761"
+      "sha256": "0c8ec68e66ea370f5f01c9e2c64acb5743db7cb5ece8796f67bb94b2eebd0f44"
     }
   ],
-  "finished_at": "2026-10-18T00:44:28.242035+00:00",
+  "finished_at": "2026-10-18T01:49:32.241820+00:00",
   "exit_code": 0
 }

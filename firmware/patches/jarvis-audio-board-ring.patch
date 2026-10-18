@@ -1,3 +1,37 @@
+diff --git a/main/audio/codecs/box_audio_codec.cc b/main/audio/codecs/box_audio_codec.cc
+index 5210ecb..4cfd371 100644
+--- a/main/audio/codecs/box_audio_codec.cc
++++ b/main/audio/codecs/box_audio_codec.cc
+@@ -62,6 +62,29 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
+     output_dev_ = esp_codec_dev_new(&dev_cfg);
+     assert(output_dev_ != NULL);
+ 
++    // Lautstaerke-Kennlinie anheben.
++    //
++    // Der Standard des Treibers bildet 0 % auf -50 dB und 100 % auf 0 dB ab.
++    // Der ES8311 kann aber bis +32 dB. Auf dieser Platine ist der kleine
++    // Lautsprecher damit selbst bei 95 % noch leise.
++    //
++    // Diese Kennlinie haelt den unteren Bereich unveraendert leise (leise
++    // stellen funktioniert weiter) und hebt nur die Obergrenze an: 100 %
++    // entspricht jetzt +20 dB statt 0 dB. Das sind rund 20 dB mehr Spitzen-
++    // pegel, ohne dass der Prozentwert seine Bedeutung verliert.
++    //
++    // Die Struktur wird vom Treiber kopiert, `static` ist trotzdem sauber,
++    // weil sie ueber die Laufzeit konstant bleibt.
++    static esp_codec_dev_vol_map_t volume_map[] = {
++        {.vol = 0, .db_value = -50.0f},
++        {.vol = 100, .db_value = 20.0f},
++    };
++    static esp_codec_dev_vol_curve_t volume_curve = {
++        .vol_map = volume_map,
++        .count = 2,
++    };
++    esp_codec_dev_set_vol_curve(output_dev_, &volume_curve);
++
+     // Input
+     i2c_cfg.addr = es7210_addr;
+     in_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/config.json b/main/boards/waveshare/esp32-s3-audio-board/config.json
 index 1e69597..18e71ae 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/config.json
@@ -17,7 +51,7 @@ index 1e69597..18e71ae 100644
 \ No newline at end of file
 +}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index e983fb4..25bd354 100644
+index e983fb4..aaf6d85 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -17,6 +17,7 @@
@@ -28,7 +62,7 @@ index e983fb4..25bd354 100644
  #include "esp_lcd_jd9853.h"
  
  #define TAG "waveshare_s3_audio_board"
-@@ -33,6 +34,38 @@ private:
+@@ -33,6 +34,46 @@ private:
      LcdDisplay* display_;
      EspVideo* camera_;
  
@@ -62,12 +96,20 @@ index e983fb4..25bd354 100644
 +        if (volume > 100) volume = 100;
 +        codec->SetOutputVolume(volume);
 +        ESP_LOGI(TAG, "Volume %s -> %d%%", delta > 0 ? "up" : "down", volume);
++
++        // Ohne Display ist der Ring die einzige Rueckmeldung: er zeigt den
++        // neuen Pegel kurz als farbigen Balken und faellt danach in den
++        // normalen Geraetezustand zurueck.
++        auto* ring = static_cast<JarvisRingLed*>(GetLed());
++        if (ring != nullptr) {
++            ring->ShowVolume(volume);
++        }
 +    }
 +
      void InitializeI2c() {
          // Initialize I2C peripheral
          i2c_master_bus_config_t i2c_bus_cfg = {
-@@ -153,6 +186,63 @@ private:
+@@ -153,6 +194,63 @@ private:
              }
              app.ToggleChatState();
          });
@@ -131,7 +173,7 @@ index e983fb4..25bd354 100644
      }
  
      void InitializeCamera() {
-@@ -212,7 +302,9 @@ public:
+@@ -212,7 +310,9 @@ public:
      }
  
      virtual Led* GetLed() override {
@@ -142,7 +184,7 @@ index e983fb4..25bd354 100644
          return &led;
      }
  
-@@ -236,4 +328,6 @@ public:
+@@ -236,4 +336,6 @@ public:
      }
  };
  
@@ -151,13 +193,15 @@ index e983fb4..25bd354 100644
  DECLARE_BOARD(CustomBoard);
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
 new file mode 100644
-index 0000000..f29e2cd
+index 0000000..8534030
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,138 @@
 +#include "jarvis_ring_led.h"
 +#include "application.h"
 +#include "device_state.h"
++
++#include <esp_timer.h>
 +
 +// Visuelle Zustandssprache des 7er-RGB-Rings.
 +//
@@ -251,12 +295,52 @@ index 0000000..f29e2cd
 +            break;
 +    }
 +}
++
++void JarvisRingLed::ShowVolume(int percent) {
++    if (percent < 0) percent = 0;
++    if (percent > 100) percent = 100;
++
++    // Farbe wandert mit der Lautstaerke: gruen (leise) -> gelb -> rot (laut).
++    uint8_t r, g;
++    if (percent <= 50) {
++        r = static_cast<uint8_t>(percent * 2 * HI / 100);
++        g = HI;
++    } else {
++        r = HI;
++        g = static_cast<uint8_t>((100 - percent) * 2 * HI / 100);
++    }
++
++    // Balken: 7 LEDs fuer 0..100 %. Aufrunden, damit schon 1 % eine LED zeigt.
++    const int filled = (percent * static_cast<int>(led_count_) + 99) / 100;
++
++    std::vector<StripColor> colors(led_count_);
++    for (uint16_t i = 0; i < led_count_; i++) {
++        colors[i] = (i < filled) ? PanelColor(r, g, 0) : PanelColor(0, 0, 0);
++    }
++    SetMultiColors(colors);
++
++    // Nach kurzer Anzeige zurueck in den Geraetezustand (blau/gruen/cyan).
++    if (restore_timer_ == nullptr) {
++        esp_timer_create_args_t args = {
++            .callback = [](void* arg) {
++                static_cast<JarvisRingLed*>(arg)->OnStateChanged();
++            },
++            .arg = this,
++            .dispatch_method = ESP_TIMER_TASK,
++            .name = "ring_volume_restore",
++            .skip_unhandled_events = true,
++        };
++        esp_timer_create(&args, &restore_timer_);
++    }
++    esp_timer_stop(restore_timer_);
++    esp_timer_start_once(restore_timer_, 1400 * 1000);
++}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
 new file mode 100644
-index 0000000..d4850b7
+index 0000000..77a8c83
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,37 @@
 +#ifndef _JARVIS_RING_LED_H_
 +#define _JARVIS_RING_LED_H_
 +
@@ -271,13 +355,26 @@ index 0000000..d4850b7
 +class JarvisRingLed : public CircularStrip {
 +public:
 +    explicit JarvisRingLed(gpio_num_t gpio, uint16_t max_leds)
-+        : CircularStrip(gpio, max_leds) {
++        : CircularStrip(gpio, max_leds), led_count_(max_leds) {
 +        // Helligkeit genau EINMAL setzen: SetBrightness() ruft seinerseits
 +        // OnStateChanged(); ein Aufruf darin waere eine Endlos-Rekursion.
 +        SetBrightness(96, 6);
 +    }
 +
 +    void OnStateChanged() override;
++
++    /// Zeigt die Lautstaerke kurz als Balken im Ring an.
++    ///
++    /// Die sieben LEDs fuellen sich von 0 bis 100 % auf; die Farbe wandert
++    /// dabei von gruen (leise) ueber gelb nach rot (laut). Nach einer kurzen
++    /// Anzeigedauer kehrt der Ring selbsttaetig in den Gerätezustand zurueck.
++    ///
++    /// Das ist die einzige Rueckmeldung, die dieses Board ohne Display hat.
++    void ShowVolume(int percent);
++
++private:
++    const uint16_t led_count_;
++    esp_timer_handle_t restore_timer_ = nullptr;
 +};
 +
 +#endif // _JARVIS_RING_LED_H_

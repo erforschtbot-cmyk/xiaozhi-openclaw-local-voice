@@ -171,7 +171,7 @@ Deshalb liest sie ein eigener Treiber (`iot_button` mit eigener
 das Upstream-Board `df-k10`.
 
 Die Lautstärke wird in 10-%-Schritten verändert und auf 0…100 % begrenzt.
-Rückmeldung: akustisch (das Board hat kein Display) und im seriellen Log:
+Jeder Druck wird im seriellen Log protokolliert:
 
 ```text
 waveshare_s3_audio_board: Volume up -> 80%
@@ -186,6 +186,55 @@ waveshare_s3_audio_board: K3 volume-down ready
 
 Quelle der Pin-Zuordnung: Waveshare-Pinout und Schaltplan
 (`ESP32-S3-AUDIO-Board_1.1.pdf`, Abschnitt „Key").
+
+Die Tasten funktionieren in **jedem** Gerätezustand — `ChangeVolume()` prüft
+den Zustand nicht, und der `iot_button`-Treiber pollt unabhängig von der
+Gesprächslogik. Der Wert wird in der NVS (`audio` / `output_volume`) gespeichert
+und überlebt einen Neustart.
+
+## Lautstärke-Anzeige im Ring
+
+Weil das Board kein Display hat, zeigt der Ring den Pegel selbst: `ShowVolume()`
+füllt die **sieben LEDs einzeln** als Balken und färbt ihn nach Höhe.
+
+| Pegel | LEDs | Farbe |
+|---|---|---|
+| 1–25 % | 1–2 | grün |
+| ~30–70 % | 3–5 | gelb (Übergang) |
+| 75–100 % | 6–7 | rot |
+
+Nach **1,4 Sekunden** kehrt der Ring automatisch in den normalen Gerätezustand
+zurück (blau atmend = Bereitschaft, grün laufend = Zuhören, cyan atmend =
+Sprechen). So bleibt die Zustandssprache erhalten, der Balken ist nur eine
+kurze Rückmeldung.
+
+Technisch: `CircularStrip::SetMultiColors()` setzt alle LEDs in einem Zug; ein
+`esp_timer` mit einmaliger Laufzeit stellt danach über `OnStateChanged()` den
+Gerätezustand wieder her.
+
+## Lautstärke-Kennlinie (warum das Board zu leise war)
+
+Der Standard des Treibers bildet **100 % auf 0 dB** ab — der ES8311 kann aber
+bis **+32 dB**. Mit dem kleinen Lautsprecher dieser Platine war deshalb selbst
+95 % noch leise.
+
+Diese Firmware setzt in `box_audio_codec.cc` eine eigene Kennlinie:
+
+| Prozent | Standard-Treiber | **diese Firmware** |
+|---|---|---|
+| 0 % | −50 dB | −50 dB |
+| 50 % | −25 dB | −15 dB |
+| 70 % | −15 dB | −1 dB |
+| 100 % | 0 dB | **+20 dB** |
+
+Der untere Bereich bleibt unverändert (leise stellen funktioniert weiter), nur
+die Obergrenze steigt — rund **20 dB mehr Spitzenpegel** bei gleichem
+Prozentwert.
+
+Das erklärt auch ein beobachtetes Verhalten: stand der Wert schon auf 95 %,
+brachte „lauter" nur noch 5 Punkte (≈2,5 dB, kaum hörbar), während „leiser"
+95 Punkte Spielraum hatte. Mit einem Startwert von 70 % ist in beide
+Richtungen Luft.
 
 ## Was das Board **nicht** hat
 
