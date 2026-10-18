@@ -17,7 +17,7 @@ index 1e69597..18e71ae 100644
 \ No newline at end of file
 +}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index e983fb4..20be383 100644
+index e983fb4..25bd354 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -17,6 +17,7 @@
@@ -28,7 +28,110 @@ index e983fb4..20be383 100644
  #include "esp_lcd_jd9853.h"
  
  #define TAG "waveshare_s3_audio_board"
-@@ -212,7 +213,9 @@ public:
+@@ -33,6 +34,38 @@ private:
+     LcdDisplay* display_;
+     EspVideo* camera_;
+ 
++    // K1/K2/K3 haengen nicht am ESP, sondern am TCA9555-Expander
++    // (EXIO9/EXIO10/EXIO11 laut Waveshare-Pinout und Schaltplan). Sie werden
++    // deshalb ueber einen eigenen Treiber gelesen, nicht ueber GPIO.
++    static CustomBoard* instance_;
++    button_handle_t key1_handle_ = nullptr;
++    button_handle_t key3_handle_ = nullptr;
++
++    /// Liest einen Expander-Eingang. Die Taster sind aktiv low.
++    uint8_t IoExpanderKeyLevel(uint16_t pin_mask) {
++        if (io_expander == nullptr) {
++            return 0;
++        }
++        uint32_t level = 0;
++        if (esp_io_expander_get_level(io_expander, pin_mask, &level) != ESP_OK) {
++            return 0;
++        }
++        return (level & pin_mask) ? 0 : 1;
++    }
++
++    /// Lautstaerke um 10 Prozentpunkte aendern.
++    void ChangeVolume(int delta) {
++        auto codec = GetAudioCodec();
++        if (codec == nullptr) {
++            return;
++        }
++        int volume = codec->output_volume() + delta;
++        if (volume < 0) volume = 0;
++        if (volume > 100) volume = 100;
++        codec->SetOutputVolume(volume);
++        ESP_LOGI(TAG, "Volume %s -> %d%%", delta > 0 ? "up" : "down", volume);
++    }
++
+     void InitializeI2c() {
+         // Initialize I2C peripheral
+         i2c_master_bus_config_t i2c_bus_cfg = {
+@@ -153,6 +186,63 @@ private:
+             }
+             app.ToggleChatState();
+         });
++
++        InitializeVolumeKeys();
++    }
++
++    /// K1 = lauter, K3 = leiser (kurz druecken).
++    ///
++    /// K2 bleibt absichtlich frei: im Waveshare-Demo steuert diese Taste die
++    /// MP3-Wiedergabe, die es in dieser Firmware nicht gibt. Eine Taste mit
++    /// fremder Bedeutung zu belegen waere verwirrender als sie leer zu lassen.
++    void InitializeVolumeKeys() {
++        if (io_expander == nullptr) {
++            ESP_LOGW(TAG, "No IO expander; K1/K3 volume keys unavailable");
++            return;
++        }
++
++        const uint32_t key_mask =
++            IO_EXPANDER_PIN_NUM_9 | IO_EXPANDER_PIN_NUM_10 | IO_EXPANDER_PIN_NUM_11;
++        esp_err_t ret = esp_io_expander_set_dir(io_expander, key_mask, IO_EXPANDER_INPUT);
++        if (ret != ESP_OK) {
++            ESP_LOGE(TAG, "K1/K2/K3 as input failed: %s", esp_err_to_name(ret));
++            return;
++        }
++
++        instance_ = this;
++
++        static button_config_t cfg = {
++            .long_press_time = 1000,
++            .short_press_time = 0,
++        };
++
++        // K1 = lauter
++        auto* k1_driver = static_cast<button_driver_t*>(calloc(1, sizeof(button_driver_t)));
++        if (k1_driver != nullptr) {
++            k1_driver->enable_power_save = false;
++            k1_driver->get_key_level = [](button_driver_t*) -> uint8_t {
++                return instance_->IoExpanderKeyLevel(IO_EXPANDER_PIN_NUM_9);
++            };
++            if (iot_button_create(&cfg, k1_driver, &key1_handle_) == ESP_OK) {
++                iot_button_register_cb(key1_handle_, BUTTON_SINGLE_CLICK, nullptr,
++                    [](void*, void*) { instance_->ChangeVolume(+10); }, nullptr);
++                ESP_LOGI(TAG, "K1 volume-up ready");
++            }
++        }
++
++        // K3 = leiser
++        auto* k3_driver = static_cast<button_driver_t*>(calloc(1, sizeof(button_driver_t)));
++        if (k3_driver != nullptr) {
++            k3_driver->enable_power_save = false;
++            k3_driver->get_key_level = [](button_driver_t*) -> uint8_t {
++                return instance_->IoExpanderKeyLevel(IO_EXPANDER_PIN_NUM_11);
++            };
++            if (iot_button_create(&cfg, k3_driver, &key3_handle_) == ESP_OK) {
++                iot_button_register_cb(key3_handle_, BUTTON_SINGLE_CLICK, nullptr,
++                    [](void*, void*) { instance_->ChangeVolume(-10); }, nullptr);
++                ESP_LOGI(TAG, "K3 volume-down ready");
++            }
++        }
+     }
+ 
+     void InitializeCamera() {
+@@ -212,7 +302,9 @@ public:
      }
  
      virtual Led* GetLed() override {
@@ -39,6 +142,13 @@ index e983fb4..20be383 100644
          return &led;
      }
  
+@@ -236,4 +328,6 @@ public:
+     }
+ };
+ 
++CustomBoard* CustomBoard::instance_ = nullptr;
++
+ DECLARE_BOARD(CustomBoard);
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
 new file mode 100644
 index 0000000..f29e2cd

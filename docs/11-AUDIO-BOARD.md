@@ -153,6 +153,40 @@ Code-Konstanten (WLAN-Fehlermeldungen, JSON-Schlüssel, die Einrichtungs-Webseit
 `-----BEGIN … PRIVATE KEY-----` sind OpenSSL-Stringtabellen aus dem TLS-Stack,
 keine eingebetteten Schlüssel.
 
+## Tasten am Gerät
+
+Die nackte Platine hat fünf Taster. Zwei davon steuern jetzt die Lautstärke.
+
+| Taste | Anschluss | Funktion in dieser Firmware |
+|---|---|---|
+| **K1** | TCA9555 **EXIO9** | **lauter** (+10 % pro Druck) |
+| **K2** | TCA9555 **EXIO10** | frei (im Waveshare-Demo: MP3-Wiedergabe, hier nicht vorhanden) |
+| **K3** | TCA9555 **EXIO11** | **leiser** (−10 % pro Druck) |
+| BOOT | GPIO0 | Gespräch umschalten; beim Start: WLAN-Einrichtung |
+| RESET | CHIP_PU | Neustart |
+
+Die drei Tasten hängen **nicht** am ESP32, sondern am I/O-Expander TCA9555.
+Deshalb liest sie ein eigener Treiber (`iot_button` mit eigener
+`get_key_level`-Funktion) statt der GPIO-Variante — dasselbe Verfahren nutzt
+das Upstream-Board `df-k10`.
+
+Die Lautstärke wird in 10-%-Schritten verändert und auf 0…100 % begrenzt.
+Rückmeldung: akustisch (das Board hat kein Display) und im seriellen Log:
+
+```text
+waveshare_s3_audio_board: Volume up -> 80%
+```
+
+Beim Start meldet die Firmware, ob die Tasten bereit sind:
+
+```text
+waveshare_s3_audio_board: K1 volume-up ready
+waveshare_s3_audio_board: K3 volume-down ready
+```
+
+Quelle der Pin-Zuordnung: Waveshare-Pinout und Schaltplan
+(`ESP32-S3-AUDIO-Board_1.1.pdf`, Abschnitt „Key").
+
 ## Was das Board **nicht** hat
 
 Dem Board-Image fehlen zwei Eingriffe, die das 4B-Image mitbringt:
@@ -185,8 +219,8 @@ Patches. Wer diese Eingriffe auch auf dem Board will, muss sie aus
 Board   : waveshare/esp32-s3-audio-board  (de-DE, wn9_jarvis_tts)
 IDF     : ESP-IDF v6.1  (espressif/idf:v6.1)
 Status  : exit 0
-xiaozhi.bin        sha256 0336d2f036e03128710c2185115af92a537db28b86c34496330be360066da231
-merged-binary.bin  sha256 e77eede940f52c37daee7175893e0382938ad5034d6bd245298e1610d547ff56
+xiaozhi.bin        sha256 1ff558d40d3130987b5b0f44d5c773b23e23b77f786f362dad1d1ad6167ce86c
+merged-binary.bin  sha256 2c780ec3d0b06eee00259d58ccd7185c95d3435adda680cf1f6854155533b761
 Backup vorher     : vollständiges 16-MB-Image des Geräts
 ```
 
