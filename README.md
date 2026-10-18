@@ -29,17 +29,18 @@ Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 Welche Geräte das System bilden und woher sie kommen. Alle drei sind fertige
 Waveshare-Platinen mit ESP32-S3 — kein Eigenbau nötig.
 
+Beide Geräte laufen mit diesem Projekt — Board-Definitionen sind im gepinnten
+Upstream enthalten.
+
 | Gerät | Rolle in diesem Projekt | Preis | Bezug |
 |---|---|---|---|
-| **Waveshare ESP32-S3-Touch-LCD-4B** | Hauptgerät mit Display und animiertem Gesicht | — | [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
-| **Waveshare ESP32-S3 AI Smart Speaker** (SKU 32184/32185, „ESP32-S3-AUDIO-Board") | zweites Gerät, **kein Display** — 7 RGB-Ring-LEDs als Anzeige | **unter 30 €** | [Amazon](https://link.amazon/B02n0BuFL) |
-| **Waveshare ESP32-S3-Smart-86-Box** | Gehäuse-Variante mit Runddisplay | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) |
+| **Waveshare ESP32-S3-Smart-86-Box** — identisch mit **ESP32-S3-Touch-LCD-4B** (Board-Ziel `esp32-s3-touch-lcd-4b`) | Hauptgerät: 480×480-IPS-Touchdisplay, animiertes Gesicht, Mikrofon, Lautsprecher | **unter 50 €** | [Amazon](https://link.amazon/B0a9foEMG) · [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm) |
+| **Waveshare ESP32-S3 AI Smart Speaker** — identisch mit **ESP32-S3-AUDIO-Board** (Board-Ziel `esp32-s3-audio-board`, SKU 32184/32185) | zweites Gerät: **kein Display**, 7 RGB-Ring-LEDs als Anzeige, Dual-Mikrofon | **unter 30 €** | [Amazon](https://link.amazon/B02n0BuFL) |
 
-> **Unterstützungsstand ehrlich benannt:** Der gepinnte Upstream enthält
-> Board-Definitionen für das **Touch-LCD-4B** und das **Audio-Board** — beide
-> laufen mit diesem Projekt. Für die **Smart-86-Box** gibt es im gepinnten
-> Stand **keine** Board-Definition. Sie ist hier als Hardware-Option genannt,
-> nicht als getestetes Zielgerät; ein eigener Board-Port wäre nötig.
+> **Namensverwirrung vermeiden:** „Smart 86 Box" und „Touch-LCD-4B" bezeichnen
+> **dasselbe** Gerät — Waveshare selbst nennt es im Board-README „intelligent 86
+> box with a 480×480 IPS capacitive touch screen". „AI Smart Speaker" ist
+> dagegen die nackte Platine **ohne** Display (das Audio-Board).
 
 ## Was hier drin ist
 
