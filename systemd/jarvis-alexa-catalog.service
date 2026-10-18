@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Jarvis safe Alexa device catalog (read-only)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /home/openclaw/.local/share/jarvis-realtime-bridge/refresh-alexa-catalog.mjs
+TimeoutStartSec=120
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/openclaw/.local/share/jarvis-realtime-bridge

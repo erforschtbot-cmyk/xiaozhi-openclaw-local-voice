@@ -643,6 +643,10 @@ class XiaozhiSession:
                         await self.send_json({"type": "tts", "state": "stop"})
                     except Exception:
                         pass
+                    # Stop stale provider output and force an idle transition.
+                    # A timed-out round must not keep the microphone blocked.
+                    self.input_stopped = True
+                    self.websocket.transport.abort()
                     return
 
         self.speaking_guard = asyncio.create_task(guard())
@@ -1012,6 +1016,9 @@ class XiaozhiSession:
                     # now may provider audio be forwarded again; until here,
                     # trailing frames from the previous response stay dropped.
                     self.stream_end_sent = False
+                    # Re-arm per utterance even when provider audio preceded
+                    # the final transcript and the previous guard already exited.
+                    self.arm_speaking_guard()
                     print(f"{self.tag} User transcript: {transcript}", flush=True)
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)

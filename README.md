@@ -70,6 +70,11 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Bridge-Skript 2 (Node, lokale Erkennung + Piper) | `gateway/local-voice.mjs` |
 | Lokale Erkennung (Wyoming-STT) | `gateway/local_stt.mjs` |
 | Lokale Stimme (Piper) | `gateway/piper_speaker.py` |
+| **Schnellweg für einfache Schaltbefehle** (Gateway-Weiche, ohne KI-Lauf) | `gateway/smart-home-router.mjs`, `docs/12-SMART-HOME-SCHNELLWEG.md` |
+| Alexa-Geräteliste für den Schnellweg (taeglich erneuert) | `gateway/refresh-alexa-catalog.mjs`, `systemd/jarvis-alexa-catalog.timer` |
+| Tests des Schnellwegs (41 Faelle, kein Geraetezugriff) | `gateway/test-smart-home-router.mjs` |
+| OpenClaw-`dist`-Patch der Weiche (nach jedem Update erneut anwenden) | `scripts/apply-jarvis-smart-home-router.py` |
+| Pruefung der Weiche | `scripts/verify-jarvis-smart-home-router.py` |
 | systemd-Userdienst | `systemd/` |
 | Bau-/Flash-/Installationsskripte | `scripts/` |
 | Prüfsummen | `CHECKSUMS.sha256` |

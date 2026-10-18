@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Jarvis Alexa names daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=300
+Unit=jarvis-alexa-catalog.service
+
+[Install]
+WantedBy=timers.target
