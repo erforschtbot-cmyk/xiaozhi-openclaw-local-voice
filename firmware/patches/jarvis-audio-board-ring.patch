@@ -1,3 +1,70 @@
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..a016c59 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -210,11 +210,23 @@ void Application::Run() {
+ 
+         if (bits & MAIN_EVENT_STATE_CHANGED) {
+             HandleStateChangedEvent();
++            if (protocol_ && protocol_->IsAudioChannelOpened()) {
++                protocol_->SendDeviceState(DeviceStateMachine::GetStateName(GetDeviceState()));
++            }
+         }
+ 
+         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
+             if (audio_service_.IsPlaybackIdle()) {
+                 notify_player_.OnPlaybackDrained();
++                // Das physische Ende der Wiedergabe an den Server melden.
++                // Ohne diese Nachricht kann die Bridge nur die Spieldauer
++                // schaetzen und wartet danach unnoetig, bevor sie wieder
++                // zuhoert (beobachtet: ~10 s Verzoegerung bis "Zuhoeren").
++                if (tts_stream_end_pending_ &&
++                    GetDeviceState() == kDeviceStateSpeaking && protocol_) {
++                    tts_stream_end_pending_ = false;
++                    protocol_->SendPlaybackDrained();
++                }
+             }
+             // Deferred listening start (auto mode): the playback queue has
+             // drained, so it is now safe to enable voice processing.
+@@ -626,8 +638,23 @@ void Application::InitializeProtocol() {
+                     aborted_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
++            } else if (strcmp(state->valuestring, "stream_end") == 0) {
++                // Der Server hat den Text fertig gesprochen. Ist die
++                // Warteschlange schon leer, melden wir das sofort; sonst
++                // warten wir auf MAIN_EVENT_PLAYBACK_DRAINED.
++                Schedule([this]() {
++                    if (GetDeviceState() != kDeviceStateSpeaking || !protocol_) {
++                        return;
++                    }
++                    if (audio_service_.IsPlaybackIdle()) {
++                        protocol_->SendPlaybackDrained();
++                    } else {
++                        tts_stream_end_pending_ = true;
++                    }
++                });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 Schedule([this]() {
++                    tts_stream_end_pending_ = false;
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+                             SetDeviceState(kDeviceStateIdle);
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..4b18ba6 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -151,6 +151,10 @@ private:
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
++    // Der Server hat "stream_end" gemeldet, aber es liegt noch Audio in der
++    // Warteschlange. Sobald die Wiedergabe physisch leer ist, wird
++    // "playback_drained" an den Server gemeldet.
++    bool tts_stream_end_pending_ = false;
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
+ 
 diff --git a/main/audio/codecs/box_audio_codec.cc b/main/audio/codecs/box_audio_codec.cc
 index 5210ecb..4cfd371 100644
 --- a/main/audio/codecs/box_audio_codec.cc
@@ -378,3 +445,44 @@ index 0000000..77a8c83
 +};
 +
 +#endif // _JARVIS_RING_LED_H_
+diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
+index ac591b5..7d562a2 100644
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -105,6 +105,19 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+     SendText(message);
+ }
+ 
++void Protocol::SendPlaybackDrained() {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"playback_drained\"}";
++    SendText(message);
++}
++
++void Protocol::SendDeviceState(const std::string& state) {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"state\",\"state\":\"" +
++                          state + "\"}";
++    SendText(message);
++}
++
+ bool Protocol::IsTimeout() const {
+     const int kTimeoutSeconds = 120;
+     auto now = std::chrono::steady_clock::now();
+diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
+index cfa0dd2..fba25f4 100644
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -66,6 +66,12 @@ public:
+     virtual void SendStopListening();
+     virtual void SendAbortSpeaking(AbortReason reason);
+     virtual void SendMcpMessage(const std::string& message);
++    // Meldet der Bridge das physische Ende der Wiedergabe. Ohne diese Meldung
++    // kann die Gegenstelle nur die Spieldauer schaetzen und wartet danach
++    // unnoetig, bevor sie wieder zuhoert.
++    virtual void SendPlaybackDrained();
++    // Meldet einen Zustandswechsel (z. B. listening/speaking/idle).
++    virtual void SendDeviceState(const std::string& state);
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;

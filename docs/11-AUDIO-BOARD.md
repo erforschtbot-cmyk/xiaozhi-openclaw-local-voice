@@ -236,19 +236,39 @@ brachte „lauter" nur noch 5 Punkte (≈2,5 dB, kaum hörbar), während „leis
 95 Punkte Spielraum hatte. Mit einem Startwert von 70 % ist in beide
 Richtungen Luft.
 
-## Was das Board **nicht** hat
+## Meldung des Wiedergabe-Endes (`playback_drained`)
 
-Dem Board-Image fehlen zwei Eingriffe, die das 4B-Image mitbringt:
+Das Board meldet der Bridge jetzt selbst, wann der letzte Ton physisch durch ist.
+Das ist der Grund, warum der Ring nach einer Antwort **sofort** wieder auf grün
+(Zuhören) springt.
 
-1. **`playback_drained` / Zustandsmeldungen.** Das Board meldet das physische
-   Ende der Wiedergabe **nicht** an die Bridge. Die Bridge fängt das mit einem
-   Zeitgeber ab: sie öffnet das Nachhör-Fenster nach der geschätzten
-   Wiedergabedauer selbst.
-2. **Der Wiederherstellungs-Watchdog** aus dem großen Patch.
+Früher fehlte diese Meldung: Die Bridge konnte die Sprechdauer nur aus der
+Bytezahl schätzen (48 000 B/s bei 24 kHz, 16 Bit, mono) und wartete danach
+unnötig — im Log sichtbar als
+`No playback_drained from device; opening follow-up window anyway (waited 9.7s)`.
+Bei einem Witz waren das ~10 Sekunden Verzögerung bis „Zuhören".
 
-Beides ist **kein** Fehler des Boards, sondern schlicht nicht Teil dieses
-Patches. Wer diese Eingriffe auch auf dem Board will, muss sie aus
-`firmware/patches/xiaozhi-esp32-openclaw.patch` übernehmen und neu bauen.
+Der Patch ergänzt dafür drei Dinge:
+
+| Datei | Ergänzung |
+|---|---|
+| `main/protocols/protocol.{h,cc}` | `SendPlaybackDrained()`, `SendDeviceState()` |
+| `main/application.h` | Merker `tts_stream_end_pending_` |
+| `main/application.cc` | `stream_end`-Behandler; Meldung bei `MAIN_EVENT_PLAYBACK_DRAINED`; Zustandsmeldung bei jedem Zustandswechsel |
+
+Ablauf: Der Server sendet `tts stream_end`. Ist die Warteschlange schon leer,
+geht `playback_drained` sofort raus; sonst wird der Merker gesetzt und die
+Meldung folgt, sobald das Audio wirklich abgespielt ist.
+
+Der Zeitgeber in der Bridge bleibt als Sicherheitsnetz bestehen (für Geräte ohne
+diese Meldung), greift aber bei diesem Image nicht mehr.
+
+## Was das Board weiterhin **nicht** hat
+
+Der **Wiederherstellungs-Watchdog** aus dem großen 4B-Patch
+(`firmware/patches/xiaozhi-esp32-openclaw.patch`) ist hier nicht enthalten. Er
+ist auch nicht nötig: Die Bridge schließt eine hängende Sprachausgabe nach 45
+Sekunden ohne neue Audiodaten selbst.
 
 ## Bekannte Fallstricke
 
