@@ -1,9 +1,12 @@
 # 1. Host installieren
 
+> Zuerst `00-START-HIER.md`: diese Anleitung setzt bereits eingerichtetes TLS,
+> Token, Provider und ein funktionierendes Talk-/Consult-Ziel voraus; sie ist kein kompletter Bootstrap.
+
 ## Voraussetzungen
 
 - Linux mit systemd-Userdiensten
-- OpenClaw `2026.9.6`
+- OpenClaw `2026.10.4`
 - Node.js und npm
 - Python 3 mit `venv` (Referenzhost: `3.14.7`)
 - `libopus`
@@ -29,7 +32,7 @@ sudo apt install -y nodejs npm python3 python3-venv libopus0 docker.io git
 OpenClaw installieren und anmelden:
 
 ```bash
-npm install -g openclaw@2026.9.6
+npm install -g openclaw@2026.10.4
 openclaw --version
 openclaw models auth login --provider openai
 openclaw gateway status
@@ -43,8 +46,8 @@ kopieren und keine Tokens ins Repository schreiben.
 Repository klonen und den tatsächlich im LAN erreichbaren Host angeben:
 
 ```bash
-git clone git@github.com:erforschtbot-cmyk/xiaozhi-openclaw-voice-terminal.git
-cd xiaozhi-openclaw-voice-terminal
+git clone git@github.com:erforschtbot-cmyk/xiaozhi-openclaw-local-voice.git
+cd xiaozhi-openclaw-local-voice
 ./scripts/install-host.sh --public-host 192.168.178.143
 ```
 

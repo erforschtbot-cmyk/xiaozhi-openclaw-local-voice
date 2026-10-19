@@ -1,0 +1,157 @@
+--- a/dist/handlers-De0Uc7cE.mjs
++++ b/dist/handlers-De0Uc7cE.mjs
+@@ -68,6 +68,7 @@
+ import { t as inferSpeechMimeType } from "./speech-mime-8luU_Lj5.mjs";
+ import { randomBytes, randomUUID } from "node:crypto";
+ import { Buffer as Buffer$1 } from "node:buffer";
++import { voiceTurnStorage as jarvisTurnStorage, readVoiceBinding as jarvisReadBinding } from "file:///home/openclaw/.local/share/jarvis-realtime-bridge/voice-turn-context.mjs";
+ //#region src/gateway/talk/session-config.ts
+ function normalizeTalkSessionMode(params) {
+ 	return normalizeOptionalLowercaseString(params.mode) ?? (normalizeOptionalLowercaseString(params.transport) === "managed-room" ? "stt-tts" : "realtime");
+@@ -1206,7 +1207,17 @@
+ 			if (promptOwner !== owner || !identity || identity.runId !== instance.runId || owner.isCurrent?.(identity.sessionId) !== true || owner.completionClaim?.bindOperationalRunInstance(instance) !== true) throw new Error("The active Talk consult admission is no longer current");
+ 		}
+ 	});
+-	const runArgs = async (args, signal, owner, ready, assertCurrent, source = "tool-call") => {
++	const runArgs = async (...args) => {
++		// Never delay the consult: the delegation has a short deadline.
++		// A missing turn only disables the direct route, not the agent.
++		let turn = params.getJarvisTurn?.();
++		if (!turn) {
++			const binding = jarvisReadBinding(params.getVoiceSessionId(), canonicalKey);
++			if (binding) turn = Object.freeze({ ...binding, observedAt: Date.now() });
++		}
++		return jarvisTurnStorage.run(turn, () => runArgsImpl(...args));
++	};
++	const runArgsImpl = async (args, signal, owner, ready, assertCurrent, source = "tool-call") => {
+ 		const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
+ 		const voiceSessionId = params.getVoiceSessionId();
+ 		if (!voiceSessionId) throw new Error("Realtime browser voice session is not ready for agent consult");
+@@ -1219,6 +1230,35 @@
+ 			sessionKey,
+ 			voiceSessionId
+ 		});
++		// jarvis-safe-router-v1: single execution owner. The old bridge fast path
++		// stays disabled. Only exact, complete native transcripts can bypass the
++		// LLM; complex requests take the unchanged consult path in their entirety.
++		if (/^agent:voice:xiaozhi-realtime-v\d+$/.test(canonicalKey)) {
++			params.context.logGateway.info(`[jarvis-route-entry] source=${source} voice=${voiceSessionId} turn=${jarvisTurnStorage.getStore()?.turnId ?? "missing"}`);
++			let jarvisRouter;
++			try {
++				jarvisRouter = await import("file:///home/openclaw/.local/share/jarvis-realtime-bridge/scoped-smart-home-router.mjs");
++			} catch (error) {
++				params.context.logGateway.warn("Jarvis direct router unavailable; using normal agent consult");
++			}
++			if (jarvisRouter) {
++				assertCurrent?.();
++				const directResult = await jarvisRouter.routeSmartHome({ sessionKey: canonicalKey, source, voiceSessionId, question: parsedArgs.question, signal, turn: jarvisTurnStorage.getStore() });
++				if (directResult) {
++					// jarvis-direct-completion-v2: no agent run exists on this path.
++					// Bind its one-shot completion to the same live voice owner instead.
++					if (owner) {
++						owner.directResultReady = true;
++						owner.isCurrent = () => promptOwner === owner &&
++							owner.requestSignal?.aborted !== true &&
++							isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
++							params.getVoiceSessionId() === voiceSessionId;
++						owner.resolveRegistration(void 0);
++					}
++					return directResult;
++				}
++			}
++		}
+ 		const confirmationGrant = parsedArgs.confirmationId ? authorizeClientVoiceConfirmation({
+ 			agentId,
+ 			voiceSessionId,
+@@ -1357,7 +1397,10 @@
+ 		const owner = promptOwner;
+ 		if (!owner) return false;
+ 		const current = isOwnerCurrent(owner);
+-		const completed = owner.completionClaim?.claimCompletion() === true;
++		const completed = owner.directResultReady === true
++			? current
++			: owner.completionClaim?.claimCompletion() === true;
++		owner.directResultReady = false;
+ 		clearRequesterFinalRegistration(owner, current && completed ? "release" : "revoke");
+ 		clearOwner(owner);
+ 		return current && completed;
+@@ -1927,6 +1970,8 @@
+ 		const turnId = ensureRelayTurn(session);
+ 		const callId = handle.id;
+ 		const itemId = `forced-consult-item-${randomUUID()}`;
++		// voice-persist-split-v4: the consult owns the assistant transcript.
++		session.assistantOwnedByConsult = true;
+ 		session.harness.forcedConsults.markStarted(handle);
+ 		session.harness.handleBargeIn({
+ 			audioPlaybackActive: true,
+@@ -2863,7 +2908,9 @@
+ 			await getActiveRelay()?.voiceTranscriptQueue.flush();
+ 		}
+ 	});
++	let jarvisObservedTurn;
+ 	const consultRunner = createTalkClientAgentConsultRunner({
++		getJarvisTurn: () => jarvisObservedTurn,
+ 		config: params.cfg ?? params.context.getRuntimeConfig(),
+ 		context: params.context,
+ 		sessionTarget: params.sessionTarget,
+@@ -2924,9 +2971,12 @@
+ 		...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {
+ 			const relay = getActiveRelay();
+ 			if (!relay) return "control";
+-			return runControl.handleDelegationInput(text, (message) => {
++			const outcome = runControl.handleDelegationInput(text, (message) => {
+ 				if (getActiveRelay() === relay) respond(message);
+ 			});
++			// voice-persist-split-v4: provider-direct has no visible consult tool call.
++			if (outcome !== "control") relay.assistantOwnedByConsult = true;
++			return outcome;
+ 		} } : {},
+ 		markStrategy: "transport",
+ 		audioSink: {
+@@ -3050,10 +3100,28 @@
+ 		onTranscript: (role, text, final, metadata) => {
+ 			const relay = getActiveRelay() ?? (relayRef.current?.closing ? relayRef.current : void 0);
+ 			if (!relay || relay.voiceSessionClose) return;
++			if (role === "user") {
++				// Partial input invalidates the previous turn; only finalized text can act.
++				jarvisObservedTurn = final && text.trim() ? Object.freeze({
++					...jarvisReadBinding(relaySessionId, canonicalKey),
++					voiceSessionId: relaySessionId, sessionKey: canonicalKey,
++					turnId: randomUUID(), utterance: text.trim(), observedAt: Date.now()
++				}) : void 0;
++			}
+ 			if (role === "assistant" && outputOwnership.suppressingOutput) return;
+ 			if (!relay.closing && role === "user" && !final) confirmationReadiness.observeUserTranscript(text, false);
+ 			const previousTranscriptSeq = relay.voiceTranscriptSeq;
+-			if (final && !enqueueRelayVoiceTranscript(relay, role, text)) return;
++			if (final) {
++				if (role === "user" && pruneInactiveRelayAgentRuns(relay) === 0) relay.assistantOwnedByConsult = false;
++				if (role === "assistant") {
++					const spoken = String(text ?? "").trim();
++					const interimAck = /^(i['\u2019]?ll check that request\.?|ich pr\u00fcfe das( kurz)?\.?|einen moment( bitte)?\.?)$/i.test(spoken);
++					const consultOwns = relay.assistantOwnedByConsult || pruneInactiveRelayAgentRuns(relay) > 0;
++					if (!interimAck && relay.assistantOwnedByConsult) relay.assistantOwnedByConsult = false;
++					// This gate controls persistence only. The event must still reach the device.
++					if (!interimAck && !consultOwns && !enqueueRelayVoiceTranscript(relay, role, text)) return;
++				} else if (!enqueueRelayVoiceTranscript(relay, role, text)) return;
++			}
+ 			const transcriptIdentity = relay.voiceTranscriptSeq > previousTranscriptSeq ? { transcriptId: voiceTranscriptEventId(relay.id, String(relay.voiceTranscriptSeq)) } : {};
+ 			const transcriptEvent = {
+ 				relaySessionId,
+@@ -3097,6 +3165,7 @@
+ 			if (!relayCallId) return;
+ 			let shouldSubmitWorkingResult = false;
+ 			if (toolCall.name === "openclaw_agent_consult") {
++				relay.assistantOwnedByConsult = true;
+ 				const forcedConsult = relay.harness.forcedConsults.recordNativeConsult(toolCall.args, providerCallId);
+ 				if (forcedConsult.kind === "in_flight" || forcedConsult.kind === "already_delivered") {
+ 					if (forcedConsult.kind === "already_delivered") return submitFinalProviderToolResult({
+@@ -3231,6 +3300,8 @@
+ 		...params.cfg ? { voiceConfig: params.cfg } : {},
+ 		voiceSessionCreated: false,
+ 		voiceTranscriptSeq: 0,
++		// voice-persist-split-v4: consult and relay must not persist the same answer.
++		assistantOwnedByConsult: false,
+ 		voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
+ 		confirmationReadiness,
+ 		failSession

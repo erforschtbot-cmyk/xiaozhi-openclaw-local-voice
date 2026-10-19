@@ -1,0 +1,20 @@
+{
+  "id": "iobroker-alexa",
+  "name": "ioBroker Alexa",
+  "description": "Sendet Smart-Home-Sprachbefehle an den festen Alexa-ioBroker-Datenpunkt. Zustandsändernder Aufruf.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "iobroker_alexa_send",
+      "iobroker_alexa"
+    ]
+  }
+}

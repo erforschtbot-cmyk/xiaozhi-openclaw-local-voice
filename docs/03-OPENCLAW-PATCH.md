@@ -1,5 +1,9 @@
 # 3. OpenClaw: Voice-Patches in `dist` (nur Notfall-Hilfe)
 
+> **Historische Beschreibung.** Maßgeblich für den Wiederaufbau ist jetzt
+> [00-START-HIER.md](00-START-HIER.md) und `scripts/restore-openclaw-baseline.py`.
+> Ältere Apply-/Marker- und Build-Aussagen unten sind keine Nullstart-Abnahme.
+
 > **Nicht routinemäßig anwenden.** Der Voice-Betrieb funktioniert **ohne** diese
 > Patches. Sie sind ausschließlich eine **Hilfe/Notfallmaßnahme** und werden
 > **nur bei den unten jeweils genannten konkreten Symptomen** angewendet — kein

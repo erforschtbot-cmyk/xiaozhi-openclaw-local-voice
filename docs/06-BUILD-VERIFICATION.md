@@ -1,5 +1,9 @@
 # 6. Nachgewiesener Neuaufbau
 
+> **Historische Beschreibung.** Maßgeblich für den Wiederaufbau ist jetzt
+> [00-START-HIER.md](00-START-HIER.md) und `scripts/restore-openclaw-baseline.py`.
+> Ältere Apply-/Marker- und Build-Aussagen unten sind keine Nullstart-Abnahme.
+
 ## Firmware-Build
 
 Am 24.09.2026 wurde `scripts/build-firmware.sh` auf einem sauberen Checkout

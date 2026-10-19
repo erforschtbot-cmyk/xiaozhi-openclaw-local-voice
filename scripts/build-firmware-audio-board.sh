@@ -22,6 +22,9 @@ git -C "$source_dir" checkout 4632dc51f0a5ad26e08542e131e6e48da41e4ff3
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 
+# Use the exact component resolution from the successful clean audit build.
+install -m 0644 "$repo_dir/firmware/audio-board/dependencies.lock" "$source_dir/dependencies.lock"
+
 # WLAN/Host in die Board-Konfiguration eintragen
 python3 - "$source_dir/main/boards/$board_dir/config.json" "$public_host" <<'PY'
 from pathlib import Path

@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-20",
+  "board": "waveshare/esp32-s3-audio-board",
+  "upstream": "4632dc51f0a5ad26e08542e131e6e48da41e4ff3",
+  "idf_image": "espressif/idf:v6.1",
+  "language": "de-DE",
+  "wake_word": "wn9_jarvis_tts",
+  "exit_code": 0,
+  "artifacts": {
+    "xiaozhi.bin": {
+      "bytes": 2832784,
+      "sha256": "206081d51baaf3148fe918ab14accd1606afa97258d188b370cb48d30f4d29ad"
+    },
+    "merged-binary.bin": {
+      "bytes": 9603259,
+      "sha256": "a080c658c9968c5a02325d6173c2f9467441522668c494c5929efeb4f48932f6"
+    }
+  },
+  "hardware_tested": false,
+  "note": "Fresh upstream checkout plus committed audio-board patch. Build artifacts retained locally, not promoted to tested recovery anchors."
+}

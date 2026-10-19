@@ -5,3 +5,6 @@ source/
 *.bak-*
 __pycache__/
 *.pyc
+
+node_modules/
+.venv-esptool/

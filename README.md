@@ -1,5 +1,9 @@
 # Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal (lokal)
 
+> **Neuaufbau ab leerem Gerät:** zuerst [START HIER / Audit 20.10.2026](docs/00-START-HIER.md) lesen.
+> Der bisherige Stand ist **nicht vollständig als Nullstart abgenommen**.
+> Dort stehen die festgestellten Lücken und der geprüfte Gateway-Wiederaufbau.
+
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um ein funktionierendes Jarvis-System auf einem leeren Linux-/OpenClaw-Host
 exakt wiederherzustellen — mit **lokaler Erkenung und lokaler
@@ -219,7 +223,7 @@ auf dem OpenClaw-Host.
 
 1. [`docs/01-HOST-INSTALLATION.md`](docs/01-HOST-INSTALLATION.md)
 2. [`docs/02-FIRMWARE.md`](docs/02-FIRMWARE.md)
-3. *(optional, nur bei Problemen)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
+3. *(historisch; für exakten Wiederaufbau siehe START HIER)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)

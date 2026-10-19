@@ -1,0 +1,17 @@
+{
+  "version": "2026.10.4",
+  "files": [
+    {
+      "path": "dist/agent-tools.before-tool-call-DSzRS11c.mjs",
+      "patch": "agent-tools.before-tool-call-DSzRS11c.mjs.patch",
+      "before": "625418601bac9609d0f0dcc889381fb84113a110801987edde4e55f0f8a21063",
+      "after": "967de772e8043a845774f8f2fe30abc0ae61a3d31fa80bb1304d12eef07f59f5"
+    },
+    {
+      "path": "dist/handlers-De0Uc7cE.mjs",
+      "patch": "handlers-De0Uc7cE.mjs.patch",
+      "before": "9a6ca2cd1206270d0eb14431219b5aeebabd7c184c88d85c353bdf155644c70e",
+      "after": "60bf179c3b1c46a154a0ac5be3956edf7f7ea473955e1bcdd4fa1753776b9aee"
+    }
+  ]
+}
