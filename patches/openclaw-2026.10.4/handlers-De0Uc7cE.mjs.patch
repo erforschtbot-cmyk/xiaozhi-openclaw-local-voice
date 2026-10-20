@@ -8,15 +8,19 @@
  //#region src/gateway/talk/session-config.ts
  function normalizeTalkSessionMode(params) {
  	return normalizeOptionalLowercaseString(params.mode) ?? (normalizeOptionalLowercaseString(params.transport) === "managed-room" ? "stt-tts" : "realtime");
-@@ -1206,7 +1207,17 @@
+@@ -1206,7 +1207,21 @@
  			if (promptOwner !== owner || !identity || identity.runId !== instance.runId || owner.isCurrent?.(identity.sessionId) !== true || owner.completionClaim?.bindOperationalRunInstance(instance) !== true) throw new Error("The active Talk consult admission is no longer current");
  		}
  	});
 -	const runArgs = async (args, signal, owner, ready, assertCurrent, source = "tool-call") => {
 +	const runArgs = async (...args) => {
-+		// Never delay the consult: the delegation has a short deadline.
-+		// A missing turn only disables the direct route, not the agent.
 +		let turn = params.getJarvisTurn?.();
++		// Provider-native delegation can arrive shortly before its own final
++		// transcript. Wait only for Jarvis sessions, with a hard deadline, so the
++		// direct route can compare the exact finalized utterance safely.
++		if (!turn && /^agent:voice:xiaozhi-realtime-v\d+$/.test(canonicalKey)) {
++			turn = await params.waitForJarvisTurn?.(args[1], 1500);
++		}
 +		if (!turn) {
 +			const binding = jarvisReadBinding(params.getVoiceSessionId(), canonicalKey);
 +			if (binding) turn = Object.freeze({ ...binding, observedAt: Date.now() });
@@ -27,7 +31,7 @@
  		const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
  		const voiceSessionId = params.getVoiceSessionId();
  		if (!voiceSessionId) throw new Error("Realtime browser voice session is not ready for agent consult");
-@@ -1219,6 +1230,35 @@
+@@ -1219,6 +1234,35 @@
  			sessionKey,
  			voiceSessionId
  		});
@@ -63,7 +67,7 @@
  		const confirmationGrant = parsedArgs.confirmationId ? authorizeClientVoiceConfirmation({
  			agentId,
  			voiceSessionId,
-@@ -1357,7 +1397,10 @@
+@@ -1357,7 +1401,10 @@
  		const owner = promptOwner;
  		if (!owner) return false;
  		const current = isOwnerCurrent(owner);
@@ -75,7 +79,7 @@
  		clearRequesterFinalRegistration(owner, current && completed ? "release" : "revoke");
  		clearOwner(owner);
  		return current && completed;
-@@ -1927,6 +1970,8 @@
+@@ -1927,6 +1974,8 @@
  		const turnId = ensureRelayTurn(session);
  		const callId = handle.id;
  		const itemId = `forced-consult-item-${randomUUID()}`;
@@ -84,17 +88,37 @@
  		session.harness.forcedConsults.markStarted(handle);
  		session.harness.handleBargeIn({
  			audioPlaybackActive: true,
-@@ -2863,7 +2908,9 @@
+@@ -2863,7 +2912,29 @@
  			await getActiveRelay()?.voiceTranscriptQueue.flush();
  		}
  	});
 +	let jarvisObservedTurn;
++	const jarvisTurnWaiters = new Set();
++	const waitForJarvisTurn = (signal, timeoutMs) => {
++		if (jarvisObservedTurn) return Promise.resolve(jarvisObservedTurn);
++		return new Promise((resolve, reject) => {
++			let timer;
++			const finish = (turn, error) => {
++				clearTimeout(timer);
++				jarvisTurnWaiters.delete(finish);
++				signal?.removeEventListener("abort", abort);
++				if (error) reject(error);
++				else resolve(turn);
++			};
++			const abort = () => finish(void 0, signal.reason ?? new Error("Jarvis turn wait aborted"));
++			if (signal?.aborted) return abort();
++			jarvisTurnWaiters.add(finish);
++			timer = setTimeout(() => finish(jarvisObservedTurn), timeoutMs);
++			signal?.addEventListener("abort", abort, { once: true });
++		});
++	};
  	const consultRunner = createTalkClientAgentConsultRunner({
 +		getJarvisTurn: () => jarvisObservedTurn,
++		waitForJarvisTurn,
  		config: params.cfg ?? params.context.getRuntimeConfig(),
  		context: params.context,
  		sessionTarget: params.sessionTarget,
-@@ -2924,9 +2971,12 @@
+@@ -2924,9 +2995,12 @@
  		...runControl.handleDelegationInput ? { handleDelegationInput: (text, respond) => {
  			const relay = getActiveRelay();
  			if (!relay) return "control";
@@ -108,7 +132,7 @@
  		} } : {},
  		markStrategy: "transport",
  		audioSink: {
-@@ -3050,10 +3100,28 @@
+@@ -3050,10 +3124,29 @@
  		onTranscript: (role, text, final, metadata) => {
  			const relay = getActiveRelay() ?? (relayRef.current?.closing ? relayRef.current : void 0);
  			if (!relay || relay.voiceSessionClose) return;
@@ -119,6 +143,7 @@
 +					voiceSessionId: relaySessionId, sessionKey: canonicalKey,
 +					turnId: randomUUID(), utterance: text.trim(), observedAt: Date.now()
 +				}) : void 0;
++				if (jarvisObservedTurn) for (const resolve of [...jarvisTurnWaiters]) resolve(jarvisObservedTurn);
 +			}
  			if (role === "assistant" && outputOwnership.suppressingOutput) return;
  			if (!relay.closing && role === "user" && !final) confirmationReadiness.observeUserTranscript(text, false);
@@ -138,7 +163,7 @@
  			const transcriptIdentity = relay.voiceTranscriptSeq > previousTranscriptSeq ? { transcriptId: voiceTranscriptEventId(relay.id, String(relay.voiceTranscriptSeq)) } : {};
  			const transcriptEvent = {
  				relaySessionId,
-@@ -3097,6 +3165,7 @@
+@@ -3097,6 +3190,7 @@
  			if (!relayCallId) return;
  			let shouldSubmitWorkingResult = false;
  			if (toolCall.name === "openclaw_agent_consult") {
@@ -146,7 +171,7 @@
  				const forcedConsult = relay.harness.forcedConsults.recordNativeConsult(toolCall.args, providerCallId);
  				if (forcedConsult.kind === "in_flight" || forcedConsult.kind === "already_delivered") {
  					if (forcedConsult.kind === "already_delivered") return submitFinalProviderToolResult({
-@@ -3231,6 +3300,8 @@
+@@ -3231,6 +3325,8 @@
  		...params.cfg ? { voiceConfig: params.cfg } : {},
  		voiceSessionCreated: false,
  		voiceTranscriptSeq: 0,

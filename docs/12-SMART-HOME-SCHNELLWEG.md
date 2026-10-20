@@ -17,6 +17,19 @@ KI, niemals beides.
 Mehrere Messungen im selben Betrieb: **7 ms, 14 ms, 16 ms, 27 ms, 28 ms, 51 ms**
 vom erkannten Satz bis zur Annahme durch Alexa. Keine Tokens, kein Agentenlauf.
 
+### Race-Fix vom 20.10.2026
+
+Bei Provider-nativer Delegation kann der Werkzeugwunsch rund 0,9 Sekunden
+**vor** dem finalen STT-Transkript eintreffen. Ohne Synchronisation sah die
+Weiche dann `turn=missing`, lehnte mit `unbound-turn` ab und der Befehl nahm
+den langsamen Agentenweg.
+
+Der Gateway-Patch wartet deshalb ausschließlich in Jarvis-Voice-Sessions
+ereignisgesteuert auf das finale Transkript, maximal **1,5 Sekunden**. Trifft es
+ein, läuft die bestehende strenge Gleichheitsprüfung. Trifft es nicht ein oder
+wird der Turn abgebrochen, bleibt der normale Agentenpfad erhalten. Es wird
+weder aus einem Zwischenstand geschaltet noch die Sicherheitsprüfung gelockert.
+
 ---
 
 ## Warum das nicht einfach „Schlüsselwörter matchen“ ist
@@ -97,18 +110,18 @@ verworfen, das Gerät bekommt kein `stream_end` und bleibt im Zustand
 Abschluss stattdessen an den bestehenden Voice-Owner und verifiziert dabei
 weiter Session, Abbruch und Lifecycle-Generation.
 
-Anwenden und prüfen:
+Für OpenClaw 2026.10.4 exakt wiederherstellen und prüfen:
 
 ```bash
-./scripts/apply-jarvis-smart-home-router.py
+python3 scripts/restore-openclaw-baseline.py \
+  --openclaw-root "$(npm root -g)/openclaw" --apply
 ./scripts/verify-jarvis-smart-home-router.py
 systemctl --user restart openclaw-gateway.service
 ```
 
-Das Skript ist idempotent (vorhandene Marker werden nicht erneut geschrieben)
-und legt vor jeder Änderung `<datei>.bak-smart-home-router-<zeitstempel>` an.
-Es bricht mit klarer Meldung ab, wenn das OpenClaw-Layout sich geändert hat —
-dann muss der Anker angepasst werden, statt blind zu schreiben.
+Das Wiederherstellungsskript prüft Versions- und SHA-256-Anker, legt eine
+Sicherung an und verweigert unbekannte oder teilweise gepatchte Dateien. Es
+startet den Gateway nicht neu.
 
 ## Ein Ausführer, nicht zwei
 
@@ -147,7 +160,7 @@ vor dem finalen Transkript bereits Provider-Audio eintraf.
 node --test ~/.local/share/jarvis-realtime-bridge/test-smart-home-router.mjs
 ```
 
-**41 Tests**, alle Schreibvorgänge sind Attrappen — es wird kein Gerät
+**145 Tests** im aktuellen Bestand, alle Schreibvorgänge sind Attrappen — es wird kein Gerät
 geschaltet. Abgedeckt: beide Session-Versionen (v5/v6/v7) und fremde
 Session-Keys, dein Beispielsatz mit Verzögerung, Fragen, Verneinungen,
 Zeitangaben, doppelte und unbekannte Namen, abgelaufener/fehlender Katalog,

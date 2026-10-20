@@ -23,10 +23,18 @@ root = pathlib.Path(
 )
 dist = root / "openclaw" / "dist"
 
-router = BRIDGE_DIR / "smart-home-router.mjs"
+# Die Gateway-Weiche laedt NICHT smart-home-router.mjs direkt, sondern
+# scoped-smart-home-router.mjs. Dieses Modul importiert smart-home-router.mjs
+# und room-command.mjs. Alle drei muessen vorhanden sein, sonst faellt der
+# Schnellweg still aus (Sprache laeuft weiter, Schalten wird langsam).
+router = BRIDGE_DIR / "scoped-smart-home-router.mjs"
 assert router.is_file(), f"Router fehlt: {router}"
-tests = BRIDGE_DIR / "test-smart-home-router.mjs"
-assert tests.is_file(), f"Testdatei fehlt: {tests}"
+for dependency in ("smart-home-router.mjs", "room-command.mjs",
+                   "voice-turn-context.mjs"):
+    assert (BRIDGE_DIR / dependency).is_file(), \
+        f"Abhaengigkeit des Routers fehlt: {BRIDGE_DIR / dependency}"
+tests = sorted(BRIDGE_DIR.glob("test-*.mjs"))
+assert tests, f"Keine Router-Testdateien unter {BRIDGE_DIR}"
 
 handlers = [p for p in sorted(dist.glob("handlers-*.mjs"))
             if "enqueueRelayVoiceTranscript" in p.read_text()]
@@ -37,14 +45,19 @@ for path in handlers:
     text = path.read_text()
     assert "jarvis-safe-router-v1" in text, f"W1 fehlt: {path}"
     assert "jarvis-direct-completion-v2" in text, f"W2 fehlt: {path}"
-    assert f"file://{BRIDGE_DIR}/smart-home-router.mjs" in text, \
+    assert f"file://{BRIDGE_DIR}/scoped-smart-home-router.mjs" in text, \
         f"Router-Pfad fehlt: {path}"
+    assert f"file://{BRIDGE_DIR}/voice-turn-context.mjs" in text, \
+        f"Bindungs-Pfad fehlt: {path}"
     assert "routeSmartHome({" in text, f"Weichenaufruf fehlt: {path}"
     assert "owner.directResultReady = true;" in text, f"Direktabschluss fehlt: {path}"
     assert "owner.directResultReady = false;" in text, f"Merker-Reset fehlt: {path}"
+    assert "waitForJarvisTurn?.(args[1], 1500)" in text, \
+        f"Begrenztes Warten auf finales Transkript fehlt: {path}"
+    assert "jarvisTurnWaiters" in text, f"Turn-Wakeup fehlt: {path}"
     checked.append(path)
 
-result = subprocess.run(["node", "--test", str(tests)],
+result = subprocess.run(["node", "--test", *map(str, tests)],
                         capture_output=True, text=True, cwd=BRIDGE_DIR)
 if result.returncode != 0:
     sys.stdout.write(result.stdout[-2000:])
