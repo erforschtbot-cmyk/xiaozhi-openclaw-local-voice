@@ -461,10 +461,41 @@ class XiaozhiSession:
         # frames dauerhaft verworfen und die naechste normale Antwort bliebe
         # stumm.
         self.photo_speaking = False
+        self.cancel_photo_guard()
         print(
             f"{self.tag} Photo answer spoken ({len(pcm)} PCM bytes)",
             flush=True,
         )
+
+    PHOTO_ROUND_MAX_SECONDS = 60.0
+
+    def cancel_photo_guard(self):
+        task = getattr(self, "photo_guard", None)
+        if task is not None:
+            task.cancel()
+            self.photo_guard = None
+
+    def arm_photo_guard(self):
+        """Foto-Runde zeitlich begrenzen.
+
+        Kommt das JPEG nie an (Kamera defekt, Upload scheitert), bliebe
+        `photo_speaking` sonst dauerhaft gesetzt. Folge: Jedes Provider-Audio
+        wird verworfen und die naechste Antwort bleibt stumm. Der Wächter
+        gibt den Pfad nach der Frist wieder frei.
+        """
+        self.cancel_photo_guard()
+
+        async def guard():
+            await asyncio.sleep(self.PHOTO_ROUND_MAX_SECONDS)
+            if self.photo_speaking:
+                print(
+                    f"{self.tag} Photo round still open after "
+                    f"{self.PHOTO_ROUND_MAX_SECONDS:.0f}s; releasing audio path",
+                    flush=True,
+                )
+                self.photo_speaking = False
+
+        self.photo_guard = asyncio.create_task(guard())
 
     async def handle_photo_request(self, transcript):
         """Kamera auslösen. Die Auswertung läuft getrennt (siehe /photo).
@@ -482,6 +513,8 @@ class XiaozhiSession:
         question = transcript.strip() or "Was ist auf dem Bild zu sehen?"
         print(f"{self.tag} Photo requested: {question!r}", flush=True)
         self.photo_speaking = True
+        # Ohne Wächter bliebe der Audio-Pfad bei fehlendem Upload gesperrt.
+        self.arm_photo_guard()
         try:
             await self.call_device_tool(
                 "self.camera.take_photo", {"question": question}, timeout=30.0
@@ -1367,6 +1400,15 @@ class XiaozhiSession:
                 if kind == "user_transcript":
                     self.cancel_followup_timeout()
                     self.followup_open = False
+                    # Ein neuer Satz beginnt eine neue Runde. Ein haengender
+                    # Foto-Merker aus der Vorrunde darf ihn nicht stumm machen.
+                    if self.photo_speaking:
+                        print(
+                            f"{self.tag} New utterance; releasing stale photo guard",
+                            flush=True,
+                        )
+                    self.photo_speaking = False
+                    self.cancel_photo_guard()
                     transcript = event.get("text", "")
                     # Nur das lauteste Geraet darf antworten. Ein Geraet mit
                     # hoeherem Pegel uebernimmt und schickt dieses hier in

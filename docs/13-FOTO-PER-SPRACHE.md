@@ -76,6 +76,37 @@ Nur ausdrückliche Foto-/Bild-Absichten, u. a.:
 
 Bewusst eng, damit „mach das Licht an" nicht hier landet.
 
+## Belegter Fehler am Gerät und seine Behebung (2026-10-20, 02:49)
+
+Der erste echte Sprachtst (`„Mach ein Foto"`, Board `90:70:69:eb:1c:0c`)
+lieferte **zwei** Antworten:
+
+1. Korrekt: „Auf dem Bild ist ein Laptop-Display mit einer dunklen Textansicht
+   zu sehen, daneben auf einem Regal ein schnurloses Telefon und Kabel."
+   (Foto 640×480, 50.556 B, bytegenau gespeichert, gesprochen mit Piper.)
+2. Falsch, ~8 s später: „Die Kamera am Rechner reagiert gerade nicht, das Bild
+   kam schwarz an."
+
+Ursache der zweiten Antwort: Das Realtime-Modell startete für denselben Satz
+einen eigenen `openclaw_agent_consult`. Dieser Lauf kennt das Foto **nicht** und
+erfindet eine Fehlermeldung. Dieselbe Falle war für den Smart-Home-Direktweg
+schon gelöst (`isSmartHomeFastPath`), für Fotos fehlte das Gegenstück.
+
+Behebung:
+
+- `openclaw-talk-realtime.mjs`: `isPhotoRequest()` unterdrückt den Consult für
+  Foto-Äußerungen und antwortet „Das Foto wurde bereits aufgenommen und
+  ausgewertet. Führe kein Werkzeug aus und beschreibe kein Bild." — analog zum
+  Smart-Home-Fall, inklusive `tool_call_suppressed` mit `reason: photo_request`.
+- `server.py`: `arm_photo_guard()` begrenzt eine Foto-Runde auf 60 s. Ohne das
+  bliebe `photo_speaking` bei fehlendem Upload dauerhaft gesetzt, jedes
+  Provider-Audio würde verworfen und die **nächste** Antwort bliebe stumm.
+  Zusätzlich gibt eine neue Äußerung (`user_transcript`) einen hängenden
+  Merker frei.
+
+Das Foto ist gegen das Original geprüft: echtes Schreibtischbild, kein
+Schwarzbild (`magick identify`: mean 0,44, std 0,26).
+
 ## Bekannte Grenzen
 
 - **Antwort nur hörbar, wenn Piper verfügbar ist.** Der Realtime-Weg hat keine
