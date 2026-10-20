@@ -179,7 +179,7 @@ esptool --chip esp32s3 --port /dev/ttyACM0 write-flash 0x9000 nvs.bin
 
 ## Veröffentlichter Anker
 
-`firmware/prebuilt/audio-board/xiaozhi.bin` ist die **App-Partition** (2.830.576 B),
+`firmware/prebuilt/audio-board/xiaozhi.bin` ist die **App-Partition** (2.833.056 B),
 nicht das Vollimage. Sie wurde partition-weise geprüft: **keine** echten
 Zugangsdaten enthalten (WLAN-Name/Passwort stehen ausschließlich in der NVS, die
 nicht im Repo liegt). Die `password`/`ssid`/`ota_url`-Treffer im String-Scan sind
