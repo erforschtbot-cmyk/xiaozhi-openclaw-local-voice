@@ -66,6 +66,40 @@ Leitidee: **Farbe = Rolle, Bewegung = Aktivität.**
 „Zuhören" ist bewusst die **einzige** Stufe mit *laufendem* Licht: aus der
 Entfernung die auffälligste Bewegung, genau im richtigen Moment.
 
+### Weißes Licht während der Kameraaufnahme
+
+Wird ein Foto ausgelöst („Mach ein Foto", „Was siehst du da?"), leuchtet der
+Ring für die Dauer der Aufnahme **volles Weiß (255, alle sieben LEDs, stehend)**
+und kehrt danach selbsttätig in den vorherigen Gerätezustand zurück.
+
+Zwei Zwecke in einem Signal:
+
+- **Rückmeldung** — man sieht, wann das Bild im Kasten ist und kann den
+  Gegenstand erst danach wegbewegen.
+- **Ausleuchtung** — Weiß ist für Fotos die brauchbare Lichtfarbe; die Farbe
+  des Gerätezustands (grün/cyan) wäre dafür ungeeignet.
+
+Umsetzung an drei Stellen:
+
+| Datei | Ergänzung |
+|---|---|
+| `main/led/led.h` | virtuelle `SetCameraFlash(bool)`, Standard wirkungslos |
+| `main/mcp_server.cc` | im `self.camera.take_photo`-Handler: an vor `Capture()`, aus per RAII-Wächter |
+| `jarvis_ring_led.{h,cc}` | setzt volles Weiß, unterdrückt `OnStateChanged()` solange aktiv, 30-s-Wachhund |
+
+Zwei Details, die sonst stören würden:
+
+- **Vorrang:** Solange die Aufnahme läuft, ignoriert der Ring `OnStateChanged()`.
+  Sonst würde ein Zustandswechsel (z. B. „Sprechen", während das Modell schon
+  antwortet) das weiße Licht sofort überschreiben.
+- **Wachhund (30 s):** Bricht die Aufnahme ab, ohne dass die Freigabe kommt,
+  stellt der Timer den Ring selbst zurück. Ohne ihn bliebe das Board dauerhaft
+  weiß — und der Ring ist die einzige Anzeige dieses Boards.
+
+Der Auslöser sitzt im Kamera-Werkzeug, nicht in der Bridge: Das Gerät weiß als
+einziges, wann der Verschluss wirklich offen ist. Ein Signal von der Bridge
+käme zu früh (vor dem Upload) oder zu spät (nach der Auswertung).
+
 ### Farbordnung: warum die Farben „vertauscht" wirkten
 
 Der LED-Treiber (`esp_driver_led_strip`) ist auf **GRB** eingestellt

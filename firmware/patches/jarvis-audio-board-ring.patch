@@ -260,10 +260,10 @@ index e983fb4..aaf6d85 100644
  DECLARE_BOARD(CustomBoard);
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
 new file mode 100644
-index 0000000..8534030
+index 0000000..ac13fdb
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,190 @@
 +#include "jarvis_ring_led.h"
 +#include "application.h"
 +#include "device_state.h"
@@ -314,6 +314,11 @@ index 0000000..8534030
 +}
 +
 +void JarvisRingLed::OnStateChanged() {
++    // Waehrend einer Aufnahme hat das weisse Licht Vorrang: sonst wuerde ein
++    // Zustandswechsel (z. B. Sprechen) das Foto-Licht ueberschreiben.
++    if (camera_flash_) {
++        return;
++    }
 +    auto& app = Application::GetInstance();
 +    switch (app.GetDeviceState()) {
 +        case kDeviceStateStarting:
@@ -363,6 +368,53 @@ index 0000000..8534030
 +    }
 +}
 +
++void JarvisRingLed::SetCameraFlash(bool on) {
++    if (on) {
++        if (camera_flash_) {
++            // Laufende Aufnahme: Wachhund neu stellen, nicht erneut zeichnen.
++            if (flash_timer_ != nullptr) {
++                esp_timer_stop(flash_timer_);
++                esp_timer_start_once(flash_timer_, 30 * 1000 * 1000);
++            }
++            return;
++        }
++        camera_flash_ = true;
++        // Volles Weiss (255) unabhaengig von der gedimmten Zustandsfarbe:
++        // maximale Sichtbarkeit und zugleich Ausleuchtung des Motivs.
++        SetAllColor(PanelColor(255, 255, 255));
++
++        // Wachhund: bleibt die Rueckmeldung aus (haengende Aufnahme, Fehler
++        // im Werkzeug), darf der Ring nicht dauerhaft weiss stehen bleiben.
++        if (flash_timer_ == nullptr) {
++            esp_timer_create_args_t args = {
++                .callback = [](void* arg) {
++                    auto* self = static_cast<JarvisRingLed*>(arg);
++                    self->camera_flash_ = false;
++                    self->OnStateChanged();
++                },
++                .arg = this,
++                .dispatch_method = ESP_TIMER_TASK,
++                .name = "ring_camera_flash",
++                .skip_unhandled_events = true,
++            };
++            esp_timer_create(&args, &flash_timer_);
++        }
++        esp_timer_stop(flash_timer_);
++        esp_timer_start_once(flash_timer_, 30 * 1000 * 1000);
++        return;
++    }
++
++    if (!camera_flash_) {
++        return;
++    }
++    camera_flash_ = false;
++    if (flash_timer_ != nullptr) {
++        esp_timer_stop(flash_timer_);
++    }
++    // Vorherigen Geraetezustand wiederherstellen (blau/gruen/cyan).
++    OnStateChanged();
++}
++
 +void JarvisRingLed::ShowVolume(int percent) {
 +    if (percent < 0) percent = 0;
 +    if (percent > 100) percent = 100;
@@ -404,10 +456,10 @@ index 0000000..8534030
 +}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
 new file mode 100644
-index 0000000..77a8c83
+index 0000000..1d54f2c
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,50 @@
 +#ifndef _JARVIS_RING_LED_H_
 +#define _JARVIS_RING_LED_H_
 +
@@ -430,6 +482,17 @@ index 0000000..77a8c83
 +
 +    void OnStateChanged() override;
 +
++    /// Helles Weiss (100 %) waehrend einer Kameraaufnahme.
++    ///
++    /// Der Ring ist die einzige Rueckmeldung dieses Boards. Weiss zeigt dem
++    /// Nutzer sichtbar "jetzt wird fotografiert" und leuchtet den Gegenstand
++    /// gleichzeitig aus. Nach dem Abschalten stellt OnStateChanged() den
++    /// vorherigen Geraetezustand wieder her (blau/gruen/cyan).
++    ///
++    /// Ein Wachhund gibt den Ring auch dann frei, wenn die Aufnahme haengt —
++    /// sonst bliebe das Board dauerhaft weiss.
++    void SetCameraFlash(bool on) override;
++
 +    /// Zeigt die Lautstaerke kurz als Balken im Ring an.
 +    ///
 +    /// Die sieben LEDs fuellen sich von 0 bis 100 % auf; die Farbe wandert
@@ -442,9 +505,56 @@ index 0000000..77a8c83
 +private:
 +    const uint16_t led_count_;
 +    esp_timer_handle_t restore_timer_ = nullptr;
++    esp_timer_handle_t flash_timer_ = nullptr;
++    bool camera_flash_ = false;
 +};
 +
 +#endif // _JARVIS_RING_LED_H_
+diff --git a/main/led/led.h b/main/led/led.h
+index 251fd6a..c906c68 100644
+--- a/main/led/led.h
++++ b/main/led/led.h
+@@ -6,6 +6,10 @@ public:
+     virtual ~Led() = default;
+     // Set the led state based on the device state
+     virtual void OnStateChanged() = 0;
++
++    // Optional: helles Weiss waehrend einer Kameraaufnahme. Boards ohne
++    // eigenen Ring ignorieren das (Standard bleibt wirkungslos).
++    virtual void SetCameraFlash(bool on) { (void)on; }
+ };
+ 
+ 
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index 171f24b..623b789 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
+@@ -103,6 +103,25 @@ void McpServer::AddCommonTools() {
+                     // Lower the priority to do the camera capture
+                     TaskPriorityReset priority_reset(1);
+ 
++                    // Der Ring zeigt waehrend der Aufnahme helles Weiss: sicheres
++                    // Signal "es wird fotografiert" und zugleich Ausleuchtung.
++                    // Ein Waechter gibt ihn auch bei haengender Aufnahme frei.
++                    auto& board_for_led = Board::GetInstance();
++                    auto camera_led = board_for_led.GetLed();
++                    if (camera_led != nullptr) {
++                        camera_led->SetCameraFlash(true);
++                    }
++
++                    // Freigabe in jedem Fall — auch bei Capture-/Explain-Fehler.
++                    struct FlashGuard {
++                        Led* led;
++                        ~FlashGuard() {
++                            if (led != nullptr) {
++                                led->SetCameraFlash(false);
++                            }
++                        }
++                    } flash_guard{camera_led};
++
+                     if (!camera->Capture()) {
+                         return std::unexpected("Failed to capture photo");
+                     }
 diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
 index ac591b5..7d562a2 100644
 --- a/main/protocols/protocol.cc
