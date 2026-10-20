@@ -8,3 +8,6 @@ __pycache__/
 
 node_modules/
 .venv-esptool/
+
+# Laufzeitdaten der Kamera
+photo-*.jpg

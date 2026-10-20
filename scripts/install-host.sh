@@ -55,6 +55,8 @@ install -m 0644 "$repo_dir/gateway/piper_speaker.py" "$install_dir/piper_speaker
 install -m 0644 "$repo_dir/gateway/local_stt.mjs" "$install_dir/local_stt.mjs"
 install -m 0755 "$repo_dir/gateway/local-voice.mjs" "$install_dir/local-voice.mjs"
 install -m 0755 "$repo_dir/gateway/openclaw-talk-realtime.mjs" "$install_dir/openclaw-talk-realtime.mjs"
+# Foto-Weg: Bild-Consult zum Agenten (Kamera steckt bereits in der Firmware).
+install -m 0755 "$repo_dir/gateway/photo-consult.mjs" "$install_dir/photo-consult.mjs"
 install -m 0644 "$repo_dir/gateway/requirements.txt" "$install_dir/requirements.txt"
 
 python3 -m venv "$install_dir/.venv"
