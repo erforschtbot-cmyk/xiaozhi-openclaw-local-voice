@@ -229,6 +229,13 @@ auf dem OpenClaw-Host.
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
 11. [`docs/13-FOTO-PER-SPRACHE.md`](docs/13-FOTO-PER-SPRACHE.md) — Foto per Sprache
     (Kamera, Upload-Endpunkt, Bild-Consult; Firmware kann es bereits)
+
+> **Kamera ist optional.** Die Audio-Board-Firmware läuft auch **ohne**
+> angeschlossenen Sensor: Es gibt keinen harten Abbruch im Kamera-Pfad, das Gerät
+> bleibt ein vollwertiger Sprachassistent. Nur `self.camera.take_photo` schlägt
+> dann fehl und Jarvis sagt ehrlich, dass das Foto nicht geklappt hat.
+> Details und Code-Belege: [`docs/13-FOTO-PER-SPRACHE.md`](docs/13-FOTO-PER-SPRACHE.md),
+> Abschnitt „Läuft die Firmware auch ohne Kamera?".
 7. [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md)
 8. [`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md)
 9. [`docs/09-FIRMWARE-WACHWORT.md`](docs/09-FIRMWARE-WACHWORT.md)

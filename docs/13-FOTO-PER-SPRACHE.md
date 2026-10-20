@@ -107,6 +107,68 @@ Behebung:
 Das Foto ist gegen das Original geprüft: echtes Schreibtischbild, kein
 Schwarzbild (`magick identify`: mean 0,44, std 0,26).
 
+## Läuft die Firmware auch ohne Kamera?
+
+**Ja.** Die Kamera ist optional — ein Gerät ohne Sensor ist ein vollwertiger
+Sprachassistent, nur ohne Foto-Funktion. Geprüft im Quellbaum (2026-10-20):
+
+### Kein harter Abbruch im Kamera-Pfad
+
+`EspVideo::EspVideo()` (`main/boards/common/esp_video.cc`) steigt bei jedem
+Fehler still aus, ohne `ESP_ERROR_CHECK`, ohne `abort()`:
+
+```c
+EspVideo::EspVideo(const esp_video_init_config_t& config) {
+    if (esp_video_init(&config) != ESP_OK) {
+        ESP_LOGE(TAG, "esp_video_init failed");
+        return;                      // sauberer Ausstieg
+    }
+    video_fd_ = open(video_device_name, O_RDWR);
+    if (video_fd_ < 0) {
+        ESP_LOGE(TAG, "open %s failed, errno=%d(%s)", ...);
+        return;                      // sauberer Ausstieg
+    }
+```
+
+Der Board-Konstruktor ruft `InitializeCamera()` auf und macht danach mit
+Display, Backlight und Netzwerk weiter. Ohne Sensor bleibt nur
+`streaming_on_ = false`.
+
+### Was der Nutzer merkt
+
+`Capture()` bricht sofort ab:
+
+```c
+if (!streaming_on_ || video_fd_ < 0) {
+    ESP_LOGE(TAG, "Capture failed: camera did not initialize ...");
+    return false;
+}
+```
+
+Das Werkzeug meldet `Failed to capture photo`. Die Bridge antwortet dann
+„Das Foto hat nicht geklappt. Bitte noch einmal versuchen." — ehrlich, ohne
+erfundene Bildbeschreibung. Sprache, Wakeword, WLAN und alle anderen
+Funktionen laufen unverändert.
+
+### Unterschied zwischen den beiden Boards
+
+| Board | ohne Kamera |
+|---|---|
+| **4B** (Touch-LCD) | nutzt `Camera* Board::GetCamera() { return nullptr; }` → `self.camera.take_photo` wird **gar nicht angeboten** |
+| **Audio-Board** | `camera_ = new EspVideo(...)` wird **immer** erzeugt → Werkzeug wird angeboten und schlägt fehl |
+
+Die zweite Zeile ist kein Absturz, aber eine Unschönheit: Das Modell könnte
+„ich schaue mal" ankündigen und dann scheitern. Wer das ändern will, lässt
+`GetCamera()` erst ein Objekt liefern, wenn `streaming_on_` gesetzt ist
+(kleiner Firmware-Patch plus Neubau, nicht Teil dieses Stands).
+
+### Herkunft des Kamera-Codes
+
+Die Kamera-Unterstützung ist **upstream**, nicht Teil dieses Projekts: Der
+Audio-Board-Patch enthält **keine** hinzugefügten Zeilen für `EspVideo`,
+`InitializeCamera` oder `CONFIG_CAMERA_*` (geprüft: 0 Treffer). Damit gilt das
+Verhalten für jeden, der diese Board-Definition baut — mit oder ohne Kamera.
+
 ## Bekannte Grenzen
 
 - **Antwort nur hörbar, wenn Piper verfügbar ist.** Der Realtime-Weg hat keine
