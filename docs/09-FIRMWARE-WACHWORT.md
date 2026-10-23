@@ -132,13 +132,17 @@ scripts/build-firmware.sh --public-host 192.168.178.143
 
 # 2. ERST sichern, dann flashen
 scripts/backup-device-firmware.sh --port /dev/ttyACM0 --baud 921600
-scripts/flash-firmware.sh --port /dev/ttyACM0          # nur App-Partition
+scripts/flash-firmware.sh --port /dev/ttyACM0 --board 4b   # nur App-Partition
 ```
 
 `flash-firmware.sh` schreibt ausschließlich bei `0x20000` und liest danach
 zurück. **WLAN-Zugangsdaten und Assets bleiben erhalten.** Der Vollweg
-(`--full-image-i-understand`) wäre nur bei beschädigtem Flash nötig und löscht
+(`--board 4b --full`) wäre nur bei beschädigtem Flash nötig und löscht
 das NVS.
+
+Das `--board` ist Pflicht: 4B und Audio-Board haben verschiedene Images,
+beide sind ESP32-S3 mit 16 MB Flash. Das Skript prüft die Board-Kennung im
+Image und bricht bei einer falschen Kombination ab, bevor es schreibt.
 
 ## Prüfen
 

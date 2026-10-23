@@ -300,7 +300,11 @@ Klartext. Ein geflashtes Gerät muss danach neu provisoniert werden.
 - `firmware/prebuilt/xiaozhi.bin` wird bei `0x20000` geschrieben (nur App). NVS,
   WLAN und Assets bleiben erhalten.
 - `firmware/prebuilt/merged-binary.bin` überschreibt das gesamte Flash und wird
-  deshalb nur mit dem ausdrücklichen Schalter `--full-image-i-understand` geflasht.
+  deshalb nur mit dem ausdrücklichen Schalter `--full` geflasht (und nur für das
+  4B — für das Audio-Board gibt es kein Vollimage im Repo).
+- **`--board` ist Pflicht.** 4B und Audio-Board haben verschiedene Images, sind
+  aber beide ESP32-S3 mit 16 MB Flash. Das Skript prüft die Board-Kennung im
+  Image und bricht ab, bevor es schreibt.
 - **Niemals** Zugangsdaten, `secrets.json`, OpenAI-/GitHub-Tokens oder
   WLAN-Passwörter in dieses Repository eintragen.
 - Ein vollständiges Geräteimage enthält das NVS mit WLAN-Zugangsdaten. Vor jeder

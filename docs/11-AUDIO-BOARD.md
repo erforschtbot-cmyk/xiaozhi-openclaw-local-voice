@@ -142,16 +142,79 @@ Der Host muss die Adresse sein, unter der das **Gerät** den Host erreicht
 
 ## Flashen
 
+> **Immer `--board audio` angeben.** Das 4B-Image und das Audio-Board-Image sind
+> verschieden, beide Boards sind aber ESP32-S3 mit 16 MB Flash — der Chip verrät
+> das Modell nicht. Das Skript bricht ab, wenn Image und Board nicht passen.
+
 ### Nur die App-Partition (WLAN/NVS bleiben erhalten)
 
 ```bash
-esptool --chip esp32s3 --port /dev/ttyACM0 -b 460800 \
-  write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
-  0x20000 firmware/prebuilt/audio-board/xiaozhi.bin
+./scripts/flash-firmware.sh --port /dev/ttyACM0 --board audio
 ```
 
 Das ist der Standardweg: WLAN-Zugangsdaten, NVS und Assets bleiben unangetastet,
 das Gerät verbindet sich danach **ohne** Neu-Provisionierung.
+
+Das Skript kümmert sich um alles, was sonst leicht übersehen wird:
+
+- installiert `esptool==5.4.0` in ein eigenes `.venv-esptool` (keine globale
+  Version vorausgesetzt),
+- prüft die Board-Kennung im Image gegen `--board`,
+- prüft die Prüfsumme aus `CHECKSUMS.sha256` und die Partitionsgröße,
+- schreibt nach `0x20000` und prüft danach mit `verify-flash`.
+
+### Von Hand flashen (ohne Skript)
+
+Nur wenn das Skript nicht benutzt werden soll. `esptool` muss dann selbst
+vorhanden sein:
+
+```bash
+python3 -m venv .venv-esptool
+.venv-esptool/bin/python -m pip install 'esptool==5.4.0'
+
+sudo .venv-esptool/bin/esptool --chip esp32s3 --port /dev/ttyACM0 -b 460800 \
+  write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
+  0x20000 firmware/prebuilt/audio-board/xiaozhi.bin
+```
+
+`sudo` ist nötig, weil `/dev/ttyACM0` üblicherweise `root:uucp` gehört und der
+Benutzer oft nicht in `uucp` ist. Wer die Gruppe ergänzt (`sudo usermod -aG uucp
+$USER`, danach neu anmelden), kann auf `sudo` verzichten.
+
+**Nach dem Schreiben immer prüfen** — ein Flash ohne Verify ist kein Nachweis:
+
+```bash
+sudo .venv-esptool/bin/esptool --chip esp32s3 --port /dev/ttyACM0 \
+  verify-flash 0x20000 firmware/prebuilt/audio-board/xiaozhi.bin
+```
+
+### Vollimage: im Repo nicht vorhanden
+
+Für das Audio-Board gibt es **kein** veröffentlichtes Vollimage. Auf einem
+leeren Board reicht die App-Partition nicht — Bootloader, Partitionstabelle und
+Assets fehlen. Dann erst bauen:
+
+```bash
+./scripts/build-firmware-audio-board.sh <HOST_IM_GERAETENETZ>
+```
+
+Das Ergebnis liegt unter `build/firmware/merged-binary.bin`. Erst danach wäre
+`--board audio --full` sinnvoll; das Skript weist darauf hin, solange das Image
+fehlt.
+
+### Boot prüfen
+
+Nach dem Flashen das Log bei 115200 Baud mitlesen. Erwartet:
+
+```text
+I (208) Board: UUID=… SKU=esp32-s3-audio-board
+I (768) MCP: Add tool: self.camera.take_photo
+I (…) WifiStation: connected with <SSID>
+I (…) StateMachine: State: activating -> idle
+```
+
+Bleibt es bei `State: starting` stehen, ist meist die NVS-OTA-URL falsch (siehe
+unten) oder der Host ist aus dem Gerätenetz nicht erreichbar.
 
 ### Partitionen des Boards
 

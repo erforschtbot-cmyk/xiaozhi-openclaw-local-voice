@@ -24,19 +24,52 @@ Der sichere Standard schreibt nur die App-Partition. WLAN/NVS und Assets bleiben
 erhalten:
 
 ```bash
-./scripts/flash-firmware.sh --port /dev/ttyACM0
+./scripts/flash-firmware.sh --port /dev/ttyACM0 --board 4b
 ```
 
-Das Skript prüft vorher die Prüfsumme aus `CHECKSUMS.sha256`, schreibt
-`firmware/prebuilt/xiaozhi.bin` bei `0x20000` und prüft mit `verify-flash`.
-Wenn `/dev/ttyACM0` verschwindet, USB einmal abziehen/einstecken und erneut prüfen.
+**Das `--board` ist Pflicht, und zwar aus gutem Grund.** In diesem Projekt liegen
+zwei verschiedene Firmware-Stände: das **Touch-LCD-4B** und das
+**ESP32-S3-AUDIO-Board**. Beide sind ESP32-S3 mit 16 MB Flash — **der Chip
+verrät das Modell nicht**. Wer das falsche Image schreibt, bekommt ein Gerät,
+das bootet, aber stumm bleibt (oder gar nicht mehr startet).
+
+Deshalb:
+
+- Das Skript ordnet das Image über seine eingebettete Board-Kennung zu und
+  **bricht ab, bevor ein Byte geschrieben wird**, wenn Image und `--board`
+  nicht zusammenpassen.
+- `--board auto` wird bewusst **abgelehnt**: ohne Boot-Log ist die Zuordnung
+  nicht eindeutig.
+- Prüfsumme aus `CHECKSUMS.sha256` und die App-Partitionsgröße
+  (4032 KiB) werden vor dem Schreiben geprüft, nach dem Schreiben mit
+  `verify-flash` gegengeprüft.
+
+### Board bestimmen
+
+Wenn unklar ist, welches Board hängt:
+
+```bash
+./scripts/flash-firmware.sh --port /dev/ttyACM0            # zeigt die Anleitung
+python3 scripts/read-device-info.py --port /dev/ttyACM0    # Chip, Flash, MAC
+```
+
+Oder das Boot-Log lesen (115200 Baud) — die Zeile ist eindeutig:
+
+```text
+I (208) Board: UUID=… SKU=esp32-s3-audio-board      -> --board audio
+I (208) Board: UUID=… SKU=esp32-s3-touch-lcd-4b     -> --board 4b
+```
+
+Wenn `/dev/ttyACM0` verschwindet: USB einmal abziehen/einstecken und erneut prüfen.
+Der Port gehört auf den meisten Systemen `root:uucp`; ohne `uucp`-Gruppe braucht
+das Lesen/Schreiben `sudo`.
 
 ## Vollständiges Rettungsimage
 
 Nur bei leerem oder vollständig beschädigtem Flash:
 
 ```bash
-./scripts/flash-firmware.sh --port /dev/ttyACM0 --full-image-i-understand
+./scripts/flash-firmware.sh --port /dev/ttyACM0 --board 4b --full
 ```
 
 Dieses Image wurde mit **geleertem NVS** (`0x9000`–`0xF000` auf `0xFF`) abgelegt,
