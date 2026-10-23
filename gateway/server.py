@@ -134,9 +134,28 @@ class XiaozhiSession:
         # bis zum fertigen Transkript hochgehalten. Grundlage des Vergleichs,
         # welches Geraet den Nutzer wirklich gehoert hat.
         self.turn_peak = 0
+        # Zeitpunkt des letzten Mikrofonpakets mit Sprache. NICHT turn_peak:
+        # das ist ein Dauer-Maximum und wurde vom Wake-Wort gesetzt, danach
+        # steigt es nie mehr (belegt 22.10.2026, 21:45: Wake 12503, danach
+        # Sprache 1283/1090 -> Waechter sah "keine Worte" und schloss).
+        self.last_mic_activity_at = 0.0
+        # Wurde seit dem Wecken ueberhaupt Sprache erkannt? Entscheidet, ob die
+        # Stille-Regel greifen darf: ohne Sprache -> Standby, MIT Sprache ->
+        # warten, das Transkript braucht laenger als 5 s.
+        self.speech_seen_since_wake = False
+        # Mikrofonpakete, die VOR dem Start des Sprachprozesses ankommen.
+        # Ohne diesen Puffer gingen sie verloren: belegt 22.10.2026, zwischen
+        # Wake (21:50:49) und bereitem Prozess (21:50:51) sind das rund 1,1 s.
+        self.wake_audio_buffer = []
+        self.wake_audio_buffer_bytes = 0
         self.awaiting_command = False
+        # Letzter von der Firmware gemeldeter Zustand (listening/speaking/idle).
+        # Standby darf NUR aus "listening" heraus passieren.
+        self.device_state = "idle"
         self.drained_watchdog = None
         self.speaking_guard = None
+        self.interim_watchdog = None
+        self.last_relay_activity_at = 0.0
         self.pending_tool = False
         self.pending_tool_since = 0.0
         self.session_id = str(uuid.uuid4())
@@ -149,6 +168,7 @@ class XiaozhiSession:
         self.encoder = opuslib.Encoder(24000, 1, opuslib.APPLICATION_VOIP)
         self.encoder.bitrate = 32000
         self.process = None
+        self.persistent_standby = False
         self.stdout_task = None
         self.stderr_task = None
         self.tts_started = False
@@ -196,6 +216,18 @@ class XiaozhiSession:
         self.helper_starting = False
         self.helper_ready_at = 0.0
         self.helper_started_at = 0.0
+        self.helper_guard = None
+        self.process_watch_task = None
+
+        # --- Turn-Messkette (2026-10-20) ---
+        # Eine Zeile pro Turn mit allen Abschnitten: Transkript -> erstes
+        # Audio -> TTS-Start -> stream_end -> physisch abgespielt. Ohne diese
+        # Aufteilung laesst sich nicht sagen, ob die Latenz beim Provider,
+        # beim lokalen Piper oder beim Geraet entsteht (Vorbild:
+        # voicepe-realtime, turn_metrics).
+        self.tts_started_at = 0.0
+        self.stream_end_at = 0.0
+        self.drained_at = 0.0
 
         # --- Diagnose: Wann kommt Provider-Audio relativ zum Transkript? ---
         # Ohne diese Zeitmarken laesst sich nicht unterscheiden, ob die
@@ -690,6 +722,24 @@ class XiaozhiSession:
         async with self.send_lock:
             await self.websocket.send(json.dumps(payload, ensure_ascii=False))
 
+    async def publish_ring_ready(self, ready):
+        """Meldet dem Geraet, ob wirklich auf Sprache gewartet wird.
+
+        Der Geraetezustand `listening` allein ist keine Zusage: er wird schon
+        beim Kanalaufbau gesetzt, waehrend die Sprachverarbeitung noch startet.
+        Der Ring zeigt Gruen deshalb nur nach dieser Meldung.
+
+        Fehler werden bewusst geschluckt: eine nicht zustellbare
+        Ringmeldung darf keinen Turn abbrechen.
+        """
+        try:
+            await self.send_json({
+                "type": "ring",
+                "state": "ready" if ready else "waiting",
+            })
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} ring readiness not delivered: {exc!r}", flush=True)
+
     async def start_realtime(self):
         if self.process and self.process.returncode is None:
             # XiaoZhi keeps sending microphone packets while the provider is
@@ -733,7 +783,11 @@ class XiaozhiSession:
         self.pcm_bytes_received = 0
         self.audio_progress_event = asyncio.Event()
         self.stream_end_sent = False
+        self.tts_started_at = 0.0
+        self.stream_end_at = 0.0
+        self.drained_at = 0.0
         self.transcript_final_at = 0.0
+        self.last_relay_activity_at = 0.0
         self.first_audio_at = 0.0
         self.first_audio_bytes = 0
         self.audio_before_transcript_bytes = 0
@@ -741,6 +795,9 @@ class XiaozhiSession:
         self.audio_diag_blocks = 0
         self.audio_diag_peak = 0
         self.lead_silence = bytearray()
+        self.last_mic_activity_at = 0.0
+        self.speech_seen_since_wake = False
+        self.mic_packets_total = 0
 
         env = os.environ.copy()
         env.update(
@@ -770,8 +827,133 @@ class XiaozhiSession:
             env=env,
         )
         process = self.process
+        # Ton aus der Startluecke nachliefern, bevor neuer Ton kommt.
+        if self.wake_audio_buffer and process.stdin and not process.stdin.is_closing():
+            for piece in self.wake_audio_buffer:
+                process.stdin.write(piece)
+            await process.stdin.drain()
+            print(
+                f"{self.tag} Flushed {self.wake_audio_buffer_bytes} bytes of pre-wake audio",
+                flush=True,
+            )
+            self.wake_audio_buffer.clear()
+            self.wake_audio_buffer_bytes = 0
         self.stdout_task = asyncio.create_task(self.read_audio(process))
         self.stderr_task = asyncio.create_task(self.read_events(process))
+        self.process_watch_task = asyncio.create_task(
+            self.watch_realtime_process(process)
+        )
+        self.arm_helper_guard(process)
+
+    # A provider problem must fail closed.  Otherwise the ESP keeps streaming
+    # microphone audio forever while no component is still able to produce a
+    # transcript.  Closing this one websocket is enough to return the board to
+    # standby; the next wake word creates a completely fresh Talk session.
+    HELPER_START_TIMEOUT_SECONDS = 15.0
+    # EINE Regel, ueberall gleich: 5 Sekunden ohne ein einziges Wort -> Standby.
+    # Keine weiteren Fristen, keine Obergrenzen, keine Pegel-Schwellen. Alles
+    # davon waren von mir erfundene Zahlen, die echte Sprache abgeschnitten
+    # haben (belegt 22.10.2026: Abbruch nach 30 s, obwohl durchgehend
+    # Mikrofonpakete ankamen).
+    SILENCE_BEFORE_STANDBY_SECONDS = 5.0
+    # Pegel, ab dem ein Mikrofonpaket als Sprache gilt. Am Referenzgeraet
+    # gemessen: Stille 40-50, Sprache 1000-13000.
+    MIC_SPEECH_PEAK = 300
+    # 5 Sekunden 16-kHz-Mono-Ton: deckt den Start des Sprachprozesses ab,
+    # ohne unbegrenzt Speicher zu halten.
+    WAKE_AUDIO_BUFFER_MAX_BYTES = 160000
+
+    def cancel_helper_guard(self):
+        current_task = asyncio.current_task()
+        if (
+            self.helper_guard is not None
+            and self.helper_guard is not current_task
+            and not self.helper_guard.done()
+        ):
+            self.helper_guard.cancel()
+        if self.helper_guard is not current_task:
+            self.helper_guard = None
+
+    def arm_helper_guard(self, process):
+        """Genau EINE Regel, identisch zum Nachhoerfenster.
+
+        Belegt am 22.10.2026: Nach dem Wake-Wort mit anschliessender Stille
+        blieb das Geraet dauerhaft gruen. Grund: die 5-Sekunden-Frist gab es
+        ausschliesslich im Nachhoerfenster NACH einer Antwort. Der erste
+        Zustand (Wake, dann nichts gesagt) hatte keine, seit ich die alten,
+        falschen Fristen entfernt hatte.
+
+        Jetzt gilt in beiden Faellen dasselbe: 5 Sekunden ohne ein erkanntes
+        Wort -> Bereitschaft. Kommt Sprache, wird die Frist verschoben.
+        """
+        self.cancel_helper_guard()
+
+        async def guard():
+            try:
+                await asyncio.wait_for(
+                    self.helper_ready.wait(),
+                    timeout=self.HELPER_START_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                if process is self.process and process.returncode is None:
+                    print(
+                        f"{self.tag} Helper not ready within "
+                        f"{self.HELPER_START_TIMEOUT_SECONDS:.0f}s; recycling "
+                        "voice connection",
+                        flush=True,
+                    )
+                    await self.return_to_standby("helper_start_timeout")
+                return
+            except asyncio.CancelledError:
+                return
+
+            loop = asyncio.get_running_loop()
+            idle_since = loop.time()
+            while True:
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    return
+                if process is not self.process or process.returncode is not None:
+                    return
+                if self.input_stopped:
+                    return
+                # Ein erkanntes Wort beendet die Frist: der Turn laeuft.
+                if self.transcript_final_at > 0 or self.tts_started or self.pending_tool:
+                    return
+                # Sobald Sprache erkannt wurde, NICHT mehr auf die Uhr schauen.
+                # Das Transkript braucht laenger als die Stille-Frist: gemessen
+                # am 22.10.2026 kam Sprache um 22:17:49 (peak=1383), das
+                # Transkript aber nie, weil um 22:17:54 abgebrochen wurde.
+                if self.speech_seen_since_wake:
+                    return
+                if self.last_mic_activity_at > idle_since:
+                    idle_since = self.last_mic_activity_at
+                    continue
+                if loop.time() - idle_since >= self.followup_seconds():
+                    print(
+                        f"{self.tag} No words for {self.followup_seconds():.0f}s "
+                        "after wake; returning to standby",
+                        flush=True,
+                    )
+                    await self.return_to_standby("silence_after_wake")
+                    return
+
+        self.helper_guard = asyncio.create_task(guard())
+
+    async def watch_realtime_process(self, process):
+        returncode = await process.wait()
+        if process is not self.process:
+            return
+        self.helper_ready.clear()
+        self.cancel_helper_guard()
+        if not self.input_stopped:
+            print(
+                f"{self.tag} Realtime helper exited unexpectedly "
+                f"(exit={returncode}); recycling voice connection",
+                flush=True,
+            )
+            await self.return_to_standby("helper_exited")
 
     async def stop_input(self, process=None):
         process = process or self.process
@@ -785,6 +967,8 @@ class XiaozhiSession:
             while True:
                 chunk = await process.stdout.read(8192)
                 if not chunk:
+                    break
+                if process is not self.process:
                     break
                 if self.tts_local:
                     # Lokale Sprachausgabe: das Audio des Providers wird nicht
@@ -878,6 +1062,42 @@ class XiaozhiSession:
             return 0
         return max((abs(s) for s in samples), default=0)
 
+    def log_turn_metrics(self):
+        """Eine Zeile pro Turn: wo die Zeit hingeht.
+
+        Abschnitte (alle in ms, negativ = Ereignis fehlte):
+          stt_to_audio  Transkript final -> erstes Provider-Audio
+          audio_to_tts  erstes Provider-Audio -> erstes PCM an das Geraet
+          tts_to_end    erstes PCM -> stream_end an das Geraet
+          end_to_drain  stream_end -> Geraet meldet physisch abgespielt
+          total         Transkript final -> physisch abgespielt
+
+        Nur Diagnose: die Werte werden geloggt, nie zur Steuerung benutzt.
+        """
+        if self.transcript_final_at <= 0:
+            return  # Turn ohne finales Transkript (z. B. reine Begruessung)
+
+        def delta(a, b):
+            if a <= 0 or b <= 0:
+                return None
+            return round((b - a) * 1000, 1)
+
+        parts = {
+            "stt_to_audio": delta(self.transcript_final_at, self.first_audio_at),
+            "audio_to_tts": delta(self.first_audio_at, self.tts_started_at),
+            "tts_to_end": delta(self.tts_started_at, self.stream_end_at),
+            "end_to_drain": delta(self.stream_end_at, self.drained_at),
+            "total": delta(self.transcript_final_at, self.drained_at),
+        }
+        rendered = " ".join(
+            f"{k}={'n/a' if v is None else v}" for k, v in parts.items()
+        )
+        print(
+            f"{self.tag} TURN METRICS {rendered} "
+            f"pcm_bytes={self.pcm_bytes_received} turn={self.turn_id}",
+            flush=True,
+        )
+
     # Ab diesem Pegel gilt ein Provider-Block als Sprache. Gemessen: reine
     # Stille liegt bei Peak 0, normale Sprache bei 700..17000. Der Wert ist
     # bewusst niedrig, damit ein leiser Sprechbeginn nicht abgeschnitten wird.
@@ -905,11 +1125,15 @@ class XiaozhiSession:
             )
             await self.send_json({"type": "tts", "state": "start"})
             self.tts_started = True
+            self.tts_started_at = loop_now
             self.arm_speaking_guard()
         packet = self.encoder.encode(pcm, 1440)
         async with self.send_lock:
             await self.websocket.send(packet)
-        self.last_sent_audio_at = asyncio.get_running_loop().time()
+        # GPT-Live continuously emits digital silence after spoken output.
+        # Silence must not keep the existing inactivity guard alive forever.
+        if self._pcm_peak(pcm) >= self.PROVIDER_SPEECH_PEAK:
+            self.last_sent_audio_at = asyncio.get_running_loop().time()
 
     @staticmethod
     def is_interim_text(text):
@@ -944,6 +1168,12 @@ class XiaozhiSession:
             "ich schaue",
             "ich schaue nach",
             "ich schaue kurz nach",
+            "ich schaue mir das an",
+            "ich schaue mir das kurz an",
+            "ich sehe mir das an",
+            "ich gucke mir das an",
+            "ich kümmere mich darum",
+            "ich kuemmere mich darum",
         }
 
     def cancel_session_finish(self):
@@ -958,7 +1188,8 @@ class XiaozhiSession:
             self.finish_task = None
 
     def cancel_followup_timeout(self):
-        if self.followup_task and not self.followup_task.done():
+        if (self.followup_task and not self.followup_task.done()
+                and self.followup_task is not asyncio.current_task()):
             self.followup_task.cancel()
         self.followup_task = None
 
@@ -974,9 +1205,70 @@ class XiaozhiSession:
     SPEAKING_TOOL_MAX_SECONDS = 150.0
 
     def cancel_speaking_guard(self):
-        if self.speaking_guard is not None and not self.speaking_guard.done():
+        if (self.speaking_guard is not None and not self.speaking_guard.done()
+                and self.speaking_guard is not asyncio.current_task()):
             self.speaking_guard.cancel()
         self.speaking_guard = None
+
+    # ------------------------------------------------------------------
+    # Zwischenansage ohne Fortsetzung
+    # ------------------------------------------------------------------
+    # Belegt am 21.10.2026, 19:12: Das Modell sagte "Einen Moment, ich prüfe
+    # das." und rief danach weder den Consult noch ein Werkzeug auf. Weil eine
+    # reine Zwischenansage absichtlich kein stream_end ausloest (sonst wuerde
+    # die gleich folgende Antwort abgeschnitten), blieb der Turn offen: kein
+    # Router, kein Befehl, kein Abschluss. Das Geraet stand stumm auf
+    # "Sprechen", und der Helfer hielt seine Sitzung offen.
+    #
+    # Dieser Waechter beendet nur den Fall "Zwischenansage UND danach kommt
+    # nichts". Kommt ein Werkzeugaufruf oder eine echte Antwort, wird er
+    # abgebrochen und veraendert nichts am normalen Ablauf.
+    # Nur bei ECHTER Stille nach der Zwischenansage eingreifen.
+    #
+    # Erste Fassung nutzte eine feste 4-Sekunden-Frist und hat damit eine
+    # echte Antwort abgeschnitten (belegt 21.10.2026, 19:29: Zwischenansage
+    # 19:28:59, Antwort 19:29:05, Abbruch 19:29:03). Deshalb haengt der
+    # Waechter nicht mehr an einer Frist ab der Zwischenansage, sondern an
+    # der letzten Provider-Aktivitaet: solange Audio, Text oder ein
+    # Werkzeugaufruf kommt, wartet er weiter.
+    INTERIM_IDLE_SECONDS = 8.0
+
+    def cancel_interim_watchdog(self):
+        if self.interim_watchdog is not None and not self.interim_watchdog.done():
+            self.interim_watchdog.cancel()
+        self.interim_watchdog = None
+
+    def arm_interim_watchdog(self, process):
+        self.cancel_interim_watchdog()
+
+        async def watch():
+            loop = asyncio.get_running_loop()
+            try:
+                while True:
+                    await asyncio.sleep(1.0)
+                    if self.stream_end_sent or self.pending_tool or self.tts_started:
+                        return
+                    last = max(
+                        self.last_relay_activity_at,
+                        self.transcript_final_at,
+                    )
+                    if last <= 0:
+                        continue
+                    if loop.time() - last < self.INTERIM_IDLE_SECONDS:
+                        continue
+                    print(
+                        f"{self.tag} No provider activity for "
+                        f"{self.INTERIM_IDLE_SECONDS:.0f}s after an interim "
+                        "acknowledgement; closing the turn so the device "
+                        "returns to listening",
+                        flush=True,
+                    )
+                    await self.open_followup_window()
+                    return
+            except asyncio.CancelledError:
+                return
+
+        self.interim_watchdog = asyncio.create_task(watch())
 
     def arm_speaking_guard(self):
         """Verhindert, dass ein Geraet dauerhaft auf 'Sprechen' stehen bleibt.
@@ -998,7 +1290,9 @@ class XiaozhiSession:
             loop = asyncio.get_running_loop()
             while True:
                 await asyncio.sleep(1.0)
-                if self.stream_end_sent or not self.tts_started:
+                if self.stream_end_sent or (
+                    not self.tts_started and not self.pending_tool
+                ):
                     return
                 if self.pending_tool:
                     tool_age = loop.time() - self.pending_tool_since
@@ -1009,10 +1303,54 @@ class XiaozhiSession:
                         "closing this speaking round anyway",
                         flush=True,
                     )
+                    if self.last_sent_audio_at <= 0:
+                        # A consult can fail before producing even one audio
+                        # frame.  Waiting for an audio timestamp here would
+                        # make the guard a no-op and leave the microphone
+                        # occupied forever.
+                        self.input_stopped = True
+                        if getattr(self, "persistent_standby", False):
+                            # Dauerbetrieb: nicht abbrechen, nur einmal melden.
+                            if not getattr(self, "tool_wait_reported", False):
+                                self.tool_wait_reported = True
+                                print(
+                                    f"{self.tag} Tool running for {tool_age:.0f}s; "
+                                    "waiting (no abort in persistent mode)",
+                                    flush=True,
+                                )
+                            self.input_stopped = False
+                            continue
+                        try:
+                            self.websocket.transport.abort()
+                        except Exception:
+                            pass
+                        return
                 if self.last_sent_audio_at <= 0:
                     continue
                 idle = loop.time() - self.last_sent_audio_at
                 if idle >= self.SPEAKING_STALL_SECONDS:
+                    if getattr(self, "persistent_standby", False):
+                        # Dauerbetrieb: NICHT abraeumen.
+                        #
+                        # Belegt 23.10.2026, 14:24: Zwischenansage 14:24:18,
+                        # Abbruch 14:25:02 = 44 s. Der Consult lief zu diesem
+                        # Zeitpunkt noch. Dieser Waechter hat ihn getoetet,
+                        # ohne eine Zeile zu schreiben, weil pending_tool im
+                        # Thin-Modus nie gesetzt wird (die Werkzeuge laufen
+                        # beim Gateway, nicht beim Client).
+                        #
+                        # In der GUI gibt es keinen solchen Waechter. Also
+                        # gibt es ihn hier auch nicht: gewartet wird, bis der
+                        # Consult antwortet oder die Sitzung endet.
+                        if not getattr(self, "stall_reported", False):
+                            self.stall_reported = True
+                            print(
+                                f"{self.tag} Waiting for provider/consult: "
+                                f"{idle:.0f}s without new audio "
+                                "(no abort in persistent mode)",
+                                flush=True,
+                            )
+                        continue
                     print(
                         f"{self.tag} Speaking stalled {idle:.0f}s without "
                         "stream_end; sending tts stop so the device returns "
@@ -1053,6 +1391,37 @@ class XiaozhiSession:
         self.cancel_session_finish()
         self.cancel_drained_watchdog()
         self.input_stopped = True
+        if getattr(self, "persistent_standby", False):
+            self.followup_open = False
+            self.stream_end_sent = True
+            self.cancel_helper_guard()
+            self.cancel_speaking_guard()
+            self.cancel_interim_watchdog()
+            await self.publish_ring_ready(False)
+            process = self.process
+            self.process = None  # Intentional exit, not a transport failure.
+            self.helper_ready.clear()
+            if process and process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            # Finish consuming the old helper before a new wake can start it.
+            current = asyncio.current_task()
+            for task in (self.stdout_task, self.stderr_task, self.process_watch_task):
+                if task and task is not current:
+                    await asyncio.gather(task, return_exceptions=True)
+            self.pending_tool = False
+            self.tts_started = False
+            await self.send_json({"type": "standby", "reason": reason})
+            print(
+                f"{self.tag} Standby reason={reason}: device transport retained; "
+                "helper stopped",
+                flush=True,
+            )
+            return
         try:
             await asyncio.wait_for(
                 self.websocket.close(code=1000, reason=reason),
@@ -1092,12 +1461,17 @@ class XiaozhiSession:
 
         self.drained_watchdog = asyncio.create_task(fallback_after_playback())
 
+    def followup_seconds(self):
+        """Dieselbe Dauer wie das Nachhoerfenster: 5 s persistent, sonst 10 s."""
+        return 5.0 if getattr(self, "persistent_standby", False) else 10.0
+
     def schedule_followup_timeout(self):
         self.cancel_followup_timeout()
 
         async def close_after_followup_window():
-            print(f"{self.tag} Follow-up window open for 10 seconds", flush=True)
-            await asyncio.sleep(10.0)
+            seconds = self.followup_seconds()
+            print(f"{self.tag} Follow-up window open for {seconds:g} seconds", flush=True)
+            await asyncio.sleep(seconds)
             print(
                 f"{self.tag} Follow-up window expired; returning to standby "
                 f"(audio packets received={self.followup_audio_packets}, "
@@ -1105,6 +1479,9 @@ class XiaozhiSession:
                 f"peak={self.followup_peak})",
                 flush=True,
             )
+            if getattr(self, "persistent_standby", False):
+                await self.return_to_standby("follow-up timeout")
+                return
             try:
                 await asyncio.wait_for(
                     self.websocket.close(code=1000, reason="follow-up timeout"),
@@ -1120,6 +1497,7 @@ class XiaozhiSession:
 
     async def open_followup_window(self, audio_guard_seconds=0.0):
         """Return the still-open device session to listening for 10 seconds."""
+        self.cancel_interim_watchdog()
         await self.send_json({"type": "tts", "state": "stop"})
         self.tts_started = False
         self.pcm_buffer = bytearray()
@@ -1139,6 +1517,12 @@ class XiaozhiSession:
         self.tts_text_buffer = ""
         self.local_pcm_bytes_sent = 0
         await self.start_realtime()
+        # Laeuft der Helper noch aus der vorigen Runde, kommt kein neues
+        # `ready`-Ereignis. Das Geraet hat seine Bereitschaft aber gerade beim
+        # Wechsel auf Listening zurueckgesetzt — ohne diese Meldung bliebe der
+        # Ring im Nachhoerfenster blau, obwohl Sprache angenommen wird.
+        if self.helper_ready.is_set():
+            await self.publish_ring_ready(True)
         self.schedule_followup_timeout()
 
     def schedule_stream_end(self, process):
@@ -1218,6 +1602,7 @@ class XiaozhiSession:
             return
 
         self.stream_end_sent = True
+        self.stream_end_at = asyncio.get_running_loop().time()
         self.cancel_speaking_guard()
         await self.send_json({"type": "tts", "state": "stream_end"})
         self.schedule_drained_watchdog(expected_pcm_bytes)
@@ -1390,6 +1775,8 @@ class XiaozhiSession:
                 line = await process.stderr.readline()
                 if not line:
                     break
+                if process is not self.process:
+                    break
                 text = line.decode("utf-8", "replace").strip()
                 try:
                     event = json.loads(text)
@@ -1397,7 +1784,12 @@ class XiaozhiSession:
                     print(f"{self.tag} {text}", flush=True)
                     continue
                 kind = event.get("type")
+                # Jedes Provider-Ereignis ist Aktivitaet. Der Zwischenansage-
+                # Waechter entscheidet daran, ob wirklich Stille herrscht.
+                self.last_relay_activity_at = asyncio.get_running_loop().time()
                 if kind == "user_transcript":
+                    self.cancel_interim_watchdog()
+                    self.cancel_helper_guard()
                     self.cancel_followup_timeout()
                     self.followup_open = False
                     # Ein neuer Satz beginnt eine neue Runde. Ein haengender
@@ -1497,6 +1889,7 @@ class XiaozhiSession:
                 elif kind == "error":
                     print(f"{self.tag} OpenClaw realtime error: {event.get('message')}", flush=True)
                 elif kind == "tool_call":
+                    self.cancel_interim_watchdog()
                     if not self.pending_tool:
                         self.pending_tool_since = asyncio.get_running_loop().time()
                     self.pending_tool = True
@@ -1519,6 +1912,9 @@ class XiaozhiSession:
                         flush=True,
                     )
                     if event.get("text") and not self.is_interim_text(event["text"]):
+                        # Echte Antwort: der Zwischenansage-Waechter darf sie
+                        # unter keinen Umstaenden abschneiden.
+                        self.cancel_interim_watchdog()
                         if self.photo_speaking:
                             # Eine Foto-Runde spricht ihre Antwort selbst. Das
                             # generische stream_end des Realtime-Modells wuerde
@@ -1531,6 +1927,11 @@ class XiaozhiSession:
                             self.schedule_local_stream_end(process)
                         else:
                             self.schedule_stream_end(process)
+                    elif event.get("text"):
+                        # Reine Zwischenansage. Normalerweise folgt jetzt der
+                        # Werkzeugaufruf; kommt er nicht, beendet der Waechter
+                        # den Turn statt das Geraet haengen zu lassen.
+                        self.arm_interim_watchdog(process)
                 elif kind in {"ready", "tool_result"}:
                     if kind == "tool_result":
                         self.pending_tool = False
@@ -1543,6 +1944,11 @@ class XiaozhiSession:
                                 f"{self.helper_ready_at - self.helper_started_at:.2f}s",
                                 flush=True,
                             )
+                        # Erst jetzt nimmt die Gegenstelle wirklich Sprache
+                        # an. Das Geraet darf den Ring erst jetzt gruen
+                        # zeigen; vorher leuchtete er mehrere Sekunden, ohne
+                        # dass Gesprochenes verarbeitet wurde.
+                        await self.publish_ring_ready(True)
                     print(
                         f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
@@ -1576,6 +1982,12 @@ class XiaozhiSession:
                 # Laeuft der laufende Befehl, wird der hoechste Pegel seit dem
                 # Wecken festgehalten. Das ist die Grundlage des Vergleichs.
                 self.turn_peak = max(self.turn_peak, peak)
+            # Getrennt davon: WANN zuletzt Sprache ankam. Gemessen am Geraet
+            # liegt Stille bei Peak 40-50, Sprache ab etwa 1000. Die Schwelle
+            # 300 liegt dazwischen und ist damit kein geratener Wert.
+            if peak >= self.MIC_SPEECH_PEAK:
+                self.last_mic_activity_at = asyncio.get_running_loop().time()
+                self.speech_seen_since_wake = True
             self.audio_packets += 1
             self.audio_peak = max(self.audio_peak, peak)
             if self.audio_packets % 25 == 0:
@@ -1591,6 +2003,22 @@ class XiaozhiSession:
                 self.followup_peak,
                 max((abs(sample) for sample in samples), default=0),
             )
+        # Diagnose: jedes echte Mikrofonpaket zaehlen, damit ein stummer Kanal
+        # sofort auffaellt statt als "keine Funktion" ohne Anhaltspunkt.
+        self.mic_packets_total = getattr(self, "mic_packets_total", 0) + 1
+        if not (self.process and self.process.stdin and not self.process.stdin.is_closing()):
+            # Noch kein Sprachprozess: Ton nicht verwerfen, sondern kurz
+            # zurueckhalten und beim Start nachliefern. Sonst gehen die ersten
+            # Woerter nach dem Wake-Wort verloren.
+            if pcm:
+                self.wake_audio_buffer.append(pcm)
+                self.wake_audio_buffer_bytes += len(pcm)
+                while (
+                    self.wake_audio_buffer_bytes > self.WAKE_AUDIO_BUFFER_MAX_BYTES
+                    and self.wake_audio_buffer
+                ):
+                    self.wake_audio_buffer_bytes -= len(self.wake_audio_buffer.pop(0))
+            return
         if (
             self.process
             and self.process.stdin
@@ -1608,10 +2036,16 @@ class XiaozhiSession:
             await self.process.stdin.drain()
 
     async def close(self, abort=False):
+        # From here on every child-process exit is intentional.  Set this
+        # before terminate()/stdin close so the process watcher cannot start a
+        # second, misleading recovery while teardown is already in progress.
+        self.input_stopped = True
         self.cancel_session_finish()
         self.cancel_followup_timeout()
         self.cancel_drained_watchdog()
         self.cancel_speaking_guard()
+        self.cancel_interim_watchdog()
+        self.cancel_helper_guard()
         if self.arbiter is not None:
             self.arbiter.unregister(self)
         # Den Sprach-Arbeiter sauber beenden, damit kein Piper-Thread
@@ -1635,8 +2069,9 @@ class XiaozhiSession:
             except asyncio.TimeoutError:
                 self.process.terminate()
                 await self.process.wait()
-        for task in (self.stdout_task, self.stderr_task):
-            if task:
+        current_task = asyncio.current_task()
+        for task in (self.stdout_task, self.stderr_task, self.process_watch_task):
+            if task and task is not current_task:
                 await asyncio.gather(task, return_exceptions=True)
         for pending in self.mcp_pending.values():
             if not pending.done():
@@ -1652,6 +2087,11 @@ class XiaozhiSession:
                 payload = json.loads(message)
                 kind = payload.get("type")
                 if kind == "hello":
+                    self.persistent_standby = bool(
+                        payload.get("features", {}).get("persistent_standby")
+                    )
+                    if self.persistent_standby:
+                        self.input_stopped = True
                     await self.send_json({
                         "type": "hello",
                         "transport": "websocket",
@@ -1670,7 +2110,8 @@ class XiaozhiSession:
                     # den Kanal geoeffnet und der Nutzer hat das Wachwort noch
                     # nicht gesprochen. Bewusst als Task, damit der
                     # hello-Austausch nicht darauf wartet.
-                    asyncio.create_task(self.prewarm_realtime())
+                    if not self.persistent_standby:
+                        asyncio.create_task(self.prewarm_realtime())
                 elif kind == "mcp":
                     mcp_payload = payload.get("payload", {})
                     request_id = mcp_payload.get("id")
@@ -1683,7 +2124,32 @@ class XiaozhiSession:
                     # erst beim fertigen Transkript (Pegelvergleich).
                     self.turn_peak = 0
                     self.awaiting_command = True
+                    self.input_stopped = False
+                    print(f"{self.tag} Listen start from device", flush=True)
                     await self.start_realtime()
+                    # Laeuft der Helper aus einer frueheren Runde noch, kommt
+                    # kein neues `ready`-Ereignis. Das Geraet hat beim Wechsel
+                    # auf Listening aber gerade seine Bereitschaft
+                    # zurueckgesetzt — ohne diese Meldung bliebe der Ring blau,
+                    # obwohl Sprache sofort angenommen wird.
+                    if self.helper_ready.is_set() and self.process and self.process.returncode is None:
+                        await self.publish_ring_ready(True)
+                elif kind == "device" and payload.get("event") == "speech_activity":
+                    if self.followup_open and payload.get("active") is True:
+                        # Sprachaktivitaet haelt das Nachhoerfenster OFFEN, sie
+                        # darf es aber nicht abschalten. Fassung vom 22.10.2026
+                        # rief hier nur cancel_followup_timeout() und setzte
+                        # followup_open=False — danach existierte keine Frist
+                        # mehr und der Ring blieb gruen, bis der naechste Satz
+                        # kam (belegt 21:16:28 bis 21:18:13, 105 s).
+                        # Jetzt wird die 5-Sekunden-Frist neu gestartet: solange
+                        # gesprochen wird, bleibt sie offen, danach laeuft sie
+                        # regulaer ab.
+                        print(
+                            f"{self.tag} Speech activity: follow-up window refreshed",
+                            flush=True,
+                        )
+                        self.schedule_followup_timeout()
                 elif (
                     kind == "device"
                     and payload.get("event") == "state"
@@ -1693,8 +2159,9 @@ class XiaozhiSession:
                     # musste den Geraetezustand aus dem Timing erraten. Wir
                     # protokollieren ihn, damit sich Anzeige und Wirklichkeit
                     # bei Bedarf abgleichen lassen.
+                    self.device_state = str(payload.get("state") or "idle")
                     print(
-                        f"{self.tag} Device state: {payload.get('state')}",
+                        f"{self.tag} Device state: {self.device_state}",
                         flush=True,
                     )
                     # In the follow-up window, "speaking" means the device
@@ -1722,6 +2189,8 @@ class XiaozhiSession:
                     and payload.get("event") == "playback_drained"
                 ):
                     self.cancel_drained_watchdog()
+                    self.drained_at = asyncio.get_running_loop().time()
+                    self.log_turn_metrics()
                     print(
                         f"{self.tag} Physical playback drained; opening follow-up listening window",
                         flush=True,

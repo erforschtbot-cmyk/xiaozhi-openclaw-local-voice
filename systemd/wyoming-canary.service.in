@@ -1,0 +1,21 @@
+[Unit]
+Description=Wyoming Canary STT (NVIDIA canary-180m-flash INT8 via sherpa-onnx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@CANARY_DIR@
+ExecStart=@CANARY_DIR@/.venv/bin/python @CANARY_DIR@/wyoming_canary.py \
+  --uri tcp://0.0.0.0:@CANARY_PORT@ \
+  --model-dir @CANARY_DIR@/model \
+  --language de \
+  --src-lang de \
+  --tgt-lang de \
+  --num-threads @CANARY_THREADS@ \
+  --vad-model @CANARY_DIR@/silero_vad.onnx
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,4 +1,18 @@
-# 10 — Canary 180M Flash als Favorit (lokale Erkennung)
+# 10 — Lokale Erkennung: Canary als Favorit
+
+> **Zwei Varianten — nicht verwechseln.** Beide sprechen das Wyoming-ASR-Protokoll,
+> brauchen aber unterschiedliche Skripte, Modelle und Ports:
+>
+> | Variante | Skript | Laufzeit | Modell | Port |
+> |---|---|---|---|---|
+> | **Canary 180M Flash** (in diesem Dokument) | `gateway/wyoming_canary.py` | `sherpa-onnx` | ~200 MB ONNX | `10301` |
+> | **Canary 1B v2** (Referenzhost live) | `gateway/wyoming_canary1b.py` | `onnx-asr` | ~3,7 GB ONNX | `10303` |
+>
+> Beide funktionieren. Für einen **neuen** Host ist die 180M-Variante der
+> pragmatische Einstieg: kleiner, schneller zu laden, weniger RAM. Die
+> 1B-Variante erkennt verwaschene Sprache etwas robuster, braucht aber Platz
+> und einen neueren Prozessor. **Wichtig:** der Port muss zu dem Skript passen,
+> das tatsächlich läuft — die Bridge fragt nur eine Adresse ab.
 
 Dieses Dokument beschreibt die **bevorzugte** lokale Erkennung dieses
 Projekts: **NVIDIA Canary 180M Flash (INT8)** über `sherpa-onnx`, mit
@@ -107,8 +121,42 @@ Der Server liegt als `gateway/wyoming_canary.py` im Repo. Start:
   --vad-model ~/wyoming-canary/silero_vad.onnx
 ```
 
-Dauerhafter Dienst: `systemd/wyoming-canary.service.reference`
+Dauerhafter Dienst: Vorlage `systemd/wyoming-canary.service.in`
 (Port **10301**). Whisper bleibt auf **10300** parallel.
+
+Unit rendern (Pfade und Port einsetzen):
+
+```bash
+mkdir -p ~/wyoming-canary
+sed -e "s|@CANARY_DIR@|$HOME/wyoming-canary|g" \
+    -e "s|@CANARY_PORT@|10301|g" \
+    -e "s|@CANARY_THREADS@|8|g" \
+    systemd/wyoming-canary.service.in \
+  > ~/.config/systemd/user/wyoming-canary.service
+systemctl --user daemon-reload
+systemctl --user enable --now wyoming-canary.service
+systemctl --user is-active wyoming-canary.service
+```
+
+**Prüfpunkt:** `systemctl --user is-active` muss `active` liefern, und der Port
+muss lauschen: `ss -ltn | grep 10301`.
+
+### Variante Canary 1B v2 (Referenzhost)
+
+Das live laufende Skript ist `gateway/wyoming_canary1b.py` (Laufzeit
+`onnx-asr`, nicht `sherpa-onnx`). Es nimmt andere Argumente:
+
+```bash
+/home/openclaw/stt-cand5-venv/bin/python gateway/wyoming_canary1b.py \
+  --uri tcp://0.0.0.0:10303 \
+  --model-name nemo-canary-1b-v2 \
+  --model-path ~/.cache/jarvis-stt-cand5-canary1b-onnx \
+  --language de
+```
+
+Abhängigkeiten: `onnx-asr`, `onnxruntime`, `wyoming`, `numpy` in einem eigenen
+venv. Der Modellordner enthält `encoder-model.onnx`, `decoder-model.onnx`,
+`vocab.txt` und `config.json` (`model_type: nemo-conformer-aed`) — rund 3,7 GB.
 
 ## Bridge darauf umstellen
 

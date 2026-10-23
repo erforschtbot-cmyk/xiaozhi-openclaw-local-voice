@@ -1,9 +1,18 @@
 # Von leerem USB-Gerät zu OpenClaw — Einstieg und Audit
 
-Stand: 20.10.2026. **Noch kein vollständig abgenommener Nullstart.**
-Diese Seite ersetzt frühere pauschale Aussagen „alles vollständig nachbaubar“.
-Dateien vorhanden, erfolgreich kompilierbar und auf leerer Hardware getestet sind
-unterschiedliche Prüfstufen. Historische Buildberichte sind keine heutige Abnahme.
+Stand: 23.10.2026. **Die lokale Sprachkette (Canary + Piper) ist am Gerät
+abgenommen.** Der Host-Aufbau ist durch `scripts/install-host.sh` abgedeckt und
+prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.10.6 vor.
+
+Für einen Nachbau ohne Vorwissen gilt: **`docs/01-HOST-INSTALLATION.md` in der
+Reihenfolge abarbeiten, nicht querlesen.** Dort steht nach jedem Schritt, was
+hätte passieren müssen. Diese Seite hier erklärt den Aufbau und die
+Prüfstufen; sie ersetzt die Schritt-für-Schritt-Anleitung nicht.
+
+Dateien vorhanden, erfolgreich kompilierbar und auf leerer Hardware getestet
+sind unterschiedliche Prüfstufen. Historische Buildberichte sind keine heutige
+Abnahme. Was am 23.10. tatsächlich belegt wurde, steht unter
+„Prüfergebnisse“ am Ende dieser Seite.
 
 ## Was entspricht hier einer Arduino-`.ino`?
 
@@ -23,7 +32,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | OTA-Konfigurationsserver | verrät dem Gerät seine WebSocket-Adresse | Bestandteil von `gateway/server.py`, TCP 8766 |
 | Audio-Bridge | übersetzt XiaoZhi/Opus zum OpenClaw-Talk-Pfad | `gateway/server.py`, TCP 8765 |
 | Gateway-Helfer | authentifizierte Talk-Verbindung | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.4`, TLS TCP 18789 |
+| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.6`, TLS TCP 18789 |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
 | Agent-Werkzeug-Plugin | Alexa-Aufrufe des Agenten | `plugins/iobroker-alexa/`, TypeScript, JS, Tests und Lockdatei |
@@ -46,9 +55,10 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
 2. Linux-Host mit Node/npm, Python/venv/libopus, Git und Docker vorbereiten.
    Die Referenz erwartet Benutzer `/home/openclaw` und npm unter
    `/home/openclaw/.npm-global`; die Pfade sind derzeit nicht portabel.
-3. OpenClaw **2026.10.4** installieren, Gateway konfigurieren, Provider anmelden
-   und das Talk-/Consult-Sessionziel `agent:voice:…` prüfen. **Die bisherige Host-Anleitung automatisiert
-   diesen Nullstart nicht vollständig.** Sie setzt ein funktionierendes Gateway voraus.
+3. OpenClaw **2026.10.6** installieren, Gateway konfigurieren, Provider anmelden
+   und das Talk-/Consult-Sessionziel `agent:voice:…` prüfen. **Die Host-Anleitung
+   automatisiert diesen Teil nicht** — Schritt 3 bleibt Handarbeit, ist aber in
+   `docs/01-HOST-INSTALLATION.md` mit Prüfpunkt beschrieben.
 4. TLS und Token bereitstellen: der Helfer erwartet `wss://127.0.0.1:18789`,
    `%h/.openclaw/ssl/gateway.crt` sowie `gateway.authToken` in der lokalen
    `%h/.openclaw/secrets.json`. Token und Gateway-Authentifizierung müssen

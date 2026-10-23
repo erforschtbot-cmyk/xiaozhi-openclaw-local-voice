@@ -143,10 +143,13 @@ umgebaut werden — der Provider-Pfad ist im Code vollständig erhalten.
 
 ## Bekannte Grenzen
 
-- **Das Hören bleibt beim Provider.** Dieser Aufbau ist kein rein lokaler
-  Assistent. Eine vollständig lokale Erkennung wäre mit `faster-whisper`
-  möglich (auf dem Referenzhost bereits als Wyoming-Dienst vorhanden), ist
-  aber nicht Teil dieses Umbaus.
+- **Das Hören ist inzwischen auch lokal möglich.** Dieses Dokument beschreibt
+  nur den Umbau der *Stimme*. Die Erkennung lässt sich zusätzlich auf einen
+  lokalen Wyoming-Dienst legen — siehe
+  [`10-CANARY-FAVORIT.md`](10-CANARY-FAVORIT.md) (Favorit, `:10303`) und
+  [`08-LOKALE-ERKENNUNG.md`](08-LOKALE-ERKENNUNG.md) (faster-whisper,
+  Rückfall). Mit `--stt-local` läuft beides lokal und es fällt keine
+  Provider-Nutzung mehr an.
 - **Provider-Audio wird verworfen, nicht vermieden.** Es entstehen weiterhin
   Audio-Token für die Ausgabe. Eine reine Textausgabe bietet die
   OpenClaw-Talk-Session derzeit nicht an.

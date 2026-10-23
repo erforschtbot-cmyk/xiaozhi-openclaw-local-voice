@@ -175,13 +175,23 @@ function takeDelta(text) {
 }
 
 client.start();
-await Promise.race([
+const gatewayReady = Promise.race([
   ready,
   new Promise((_, reject) =>
     setTimeout(() => reject(new Error("Gateway connect timeout")), 10000),
   ),
-]);
+]).then(
+  () => ({ error: null }),
+  (error) => {
+    log(`Gateway-Verbindung fehlgeschlagen: ${error.message}`);
+    return { error };
+  },
+);
 
+// Lokale Erkennung kann sofort Audio annehmen.  Der Gateway wird erst nach
+// dem fertigen Transkript gebraucht; deshalb darf sein Handshake weder den
+// Ring noch den Beginn der Aufnahme verzögern.  Bis dahin puffert stdin ganz
+// normal und die Verbindung baut sich parallel auf.
 emit("ready", { sessionId: `local-voice`, consultSessionKey: null });
 
 // --------------------------------------------------------------------------
@@ -257,6 +267,8 @@ async function handleUtterance(pcm) {
     // Textzustand fuer die Delta-Berechnung zuruecksetzen.
     assistantText = "";
     try {
+      const gateway = await gatewayReady;
+      if (gateway.error) throw gateway.error;
       const started = await client.request("chat.send", {
         sessionKey: SESSION_KEY,
         message: text,

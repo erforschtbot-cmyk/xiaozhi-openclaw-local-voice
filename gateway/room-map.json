@@ -1,0 +1,7 @@
+{
+  "_note": "VORLAGE. Raum pro Geraet: Schluessel ist die Device-Id aus dem WebSocket-Handshake (MAC der Firmware, siehe serielle Ausgabe oder Bridge-Log 'Raum aus Device-Id ...'). Ein Geraet ohne Eintrag bekommt keinen Raum vorgestellt und geht an die KI. Die Session bleibt unveraendert; mehrere Geraete teilen sie weiterhin.",
+  "_howto": "1) Bridge starten, Geraet verbinden, im Log die Device-Id ablesen. 2) Hier eintragen: \"aa:bb:cc:dd:ee:ff\": \"Wohnzimmer\". 3) Bridge neu starten. Die Beispiele unten sind Platzhalter und muessen ersetzt werden.",
+  "rooms": {
+    "aa:bb:cc:dd:ee:ff": "Wohnzimmer"
+  }
+}

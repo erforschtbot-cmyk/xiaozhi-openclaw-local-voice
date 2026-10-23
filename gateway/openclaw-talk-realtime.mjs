@@ -48,6 +48,61 @@ function emit(type, data = {}) {
   process.stderr.write(`${JSON.stringify({ type, ...data })}\n`);
 }
 
+// ---------------------------------------------------------------------------
+// Flugschreiber
+// ---------------------------------------------------------------------------
+// Warum: Ein Ausfall war bisher nur daran erkennbar, dass Ereignisse FEHLTEN.
+// Nach dem Turn war dann nicht mehr feststellbar, ob das Audio den Gateway
+// erreicht hat, ob OpenAI geantwortet hat oder ob nur die Uebergabe scheiterte.
+// Diese Datei schreibt genau das mit — pro Turn eine JSONL-Datei. Sie ist rein
+// diagnostisch, blockiert nie und darf den Sprachpfad nicht beeinflussen.
+const FLIGHT_DIR =
+  process.env.OPENCLAW_FLIGHT_DIR ||
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/logs";
+const FLIGHT_STARTED_AT = Date.now();
+const FLIGHT_PATH = (() => {
+  try {
+    fs.mkdirSync(FLIGHT_DIR, { recursive: true, mode: 0o700 });
+    const stamp = new Date(FLIGHT_STARTED_AT).toISOString().replace(/[:.]/g, "-");
+    return path.join(FLIGHT_DIR, `turn-${stamp}-${process.pid}.jsonl`);
+  } catch {
+    return null;
+  }
+})();
+let flightEvents = 0;
+const FLIGHT_MAX_EVENTS = 400;
+const flightAudioCounts = new Map();
+
+function record(stage, data = {}) {
+  if (!FLIGHT_PATH) return;
+  // Bound repetitive audio diagnostics, never lifecycle/error evidence.
+  const isAudio = stage === "audio_accepted" || stage === "audio_flushed" ||
+    stage === "relay_audio" || (stage === "relay_event" && data.type === "inputAudio");
+  if (isAudio) {
+    const count = (flightAudioCounts.get(stage) || 0) + 1;
+    flightAudioCounts.set(stage, count);
+    if (count % 25 !== 1 || flightEvents >= FLIGHT_MAX_EVENTS) return;
+    flightEvents += 1;
+  }
+  try {
+    // `data` darf die Zeitmarke nicht ueberschreiben. Genau das passierte:
+    // audio_accepted lieferte `at: 0` aus dem Audio-Zeitstempel und ersetzte
+    // den ISO-Zeitpunkt. Diagnosefelder bekommen deshalb das Praefix `d`.
+    const extra = {};
+    for (const [key, value] of Object.entries(data)) extra[`d${key}`] = value;
+    const line = JSON.stringify({
+      at: new Date().toISOString(),
+      sinceStartMs: Date.now() - FLIGHT_STARTED_AT,
+      stage,
+      sessionId: sessionId ?? null,
+      ...extra,
+    });
+    fs.appendFileSync(FLIGHT_PATH, line + "\n");
+  } catch {
+    /* Diagnose darf den Sprachpfad nie blockieren */
+  }
+}
+
 function gatewayToken() {
   const secretsFile =
     process.env.OPENCLAW_SECRETS_FILE ||
@@ -164,11 +219,43 @@ const ready = new Promise((resolve, reject) => {
   readyReject = reject;
 });
 let sessionId;
+let relayClosedBeforeTranscript = false;
+let relayRecoveries = 0;
 let userFinal = false;
+let userFinalAt = 0;
+let selfConsultStarted = false;
 let assistantFinal = false;
 let audioDone = false;
 let assistantText = "";
 let activeConsults = 0;
+// Hat der Provider in diesem Turn einen Werkzeugaufruf ausgeloest?
+let sawToolCall = false;
+// Laeuft bereits ein Ersatz-Consult fuer eine blosse Ankuendigung?
+let fallbackConsult = null;
+
+// Reine Ankuendigung ohne Inhalt. Belegt 22.10.2026: "Ich schaue mir das an."
+// wurde als fertige Antwort gewertet, der Turn endete, und der Nutzer hoerte
+// nie ein Ergebnis. Diese Muster sind bewusst nur Ankuendigungen — eine echte
+// Antwort ("Es ist 15 Uhr") passt auf keines davon.
+const INTERIM_PATTERNS = [
+  /^(?:einen\s+)?moment(?:\s+bitte)?[.!]?$/i,
+  /^(?:einen\s+)?augenblick(?:\s+bitte)?[.!]?$/i,
+  /^ich\s+(?:pr(?:ue|ü)fe|schaue|sehe|gucke)\b.{0,40}$/i,
+  /^ich\s+(?:k(?:ue|ü)mmere|k\u00fcmmere)\s+mich\b.{0,40}$/i,
+  /^(?:let me|i'?ll|i will)\s+(?:check|look|see)\b.{0,40}$/i,
+  /^(?:one\s+)?moment(?:\s+please)?[.!]?$/i,
+];
+
+function looksLikeInterim(text) {
+  const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!normalized) return false;
+  return INTERIM_PATTERNS.some((re) => re.test(normalized));
+}
+
+// Letzter vom Provider gesprochener Text dieses Turns.
+function lastAssistantText() {
+  return assistantText.trim();
+}
 let responseCompletedAt = 0;
 let audioFrameCount = 0;
 let audioByteCount = 0;
@@ -177,6 +264,12 @@ let assistantFinalAt = 0;
 let loggedAudioAfterFinal = false;
 let lastUserTranscript = "";
 let assistantAudioGateUntil = 0;
+// Lebensbeweis des Providers: erst ein echtes talk.event zaehlt.
+let providerAlive = false;
+let readyEmitted = false;
+let sessionCreatedAt = 0;
+let audioEventCount = 0;
+let audioGateOpen = false;
 let stdoutWriteTail = Promise.resolve();
 const pendingRuns = new Map();
 
@@ -209,6 +302,52 @@ const client = new GatewayClient({
     if (frame.event !== "talk.event") return;
     const event = frame.payload;
     if (!event || event.relaySessionId !== sessionId) return;
+    // WICHTIG: Nur das echte `ready`-Ereignis beweist, dass die OpenAI-Sitzung
+    // arbeitet. `inputAudio` ist das Echo unseres eigenen Audios und kommt
+    // schon, waehrend der Provider noch gar nicht angeschlossen ist — genau
+    // daran ist die erste Fassung gescheitert (Flugschreiber 21.10.2026:
+    // Audio 1066-1518 ms, echtes ready erst 3127 ms, alles Audio verworfen).
+    if (event.type === "ready" && !providerAlive) {
+      providerAlive = true;
+      record("provider_ready", {
+        afterSessionMs: Date.now() - sessionCreatedAt,
+        bufferedAudioMs: bufferedInputMs,
+      });
+      audioGateOpen = true;
+      void flushBufferedAudio();
+      maybeEmitReady();
+    }
+    // Ereignisarten mitschreiben. Audio-Frames werden gesampelt, sonst
+    // ueberfluten sie den Speicher und verdraengen die Zustandszeilen, die bei
+    // einem Ausfall tatsaechlich gebraucht werden.
+    if (event.type === "audio") {
+      audioEventCount += 1;
+      if (audioEventCount % 25 === 1) {
+        record("relay_audio", { count: audioEventCount });
+      }
+    } else {
+      record("relay_event", {
+        type: event.type, role: event.role ?? null,
+        ...(event.type === "error" || event.type === "close" ? {
+          message: String(event.message ?? event.error?.message ?? "").slice(0, 300),
+          reason: String(event.reason ?? "").slice(0, 200),
+        } : {}),
+      });
+    }
+    if (event.type === "close") {
+      if (!userFinal) {
+        relayClosedBeforeTranscript = true;
+        emit("relay_recovering", {
+          reason: event.reason || "provider_closed",
+          sessionId,
+        });
+      } else {
+        emit("error", {
+          message: `OpenAI realtime relay closed after transcript: ${event.reason || "unknown"}`,
+        });
+      }
+      return;
+    }
     if (event.type === "audio" && event.audioBase64) {
       const audio = Buffer.from(event.audioBase64, "base64");
       audioFrameCount += 1;
@@ -296,6 +435,7 @@ const client = new GatewayClient({
       return;
     }
     if (event.type === "toolCall" && event.callId && event.name) {
+      sawToolCall = true;
       emit("tool_call", {
         callId: event.callId,
         name: event.name,
@@ -427,41 +567,279 @@ await Promise.race([
   ),
 ]);
 
-const session = await client.request("talk.session.create", {
-  sessionKey: SESSION_KEY,
-  provider: "openai",
-  model: MODEL,
-  voice: VOICE,
-  mode: "realtime",
-  transport: "gateway-relay",
-  brain: "agent-consult",
-  vadThreshold: 0.2,
-  // Short home-control phrases should finalize quickly. 700 ms still tolerates
-  // normal pauses but removes the former three-second delay after speech.
-  silenceDurationMs: 700,
-  prefixPaddingMs: 200,
-  reasoningEffort: "minimal",
+async function createRelaySession() {
+  const previousSessionId = sessionId;
+  const session = await client.request("talk.session.create", {
+    sessionKey: SESSION_KEY,
+    provider: "openai",
+    model: MODEL,
+    voice: VOICE,
+    mode: "realtime",
+    transport: "gateway-relay",
+    brain: "agent-consult",
+    vadThreshold: 0.2,
+    // Short home-control phrases should finalize quickly. 700 ms still tolerates
+    // normal pauses but removes the former three-second delay after speech.
+    silenceDurationMs: 700,
+    prefixPaddingMs: 200,
+    reasoningEffort: "minimal",
+  });
+  if (previousSessionId) unbindVoiceSession(previousSessionId);
+  sessionId = session.sessionId;
+  bindVoiceSession(sessionId, SESSION_KEY, process.env.OPENCLAW_VOICE_DEVICE_ID,
+    process.env.OPENCLAW_VOICE_ROOM);
+  relayClosedBeforeTranscript = false;
+  sessionCreatedAt = Date.now();
+  providerAlive = false;
+  readyEmitted = false;
+  audioGateOpen = false;
+  record("session_created", {
+    newSessionId: session.sessionId,
+    previousSessionId: previousSessionId || null,
+    recovery: relayRecoveries,
+    model: MODEL,
+    voice: VOICE,
+  });
+  return session;
+}
+
+// Bereit erst nach dem ersten echten Provider-Ereignis melden.
+function maybeEmitReady() {
+  if (readyEmitted || !providerAlive) return;
+  readyEmitted = true;
+  record("ready_emitted", {
+    afterSessionMs: Date.now() - sessionCreatedAt,
+    recovery: relayRecoveries,
+  });
+  emit("ready", {
+    sessionId,
+    consultSessionKey: CONSULT_SESSION_KEY || null,
+  });
+}
+
+const session = await createRelaySession();
+process.once("exit", () => sessionId && unbindVoiceSession(sessionId));
+// Kein sofortiges "ready": die Bridge wuerde sonst Gruen zeigen, obwohl
+// hinter der Gateway-ID noch keine OpenAI-Sitzung arbeitet. Das Signal kommt
+// aus maybeEmitReady(), sobald der Provider das erste Ereignis schickt.
+const PROVIDER_LIVENESS_TIMEOUT_MS = 4000;
+
+// Schlusszeile auch dann schreiben, wenn der Turn scheitert oder der Prozess
+// hart beendet wird. Sonst endet genau der interessante Fall ohne Befund.
+let turnFinished = false;
+function recordTurnFinished(outcome) {
+  if (turnFinished) return;
+  turnFinished = true;
+  record("turn_finished", {
+    outcome,
+    userFinal,
+    assistantFinal,
+    audioDone,
+    audioByteCount,
+    audioEvents: audioEventCount,
+    transcript: lastUserTranscript.slice(0, 160),
+    providerAlive,
+    recoveries: relayRecoveries,
+    durationMs: Date.now() - FLIGHT_STARTED_AT,
+  });
+  if (FLIGHT_PATH) process.stderr.write(`[flight] ${FLIGHT_PATH}\n`);
+}
+
+process.on("uncaughtException", (error) => {
+  record("turn_crashed", { message: String(error?.message || error).slice(0, 300) });
+  recordTurnFinished("crash");
+  // Sitzung ZUERST schliessen: ein Absturz ohne close liess die
+  // OpenAI-Realtime-Sitzung weiterlaufen und verbrauchte Kontingent
+  // (belegt 21.10.2026: 560 s Leerlauf).
+  client.request("talk.session.close", { sessionId }).catch(() => {}).finally(() => {
+    process.exit(1);
+  });
 });
-sessionId = session.sessionId;
-bindVoiceSession(sessionId, SESSION_KEY, process.env.OPENCLAW_VOICE_DEVICE_ID,
-  process.env.OPENCLAW_VOICE_ROOM);
-process.once("exit", () => unbindVoiceSession(sessionId));
-emit("ready", {
-  sessionId,
-  consultSessionKey: CONSULT_SESSION_KEY || null,
+process.on("unhandledRejection", (error) => {
+  record("turn_crashed", { message: String(error?.message || error).slice(0, 300) });
+  recordTurnFinished("rejection");
+  client.request("talk.session.close", { sessionId }).catch(() => {}).finally(() => {
+    process.exit(1);
+  });
+});
+process.on("exit", (code) => {
+  if (!turnFinished) {
+    record("turn_exited", { code });
+    recordTurnFinished("exit");
+  }
 });
 
 let timestamp = 0;
+// Standby stops this child, not the device transport. Close its relay first.
+let stopping = false;
+async function stopOwnedSession() {
+  if (stopping) return;
+  stopping = true;
+  audioGateOpen = false;
+  process.stdin.pause();
+  try {
+    await client.request("talk.session.close", { sessionId }, { timeoutMs: 2500 });
+    record("provider_close_confirmed");
+  } catch (error) {
+    record("provider_close_failed", { message: String(error.message).slice(0, 200) });
+  }
+  await client.stopAndWait({ timeoutMs: 1000 }).catch(() => {});
+  recordTurnFinished("stopped");
+  process.exit(0);
+}
+process.once("SIGTERM", stopOwnedSession);
+process.once("SIGINT", stopOwnedSession);
+const bufferedInput = [];
+let bufferedInputMs = 0;
+let sentIndex = 0;
+const MAX_REPLAY_AUDIO_MS = 30000;
+let flushing = null;
+
+// Sendet alles, was waehrend des Provider-Starts gepuffert wurde.
+// Idempotent und serialisiert, damit Loop und ready-Ereignis nicht doppelt senden.
+async function flushBufferedAudio() {
+  if (!audioGateOpen) return;
+  if (flushing) return flushing;
+  flushing = (async () => {
+    while (sentIndex < bufferedInput.length) {
+      const entry = bufferedInput[sentIndex];
+      await appendRelayAudio(entry.audioBase64, entry.at);
+      sentIndex += 1;
+      record("audio_flushed", { at: entry.at, index: sentIndex - 1 });
+    }
+  })().finally(() => {
+    flushing = null;
+  });
+  return flushing;
+}
+
+async function appendRelayAudio(audioBase64, at) {
+  try {
+    await client.request("talk.session.appendAudio", {
+      sessionId,
+      audioBase64,
+      timestamp: at,
+    }, { timeoutMs: 8000 });
+    record("audio_accepted", { at });
+  } catch (error) {
+    record("audio_rejected", {
+      at,
+      message: String(error?.message || error).slice(0, 200),
+    });
+    throw error;
+  }
+}
+
+async function recoverRelayAndReplay(reason) {
+  if (userFinal) throw new Error(`Realtime relay failed after transcript: ${reason}`);
+  if (relayRecoveries >= 2) {
+    throw new Error(`Realtime relay recovery exhausted: ${reason}`);
+  }
+  relayRecoveries += 1;
+  record("recovery_started", {
+    reason: String(reason).slice(0, 200),
+    attempt: relayRecoveries,
+    bufferedAudioMs: bufferedInputMs,
+  });
+  emit("relay_recovering", {
+    reason,
+    attempt: relayRecoveries,
+    bufferedAudioMs: bufferedInputMs,
+  });
+  // Do not abandon a possibly still-starting provider session on recovery.
+  // If its close cannot be confirmed, fail rather than open another session.
+  audioGateOpen = false;
+  if (flushing) await flushing.catch(() => {});
+  try {
+    await client.request("talk.session.close", { sessionId }, { timeoutMs: 3000 });
+    record("recovery_previous_closed", { previousSessionId: sessionId });
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 200);
+    // "Unknown Talk session" BEWEIST, dass die Sitzung schon weg ist: der Relay
+    // hat sich selbst mit error geschlossen, bevor wir hier ankamen. Weiter ist
+    // sicher und kann nicht doppelt abrechnen. Nur ein unbestaetigter Close
+    // (Timeout/Netzfehler) muss den Versuch stoppen. Belegt am 22.10.2026, 18:06:
+    // hier flog naemlich genau diese Exception und riss den ganzen Helfer mit,
+    // obwohl die Sitzung laengst beendet war.
+    if (!/Unknown Talk session|not found|no longer|closed/i.test(message)) {
+      record("recovery_close_unconfirmed", { message });
+      throw error;
+    }
+    record("recovery_previous_already_closed", { message });
+  }
+  // Neue Sitzung anlegen. NICHT sofort nachspielen: die neue Sitzung ist erst
+  // bereit, wenn ihr `ready` eintrifft. Genau dieses Sofort-Senden war der
+  // Fehler vom 21.10.2026 — Audio ging 1,6 s vor dem Provider-Start raus und
+  // wurde verworfen. Das Nachspielen uebernimmt flushBufferedAudio().
+  sentIndex = 0;
+  // Existing replay entries retain their timestamps. New live audio must
+  // continue after those entries, not restart at zero behind them.
+  await createRelaySession();
+  record("recovery_finished", {
+    attempt: relayRecoveries,
+    bufferedAudioMs: bufferedInputMs,
+  });
+  emit("relay_recovered", {
+    attempt: relayRecoveries,
+    sessionId,
+    bufferedAudioMs: bufferedInputMs,
+  });
+}
+
 for await (const chunk of process.stdin) {
   const pcm = toPcm24k(Buffer.from(chunk), rate, channels);
   if (!pcm.length) continue;
-  await client.request("talk.session.appendAudio", {
-    sessionId,
-    audioBase64: pcm.toString("base64"),
-    timestamp,
-  });
-  timestamp += Math.round((pcm.length / 2 / 24000) * 1000);
+  const durationMs = Math.round((pcm.length / 2 / 24000) * 1000);
+  const audioBase64 = pcm.toString("base64");
+  bufferedInput.push({ audioBase64, durationMs, at: timestamp });
+  timestamp += durationMs;
+  bufferedInputMs += durationMs;
+  while (
+    sentIndex < bufferedInput.length &&
+    bufferedInputMs > MAX_REPLAY_AUDIO_MS
+  ) {
+    bufferedInputMs -= bufferedInput.shift().durationMs;
+    sentIndex = Math.max(0, sentIndex - 1);
+  }
+  // Vor dem Provider-Start wird NICHTS gesendet. Der Gateway nimmt Audio auch
+  // ohne laufende OpenAI-Sitzung an — es geht dann verloren und der Nutzer
+  // spricht ins Leere (belegt im Flugschreiber: Audio 1066-1518 ms, ready erst
+  // 3127 ms). Deshalb: puffern, bis das echte ready kommt.
+  if (!audioGateOpen) {
+    if (!userFinal && Date.now() - sessionCreatedAt >= PROVIDER_LIVENESS_TIMEOUT_MS) {
+      await recoverRelayAndReplay("no_provider_event");
+    }
+    continue;
+  }
+  if (relayClosedBeforeTranscript) {
+    await recoverRelayAndReplay("provider_closed");
+    continue;
+  }
+  try {
+    await flushBufferedAudio();
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (
+      !userFinal &&
+      /Unknown Talk session|realtime_unavailable|session.*(?:closed|unavailable)/i.test(message)
+    ) {
+      await recoverRelayAndReplay(message);
+      continue;
+    }
+    throw error;
+  }
 }
+
+// Vor dem Abschluss sicherstellen, dass das gepufferte Audio draussen ist.
+if (!audioGateOpen) {
+  const waitUntil = Date.now() + PROVIDER_LIVENESS_TIMEOUT_MS;
+  while (!audioGateOpen && Date.now() < waitUntil) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+await flushBufferedAudio().catch((error) => {
+  record("flush_failed", { message: String(error?.message || error).slice(0, 200) });
+});
 
 // Ensure provider VAD sees a clean end even when HA cuts immediately after speech.
 const silence = Buffer.alloc(24000 * 2 * 0.45);
@@ -469,7 +847,7 @@ await client.request("talk.session.appendAudio", {
   sessionId,
   audioBase64: silence.toString("base64"),
   timestamp,
-});
+}, { timeoutMs: 8000 });
 
 const deadline = Date.now() + 120000;
 while (
@@ -495,4 +873,6 @@ while (
 
 await client.request("talk.session.close", { sessionId }).catch(() => {});
 await client.stopAndWait({ timeoutMs: 3000 });
+recordTurnFinished("completed");
+if (FLIGHT_PATH) process.stderr.write(`[flight] ${FLIGHT_PATH}\n`);
 if (!userFinal) throw new Error("Realtime Talk returned no final user transcript");

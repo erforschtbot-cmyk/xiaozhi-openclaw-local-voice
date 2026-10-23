@@ -76,7 +76,15 @@ test('bindings are separated by actual voice-session UUID', () => {
 });
 
 test('ACTUAL gateway entry: direct skips agent, complex calls agent with scoped room', async () => {
-  const source = fs.readFileSync('/home/openclaw/.npm-global/lib/node_modules/openclaw/dist/handlers-De0Uc7cE.mjs', 'utf8');
+  // Resolve the live handler by content, never by filename: the file name
+  // changes with every OpenClaw release (2026.10.4 -> De0Uc7cE, 2026.10.5 ->
+  // xUkepsRi, ...). The marker file is the one that carries the Jarvis router.
+  const distDir = '/home/openclaw/.npm-global/lib/node_modules/openclaw/dist';
+  const candidates = fs.readdirSync(distDir).filter(name => /^handlers-.*\.mjs$/.test(name));
+  const handlerName = candidates.find(name =>
+    fs.readFileSync(`${distDir}/${name}`, 'utf8').includes('jarvis-safe-router-v1'));
+  assert.ok(handlerName, `kein gepatchter Handler in ${distDir}`);
+  const source = fs.readFileSync(`${distDir}/${handlerName}`, 'utf8');
   const start = source.indexOf('\tconst runArgs = async (...args) => {');
   const end = source.indexOf('\t\tconst confirmationGrant =', start);
   assert.ok(start >= 0 && end > start);

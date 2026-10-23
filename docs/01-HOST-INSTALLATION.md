@@ -6,7 +6,7 @@
 ## Voraussetzungen
 
 - Linux mit systemd-Userdiensten
-- OpenClaw `2026.10.4`
+- OpenClaw `2026.10.6` (oder die Version, für die unter `patches/` ein Satz liegt)
 - Node.js und npm
 - Python 3 mit `venv` (Referenzhost: `3.14.7`)
 - `libopus`
@@ -32,11 +32,22 @@ sudo apt install -y nodejs npm python3 python3-venv libopus0 docker.io git
 OpenClaw installieren und anmelden:
 
 ```bash
-npm install -g openclaw@2026.10.4
-openclaw --version
-openclaw models auth login --provider openai
-openclaw gateway status
+npm install -g openclaw@2026.10.6
+openclaw --version          # muss 2026.10.6 zeigen
+openclaw gateway status     # muss laufen
 ```
+
+Danach den Provider anmelden und prüfen, dass das Gateway wirklich auf
+`wss://127.0.0.1:18789` erreichbar ist:
+
+```bash
+openclaw models auth login --provider openai
+ss -ltn | grep 18789        # muss lauschen
+```
+
+**Prüfpunkt:** `openclaw --version` und die laufende Gateway-Version müssen
+zusammenpassen. Weichen sie ab, läuft noch der alte Prozess — dann erst
+`openclaw gateway restart`, bevor es weitergeht.
 
 Die OpenClaw-Anmeldung ist interaktiv. Keine `secrets.json` von einem fremden Host
 kopieren und keine Tokens ins Repository schreiben.
@@ -53,14 +64,31 @@ cd xiaozhi-openclaw-local-voice
 
 Der Installer:
 
-1. kopiert beide Bridge-Skripte nach `~/.local/share/jarvis-realtime-bridge`
-   (`server.py`, `openclaw-talk-realtime.mjs`, `requirements.txt`);
-2. erzeugt eine Python-Umgebung und installiert exakt `requirements.txt`
-   (`websockets==15.0.1`, `opuslib==3.0.1`);
-3. installiert die systemd-Userunit `jarvis-realtime-bridge.service`
-   aus `systemd/jarvis-realtime-bridge.service.in`;
-4. aktiviert und startet sie;
-5. verändert keine OpenClaw-Zugangsdaten.
+1. kopiert **alle** Laufzeitmodule nach `~/.local/share/jarvis-realtime-bridge`.
+   Das sind nicht nur die Einstiegsdateien: `server.py` importiert
+   `room_command.py` hart, der Gateway-Patch importiert `voice-turn-context.mjs`
+   und `scoped-smart-home-router.mjs` statisch. Fehlt eine davon, startet die
+   Bridge nicht bzw. der Gateway-Handler lädt nicht mehr;
+2. legt `room-map.json` aus einer **Vorlage** an, falls noch keine existiert
+   (bestehende Zuordnungen bleiben unangetastet);
+3. legt `disable-smart-home-fastpath` an — eine leere Datei, die den alten
+   Bridge-Direktpfad abschaltet, damit genau ein Ausführer schaltet;
+4. installiert die Offline-Tests mit, weil die Prüfskripte sie am Zielort
+   erwarten;
+5. erzeugt eine Python-Umgebung aus `requirements.txt`
+   (`websockets==15.0.1`, `opuslib==3.0.1`) und, bei lokaler Stimme, aus
+   `requirements-tts.txt` (`piper-tts==1.4.2`);
+6. schreibt `jarvis-realtime-bridge.service` aus der Vorlage und ersetzt dabei
+   auch `OPENCLAW_NPM_ROOT` (ermittelt über `npm root -g`) und die Session-Keys;
+7. aktiviert und startet den Dienst;
+8. **prüft sich selbst:** jede erwartete Datei einzeln und danach die echte
+   Python-Importkette. Bei einem Fehler bricht er ab, statt einen Dienst zu
+   starten, der beim ersten Ton stirbt.
+
+**Prüfpunkt:** Am Ende muss `import OK: server.py inkl. room_command, opuslib,
+websockets` erscheinen und der Dienst `active` sein. Kommt stattdessen
+`MISSING:` oder `Importkette FEHLGESCHLAGEN`, ist der Nachbau an dieser Stelle
+kaputt — nicht weiterbauen, sondern die genannte Datei suchen.
 
 Abweichender Installationsort:
 
