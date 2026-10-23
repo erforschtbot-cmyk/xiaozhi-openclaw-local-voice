@@ -47,15 +47,38 @@ class WakeArbiter:
         self._lock = asyncio.Lock()
         self._winner = None
         self._winner_peak = 0
+        # Zeitpunkt des letzten Anspruchs des Gewinners. Ohne ihn blockiert ein
+        # Geraet, das ohne sauberes close() verschwindet (z. B. keepalive
+        # timeout), alle anderen dauerhaft: der alte Peak bleibt fuer immer
+        # stehen und kein leiseres Geraet kommt je darueber.
+        self._winner_at = 0.0
+
+    STALE_SECONDS = 120.0
 
     def register(self, session):
         self._sessions[session.session_id] = session
 
     def unregister(self, session):
         self._sessions.pop(session.session_id, None)
+        self.release(session)
+
+    def release(self, session):
+        """Gibt den Dialog frei, wenn dieses Geraet ihn gefuehrt hat.
+
+        Wird beim regulaeren Ende eines Dialogs gerufen (Rueckkehr in
+        Bereitschaft). Ein Geraet, das den Dialog beendet, darf die anderen
+        nicht weiter blockieren; beim naechsten Weckwort wird neu verglichen.
+        """
         if self._winner == session.session_id:
             self._winner = None
             self._winner_peak = 0
+            self._winner_at = 0.0
+
+    def _winner_is_stale(self, now):
+        return (
+            self._winner is not None
+            and now - self._winner_at > self.STALE_SECONDS
+        )
 
     async def claim(self, session, peak):
         """True, wenn dieses Geraet den Dialog fuehren soll.
@@ -66,14 +89,28 @@ class WakeArbiter:
         superseded = None
         previous_peak = 0
         async with self._lock:
+            now = time.monotonic()
+            # Ein Gewinner, der sich laenger nicht gemeldet hat, ist tot oder
+            # laengst fertig. Er darf die anderen nicht dauerhaft sperren.
+            if self._winner_is_stale(now):
+                print(
+                    f"{session.tag} Wake arbitration: releasing stale winner "
+                    f"(idle {now - self._winner_at:.0f}s)",
+                    flush=True,
+                )
+                self._winner = None
+                self._winner_peak = 0
+                self._winner_at = 0.0
             if self._winner == session.session_id:
                 # Dieses Geraet fuehrt bereits; Folgeaeusserungen bleiben bei ihm.
+                self._winner_at = now
                 return True
             if self._winner is None or peak > self._winner_peak:
                 previous = self._sessions.get(self._winner) if self._winner else None
                 previous_peak = self._winner_peak
                 self._winner = session.session_id
                 self._winner_peak = peak
+                self._winner_at = now
                 if previous is not None and previous is not session:
                     superseded = previous
                 print(
@@ -1391,6 +1428,12 @@ class XiaozhiSession:
         self.cancel_session_finish()
         self.cancel_drained_watchdog()
         self.input_stopped = True
+        # Wer den Dialog beendet (fertig, Stille, Abbruch), gibt ihn fuer die
+        # anderen Geraete frei. Sonst bleibt sein Peak als Sperre stehen und
+        # ein leiseres Geraet verliert jedes Weckwort gegen ein Geraet, das
+        # laengst nichts mehr tut. Beim naechsten Weckwort wird neu verglichen.
+        if getattr(self, "arbiter", None) is not None:
+            self.arbiter.release(self)
         if getattr(self, "persistent_standby", False):
             self.followup_open = False
             self.stream_end_sent = True
