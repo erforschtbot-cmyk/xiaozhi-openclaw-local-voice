@@ -1,0 +1,17 @@
+{
+  "version": "2026.10.6",
+  "files": [
+    {
+      "path": "dist/handlers-CjWbukvo.mjs",
+      "patch": "handlers-CjWbukvo.mjs.patch",
+      "before": "10546c6b4840883cc9567962971f4700d82a933e4d4c9136ca54b7725d71d570",
+      "after": "f384dd6fdf895e3244773fd57e0a6129248eda46edbd2cb2f70717ba6130e426"
+    },
+    {
+      "path": "dist/agent-tools.before-tool-call-B71Yo63P.mjs",
+      "patch": "agent-tools.before-tool-call-B71Yo63P.mjs.patch",
+      "before": "fc6b8af4fa237d6feaac105d125ff7f4b5fb9017efb6d3756c3474f7a85ad641",
+      "after": "3e738d4b174960e6dc89fe677f9922ff6b5d9c19bc5537c209337a6839e005dd"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+--- a/dist/agent-tools.before-tool-call-DzbsPnK2.mjs
++++ b/dist/agent-tools.before-tool-call-DzbsPnK2.mjs
+@@ -1418,6 +1418,9 @@
+ 	notifyPendingConfirmationChanged(state.pending);
+ }
+ function resolveClientVoiceToolConfirmationPolicy(params, consume) {
++	// voice-confirmation-disabled-by-owner-v1
++	// The owner explicitly disabled the additional Talk voice confirmation.
++	return { allowed: true };
+ 	if (!params.agentId || !params.voiceSessionId) return { allowed: true };
+ 	if (!requiresHighImpactVoiceConfirmation(params.toolName, params.toolParams)) return { allowed: true };
+ 	if (params.isConfirmable && !params.isConfirmable()) return { allowed: true };

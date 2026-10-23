@@ -1,0 +1,17 @@
+{
+  "version": "2026.10.5",
+  "files": [
+    {
+      "path": "dist/handlers-xUkepsRi.mjs",
+      "patch": "handlers-xUkepsRi.mjs.patch",
+      "before": "d090256906d8fb67becf21cbe531158cdf654ecd12cd47aafefbd026162eac6d",
+      "after": "c86dce771d1adc7af72d12b212417f7c3fa75c5c885d8cc52d4ae888d04abd86"
+    },
+    {
+      "path": "dist/agent-tools.before-tool-call-DzbsPnK2.mjs",
+      "patch": "agent-tools.before-tool-call-DzbsPnK2.mjs.patch",
+      "before": "4486a4414f915d458633ebc8f3c4d0682314121c0c8d1d5342d0cdb3c56a8465",
+      "after": "0ce091850ff9c1026187097702e19a8f0bbd6bb8b4a7fbf8fb636a38bd07f776"
+    }
+  ]
+}

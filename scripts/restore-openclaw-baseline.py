@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Restore the exact audited Jarvis patches, without restarting any service.
-Default is read-only. Only accepts pristine or already-restored 2026.10.4 files.
+Default is read-only. Only accepts pristine or already-restored files of a
+release that has a patch set under patches/openclaw-<version>/.
 """
 import argparse
 import datetime
@@ -23,10 +24,18 @@ def main():
     parser.add_argument('--apply', action='store_true', help='Write validated patches; never restart')
     args = parser.parse_args()
     root = args.openclaw_root.resolve()
-    patches = Path(__file__).resolve().parents[1] / 'patches/openclaw-2026.10.4'
+    patches_root = Path(__file__).resolve().parents[1] / 'patches'
+    version = json.loads((root / 'package.json').read_text())['version']
+    patches = patches_root / f'openclaw-{version}'
+    if not (patches / 'manifest.json').is_file():
+        available = sorted(p.name.replace('openclaw-', '') for p in patches_root.glob('openclaw-*') if (p / 'manifest.json').is_file())
+        raise SystemExit(
+            f'No patch set for OpenClaw {version}. Available: {", ".join(available) or "none"}. '
+            'Build one under patches/openclaw-<version>/ before applying.'
+        )
     manifest = json.loads((patches / 'manifest.json').read_text())
-    if json.loads((root / 'package.json').read_text())['version'] != manifest['version']:
-        raise SystemExit('Wrong OpenClaw version; do not apply this baseline to another release.')
+    if version != manifest['version']:
+        raise SystemExit('Manifest version does not match the selected patch set.')
     pending = []
     # Validate ALL originals and all results before touching the installation.
     with tempfile.TemporaryDirectory(prefix='jarvis-patch-check-') as tmp:
