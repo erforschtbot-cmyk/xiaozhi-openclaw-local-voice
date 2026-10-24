@@ -1,3 +1,92 @@
+diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
+index 7358633..d177251 100644
+--- a/main/boards/common/esp32_camera.cc
++++ b/main/boards/common/esp32_camera.cc
+@@ -31,6 +31,7 @@ static constexpr bool kConfiguredVFlip = false;
+ #endif
+ 
+ Esp32Camera::Esp32Camera(const camera_config_t& config) {
++    config_ = config;
+     esp_err_t err = esp_camera_init(&config);
+     if (err != ESP_OK) {
+         ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
+@@ -73,6 +74,26 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
+     explain_token_ = token;
+ }
+ 
++bool Esp32Camera::RecoverStream() {
++    // Der DVP-Datenstrom bleibt nach laengerem Leerlauf stehen. Ein Neuaufsetzen
++    // mit derselben Konfiguration holt ihn zurueck; das Geraet laeuft weiter.
++    if (current_fb_) {
++        current_fb_ = nullptr;  // gehoert dem Treiber und wird mit deinit frei
++    }
++    if (streaming_on_) {
++        esp_camera_deinit();
++        streaming_on_ = false;
++    }
++    esp_err_t err = esp_camera_init(&config_);
++    if (err != ESP_OK) {
++        ESP_LOGE(TAG, "Camera re-init failed 0x%x", err);
++        return false;
++    }
++    streaming_on_ = true;
++    ESP_LOGW(TAG, "Camera stream restarted");
++    return true;
++}
++
+ bool Esp32Camera::Capture() {
+     if (encoder_thread_.joinable()) {
+         encoder_thread_.join();
+@@ -82,12 +103,25 @@ bool Esp32Camera::Capture() {
+         return false;
+     }
+ 
++    // Ein Frame holen; steht der Strom, einmal neu aufsetzen und erneut
++    // versuchen. Belegt am 25.10.2026: direkt nach dem Boot kamen drei Frames
++    // in Serie, 21 s spaeter beim ersten Foto nur "Failed to get frame:
++    // timeout" — der Datenstrom war eingeschlafen, die Kamera selbst heil.
++    auto grab = [this]() -> camera_fb_t* {
++        camera_fb_t* fb = esp_camera_fb_get();
++        if (fb == nullptr && RecoverStream()) {
++            fb = esp_camera_fb_get();
++        }
++        return fb;
++    };
++
+     // Get the latest frame, discard old frames for real-time performance
+     for (int i = 0; i < 2; i++) {
+         if (current_fb_) {
+             esp_camera_fb_return(current_fb_);
++            current_fb_ = nullptr;
+         }
+-        current_fb_ = esp_camera_fb_get();
++        current_fb_ = grab();
+         if (!current_fb_) {
+             ESP_LOGE(TAG, "Camera capture failed");
+             return false;
+diff --git a/main/boards/common/esp32_camera.h b/main/boards/common/esp32_camera.h
+index e3c73e7..2dbe4f6 100644
+--- a/main/boards/common/esp32_camera.h
++++ b/main/boards/common/esp32_camera.h
+@@ -28,6 +28,9 @@ private:
+     camera_fb_t* current_fb_ = nullptr;
+     uint8_t* encode_buf_ = nullptr;  // Buffer for JPEG encoding (with optional byte swap)
+     size_t encode_buf_size_ = 0;
++    // Konfiguration merken, um den Datenstrom neu aufsetzen zu koennen, wenn
++    // er nach laengerem Leerlauf steht (siehe RecoverStream()).
++    camera_config_t config_ = {};
+ 
+ public:
+     Esp32Camera(const camera_config_t& config);
+@@ -35,6 +38,8 @@ public:
+ 
+     virtual void SetExplainUrl(const std::string& url, const std::string& token) override;
+     virtual bool Capture() override;
++    // Setzt den DVP-Datenstrom mit der gemerkten Konfiguration neu auf.
++    bool RecoverStream();
+     virtual bool SetHMirror(bool enabled) override;
+     virtual bool SetVFlip(bool enabled) override;
+     virtual bool SetSwapBytes(bool enabled) override;
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/config.json b/main/boards/waveshare/esp32-s3-audio-board/config.json
 index 18e71ae..2754b41 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/config.json
@@ -13,7 +102,7 @@ index 18e71ae..2754b41 100644
                  "CONFIG_SEND_WAKE_WORD_DATA=n"
              ]
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index aaf6d85..84cb597 100644
+index aaf6d85..015f8f1 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -15,7 +15,9 @@
@@ -36,7 +125,7 @@ index aaf6d85..84cb597 100644
  
      // K1/K2/K3 haengen nicht am ESP, sondern am TCA9555-Expander
      // (EXIO9/EXIO10/EXIO11 laut Waveshare-Pinout und Schaltplan). Sie werden
-@@ -253,45 +255,102 @@ private:
+@@ -253,45 +255,123 @@ private:
          }
      }
  
@@ -73,8 +162,17 @@ index aaf6d85..84cb597 100644
 +            framesize_t frame_size;
 +            const char* label;
 +        } attempts[] = {
-+            {20000000, FRAMESIZE_QXGA, "20MHz 2048x1536"},
++            // Reihenfolge nach belegter Vertraeglichkeit, nicht nach Aufloesung.
++            //
++            // 2048x1536 faellt aus: der JPEG-Rahmenpuffer ist 629145 Byte gross
++            // (600 KB). Ein 2048x1536-JPEG liegt je nach Motiv knapp darunter
++            // oder darueber; belegt am 25.10.2026 lieferte der Boot-Check
++            // einmal 597382 Byte und galt damit als tauglich, danach brach der
++            // Datenstrom mit "cam_hal: DMA overflow" ab und jedes Foto
++            // scheiterte mit "Failed to capture photo". Eine Aufloesung, die
++            // nur manchmal passt, ist unbrauchbar.
 +            {20000000, FRAMESIZE_UXGA, "20MHz 1600x1200"},
++            {20000000, FRAMESIZE_SVGA, "20MHz 800x600"},
 +            {12000000, FRAMESIZE_UXGA, "12MHz 1600x1200"},
 +            {12000000, FRAMESIZE_SVGA, "12MHz 800x600"},
          };
@@ -141,19 +239,31 @@ index aaf6d85..84cb597 100644
 +            // vollstaendigen Frame; das Foto scheiterte erst beim Ausloesen
 +            // mit "Failed to capture photo". Deshalb hier einen echten Frame
 +            // verlangen, bevor die Einstellung als tauglich gilt.
-+            bool frame_ok = false;
-+            for (int tries = 0; tries < 3 && !frame_ok; tries++) {
++            // Mehrere Frames HINTEREINANDER verlangen. Ein einzelner Treffer
++            // beweist nichts: bei 2048x1536 kam genau ein Frame knapp unter
++            // der Puffergroesse durch, danach DMA overflow. Erst eine stabile
++            // Serie zeigt, dass die Einstellung im Betrieb traegt.
++            int good_frames = 0;
++            size_t max_len = 0;
++            const int kNeededFrames = 3;
++            for (int tries = 0; tries < 8 && good_frames < kNeededFrames; tries++) {
 +                camera_fb_t* fb = esp_camera_fb_get();
 +                if (fb == nullptr) {
++                    good_frames = 0;  // Aussetzer: Serie beginnt von vorn.
 +                    continue;
 +                }
 +                if (fb->len > 0 && fb->width > 0 && fb->height > 0) {
-+                    frame_ok = true;
-+                    ESP_LOGI(TAG, "Camera frame ok: %ux%u, len=%u",
-+                             (unsigned)fb->width, (unsigned)fb->height,
-+                             (unsigned)fb->len);
++                    good_frames++;
++                    if (fb->len > max_len) max_len = fb->len;
++                } else {
++                    good_frames = 0;
 +                }
 +                esp_camera_fb_return(fb);
++            }
++            const bool frame_ok = (good_frames >= kNeededFrames);
++            if (frame_ok) {
++                ESP_LOGI(TAG, "Camera frames ok: %d in Serie, max len=%u",
++                         good_frames, (unsigned)max_len);
 +            }
  
 -        camera_ = new EspVideo(video_config);
