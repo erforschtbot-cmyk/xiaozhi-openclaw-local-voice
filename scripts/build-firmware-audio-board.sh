@@ -27,6 +27,13 @@ git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board
 # nicht geklappt". Belegt am Geraet 90:70:69:eb:1e:b4, 24.10.2026.
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-camera-psram.patch"
 git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-camera-psram.patch"
+# Kamera ueber den klassischen esp32-camera-Treiber statt esp_video. Grund:
+# esp_video kann beim OV5640 nur spiegeln/drehen, keinen Weissabgleich (Bild
+# lief magentafarben), und die YUV-Wandlung bei 800x600 kostete den Speicher.
+# esp32-camera setzt den Sensor-Weissabgleich und liefert JPEG direkt aus dem
+# Sensor. Beides zugleich behebt Farbe und Speicherdruck.
+git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-camera-esp32camera.patch"
+git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-camera-esp32camera.patch"
 
 # Use the exact component resolution from the successful clean audit build.
 install -m 0644 "$repo_dir/firmware/audio-board/dependencies.lock" "$source_dir/dependencies.lock"
