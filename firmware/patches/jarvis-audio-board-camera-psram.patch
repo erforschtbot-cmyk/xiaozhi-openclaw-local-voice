@@ -1,0 +1,23 @@
+diff --git a/main/display/lcd_display.cc b/main/display/lcd_display.cc
+index 3462ac0..0b13e75 100644
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -153,8 +153,16 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
+             ESP_LOGI(TAG, "Added %uKB LVGL pool in PSRAM", (unsigned)(added / 1024));
+         }
+ #endif
+-        lv_image_cache_resize(2 * 1024 * 1024, true);
+-        ESP_LOGI(TAG, "Use 2MB of PSRAM for image cache");
++        // Auf Boards mit Kamera konkurriert der Bild-Cache mit dem
++        // JPEG-Encoder um dasselbe PSRAM. Bei 800x600 braucht eine Aufnahme
++        // rund 0,9 MB Frame + 0,9 MB Encoder-Eingang + 0,8 MB Ausgang.
++        // Zusammen mit 2,5 MB LVGL-Pool und 2 MB Cache sind die 8 MB
++        // rechnerisch voll, und der Ausgangsblock findet wegen
++        // Fragmentierung keinen Platz mehr ("alloc out buffer failed").
++        // 512 KB sind derselbe, bereits unterstuetzte Modus wie fuer
++        // 2-MB-Boards und lassen rund 1,5 MB fuer die Aufnahme frei.
++        lv_image_cache_resize(512 * 1024, true);
++        ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache (camera headroom)");
+     } else if (psram_size_mb >= 2) {
+         lv_image_cache_resize(512 * 1024, true);
+         ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache");

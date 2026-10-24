@@ -21,6 +21,12 @@ git clone --filter=blob:none https://github.com/78/xiaozhi-esp32.git "$source_di
 git -C "$source_dir" checkout 4632dc51f0a5ad26e08542e131e6e48da41e4ff3
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
+# Kamera braucht PSRAM: der 2-MB-Bild-Cache und der JPEG-Encoder passen bei
+# 800x600 nicht zusammen in 8 MB. Ohne diesen Patch scheitert jedes Foto mit
+# "image_to_jpeg: alloc out buffer failed" und das Geraet sagt "Das Foto hat
+# nicht geklappt". Belegt am Geraet 90:70:69:eb:1e:b4, 24.10.2026.
+git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-camera-psram.patch"
+git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-camera-psram.patch"
 
 # Use the exact component resolution from the successful clean audit build.
 install -m 0644 "$repo_dir/firmware/audio-board/dependencies.lock" "$source_dir/dependencies.lock"

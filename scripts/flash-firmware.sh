@@ -25,9 +25,18 @@ Usage: flash-firmware.sh --port /dev/ttyACM0 [--board auto|4b|audio] [--full] [-
                 Nur bei leerem oder beschaedigtem Flash. Loescht NVS (WLAN).
                 Fuer das Audio-Board existiert KEIN Vollimage im Repo.
   --yes         Ohne Rueckfrage schreiben (fuer automatisierte Laeufe)
+  --from-build  build/firmware/xiaozhi.bin schreiben (frisch gebaute Firmware)
+  --image PFAD  eigenes App-Image schreiben
 
 Ohne --full wird nur die App-Partition (0x20000) geschrieben. WLAN/NVS und
 Assets bleiben erhalten, das Geraet verbindet sich ohne Neu-Provisionierung.
+
+Vor dem Schreiben wird das Image ueber seine eingebaute Board-Kennung gegen
+--board geprueft. Passt es nicht, wird nichts geschrieben.
+
+ACHTUNG: Ohne --from-build/--image wird das veroeffentlichte Prebuilt-Image
+geschrieben, nicht ein lokaler Neubau. Nach ./scripts/build-firmware-*.sh
+also --from-build mitgeben, sonst landet wieder der alte Stand auf dem Geraet.
 EOF
   exit 2
 }
@@ -36,12 +45,16 @@ port=""
 board="auto"
 full=0
 assume_yes=0
+custom_image=""
+from_build=0
 while (($#)); do
   case "$1" in
     --port) port="${2:-}"; shift 2 ;;
     --board) board="${2:-}"; shift 2 ;;
     --full|--full-image-i-understand) full=1; shift ;;
     --yes) assume_yes=1; shift ;;
+    --from-build) from_build=1; shift ;;
+    --image) custom_image="${2:-}"; shift 2 ;;
     -h|--help) usage ;;
     *) usage ;;
   esac
@@ -110,6 +123,23 @@ else
       exit 1
       ;;
   esac
+  # Eigenes Image bzw. frischer Build hat Vorrang vor dem Prebuilt. Ohne diese
+  # beiden Schalter wuerde ein gerade gebautes Image nie auf das Geraet kommen.
+  if ((from_build)) && [[ -n "$custom_image" ]]; then
+    echo "FEHLER: --from-build und --image schliessen sich aus." >&2
+    exit 1
+  fi
+  if ((from_build)); then
+    image="$repo_dir/build/firmware/xiaozhi.bin"
+    [[ -f "$image" ]] || {
+      echo "FEHLER: Kein Build gefunden: $image" >&2
+      echo "        Erst bauen: ./scripts/build-firmware-audio-board.sh <HOST>" >&2
+      exit 1
+    }
+  elif [[ -n "$custom_image" ]]; then
+    image="$(cd "$(dirname "$custom_image")" && pwd)/$(basename "$custom_image")"
+    [[ -f "$image" ]] || { echo "FEHLER: Image fehlt: $image" >&2; exit 1; }
+  fi
   offset="0x20000"
   image_board="$(classify_image "$image")"
   if [[ "$image_board" != "$board" ]]; then
@@ -124,19 +154,51 @@ else
 fi
 
 # --- Pruefsumme ------------------------------------------------------------
-expected="$(grep -E "  ${image#"$repo_dir"/}$" "$repo_dir/CHECKSUMS.sha256" | awk '{print $1}')"
-if [[ -z "$expected" ]]; then
-  echo "FEHLER: Kein Eintrag fuer ${image#"$repo_dir"/} in CHECKSUMS.sha256." >&2
-  exit 1
-fi
 actual="$(sha256sum "$image" | awk '{print $1}')"
-if [[ "$actual" != "$expected" ]]; then
-  echo "FEHLER: Pruefsumme weicht ab. Datei beschaedigt oder veraendert." >&2
-  echo "        erwartet: $expected" >&2
-  echo "        gefunden: $actual" >&2
-  exit 1
+if ((from_build)) || [[ -n "$custom_image" ]]; then
+  # Ein lokaler Neubau steht nicht in CHECKSUMS.sha256. Stattdessen gegen das
+  # Manifest pruefen, das der Build selbst geschrieben hat.
+  manifest="$(dirname "$image")/manifest.json"
+  manifest_sha=""
+  if [[ -f "$manifest" ]]; then
+    manifest_sha="$(python3 - "$manifest" "$(basename "$image")" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    for artifact in data.get('artifacts', []):
+        if artifact.get('file') == sys.argv[2]:
+            print(artifact.get('sha256', ''))
+            break
+except Exception:
+    pass
+PY
+)"
+  fi
+  if [[ -n "$manifest_sha" && "$manifest_sha" != "$actual" ]]; then
+    echo "FEHLER: Image weicht vom Build-Manifest ab (beschaedigt?)." >&2
+    echo "        manifest: $manifest_sha" >&2
+    echo "        datei   : $actual" >&2
+    exit 1
+  fi
+  if [[ -n "$manifest_sha" ]]; then
+    echo "Pruefsumme OK (gegen Build-Manifest): $actual"
+  else
+    echo "Pruefsumme: $actual (kein Manifest-Eintrag, lokaler Build)"
+  fi
+else
+  expected="$(grep -E "  ${image#"$repo_dir"/}$" "$repo_dir/CHECKSUMS.sha256" | awk '{print $1}')"
+  if [[ -z "$expected" ]]; then
+    echo "FEHLER: Kein Eintrag fuer ${image#"$repo_dir"/} in CHECKSUMS.sha256." >&2
+    exit 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FEHLER: Pruefsumme weicht ab. Datei beschaedigt oder veraendert." >&2
+    echo "        erwartet: $expected" >&2
+    echo "        gefunden: $actual" >&2
+    exit 1
+  fi
+  echo "Pruefsumme OK: $actual"
 fi
-echo "Pruefsumme OK: $actual"
 
 # --- App-Partitionsgroesse pruefen -----------------------------------------
 if [[ "$offset" == "0x20000" ]]; then
