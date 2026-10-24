@@ -281,3 +281,31 @@ index aaf6d85..366d4c8 100644
      }
  public:
      CustomBoard() :
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index 623b789..a81b189 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
+@@ -395,6 +395,23 @@ void McpServer::ParseCapabilities(const cJSON* capabilities) {
+                 camera->SetExplainUrl(url_str, token_str);
+             }
+         }
++        // Kameraeinbau ist Sache des Aufbaus, nicht des Modells: dieselbe
++        // Platine kann die Kamera kopfüber oder gespiegelt tragen. Der Sensor
++        // dreht/spiegelt das Bild in Hardware (Register, kein Umrechnen), die
++        // Bridge teilt die noetige Lage beim Verbinden mit. Damit braucht ein
++        // anderer Aufbau keinen neuen Build.
++        auto camera = Board::GetInstance().GetCamera();
++        if (camera) {
++            auto hmirror = cJSON_GetObjectItem(vision, "hmirror");
++            auto vflip = cJSON_GetObjectItem(vision, "vflip");
++            if (cJSON_IsBool(hmirror) || cJSON_IsBool(vflip)) {
++                bool m = cJSON_IsTrue(hmirror);
++                bool v = cJSON_IsTrue(vflip);
++                camera->SetHMirror(m);
++                camera->SetVFlip(v);
++                ESP_LOGI(TAG, "Camera orientation from bridge: hmirror=%d vflip=%d", m, v);
++            }
++        }
+     }
+ }
+ 
