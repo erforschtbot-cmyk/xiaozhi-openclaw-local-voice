@@ -102,7 +102,7 @@ index 18e71ae..2754b41 100644
                  "CONFIG_SEND_WAKE_WORD_DATA=n"
              ]
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index aaf6d85..015f8f1 100644
+index aaf6d85..366d4c8 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -15,7 +15,9 @@
@@ -125,7 +125,7 @@ index aaf6d85..015f8f1 100644
  
      // K1/K2/K3 haengen nicht am ESP, sondern am TCA9555-Expander
      // (EXIO9/EXIO10/EXIO11 laut Waveshare-Pinout und Schaltplan). Sie werden
-@@ -253,45 +255,123 @@ private:
+@@ -253,45 +255,122 @@ private:
          }
      }
  
@@ -164,17 +164,16 @@ index aaf6d85..015f8f1 100644
 +        } attempts[] = {
 +            // Reihenfolge nach belegter Vertraeglichkeit, nicht nach Aufloesung.
 +            //
-+            // 2048x1536 faellt aus: der JPEG-Rahmenpuffer ist 629145 Byte gross
-+            // (600 KB). Ein 2048x1536-JPEG liegt je nach Motiv knapp darunter
-+            // oder darueber; belegt am 25.10.2026 lieferte der Boot-Check
-+            // einmal 597382 Byte und galt damit als tauglich, danach brach der
-+            // Datenstrom mit "cam_hal: DMA overflow" ab und jedes Foto
-+            // scheiterte mit "Failed to capture photo". Eine Aufloesung, die
-+            // nur manchmal passt, ist unbrauchbar.
-+            {20000000, FRAMESIZE_UXGA, "20MHz 1600x1200"},
-+            {20000000, FRAMESIZE_SVGA, "20MHz 800x600"},
-+            {12000000, FRAMESIZE_UXGA, "12MHz 1600x1200"},
++            // 2048x1536 faellt aus: Rahmenpuffer 629145 Byte, ein Frame lag mit
++            // 597382 Byte knapp darunter, danach DMA overflow.
++            // 1600x1200 faellt ebenfalls aus: Puffer 384000 Byte, Probe-Frames
++            // bis 322075 Byte, im Betrieb dann "cam_hal: DMA overflow" — 20 MHz
++            // XCLK ueberfordert die PSRAM-DMA.
++            // 800x600 bei 12 MHz ist die Kombination, mit der dieses Board im
++            // esp_video-Betrieb stabil Bilder lieferte.
 +            {12000000, FRAMESIZE_SVGA, "12MHz 800x600"},
++            {20000000, FRAMESIZE_SVGA, "20MHz 800x600"},
++            {12000000, FRAMESIZE_VGA,  "12MHz 640x480"},
          };
  
 -        esp_video_init_sccb_config_t sccb_config = {
