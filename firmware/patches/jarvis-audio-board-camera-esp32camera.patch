@@ -1,5 +1,5 @@
 diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
-index 7358633..61cc99a 100644
+index 7358633..b6e5d19 100644
 --- a/main/boards/common/esp32_camera.cc
 +++ b/main/boards/common/esp32_camera.cc
 @@ -31,6 +31,7 @@ static constexpr bool kConfiguredVFlip = false;
@@ -10,11 +10,18 @@ index 7358633..61cc99a 100644
      esp_err_t err = esp_camera_init(&config);
      if (err != ESP_OK) {
          ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
-@@ -73,6 +74,70 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
+@@ -73,6 +74,77 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
      explain_token_ = token;
  }
  
 +bool Esp32Camera::ApplyOrientation(bool hmirror, bool vflip) {
++    // Gleiche Lage nochmal gesetzt: nichts tun. Sonst baute jedes Verbinden
++    // den Sensor neu auf (deinit/init + Frame-Pruefung, ~5 s) und der
++    // MCP-Handshake liefe in den Timeout.
++    if (orientation_set_ && want_hmirror_ == hmirror && want_vflip_ == vflip) {
++        return true;
++    }
++
 +    want_hmirror_ = hmirror;
 +    want_vflip_ = vflip;
 +    orientation_set_ = true;
@@ -81,7 +88,7 @@ index 7358633..61cc99a 100644
  bool Esp32Camera::Capture() {
      if (encoder_thread_.joinable()) {
          encoder_thread_.join();
-@@ -82,12 +147,25 @@ bool Esp32Camera::Capture() {
+@@ -82,12 +154,25 @@ bool Esp32Camera::Capture() {
          return false;
      }
  
@@ -108,7 +115,7 @@ index 7358633..61cc99a 100644
          if (!current_fb_) {
              ESP_LOGE(TAG, "Camera capture failed");
              return false;
-@@ -152,21 +230,11 @@ bool Esp32Camera::Capture() {
+@@ -152,21 +237,11 @@ bool Esp32Camera::Capture() {
  }
  
  bool Esp32Camera::SetHMirror(bool enabled) {
