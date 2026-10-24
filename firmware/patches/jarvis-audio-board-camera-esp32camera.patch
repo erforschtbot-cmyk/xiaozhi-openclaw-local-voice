@@ -1,5 +1,5 @@
 diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
-index 7358633..d177251 100644
+index 7358633..61cc99a 100644
 --- a/main/boards/common/esp32_camera.cc
 +++ b/main/boards/common/esp32_camera.cc
 @@ -31,6 +31,7 @@ static constexpr bool kConfiguredVFlip = false;
@@ -10,10 +10,47 @@ index 7358633..d177251 100644
      esp_err_t err = esp_camera_init(&config);
      if (err != ESP_OK) {
          ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
-@@ -73,6 +74,26 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
+@@ -73,6 +74,70 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
      explain_token_ = token;
  }
  
++bool Esp32Camera::ApplyOrientation(bool hmirror, bool vflip) {
++    want_hmirror_ = hmirror;
++    want_vflip_ = vflip;
++    orientation_set_ = true;
++
++    sensor_t* sensor = esp_camera_sensor_get();
++    if (!sensor) {
++        return false;
++    }
++
++    // Waehrend eines laufenden JPEG-Stroms duerfen die Flip-Register nicht
++    // einfach umgestellt werden: belegt am 25.10.2026, danach meldete der
++    // Treiber "NO-SOI - JPEG start marker missing" und das Bild blieb aus.
++    // Deshalb den Strom neu aufsetzen und die Lage danach anwenden.
++    if (streaming_on_) {
++        if (current_fb_) {
++            current_fb_ = nullptr;
++        }
++        esp_camera_deinit();
++        streaming_on_ = false;
++        if (esp_camera_init(&config_) != ESP_OK) {
++            ESP_LOGE(TAG, "Camera re-init for orientation failed");
++            return false;
++        }
++        streaming_on_ = true;
++        sensor = esp_camera_sensor_get();
++        if (!sensor) {
++            return false;
++        }
++    }
++
++    sensor->set_hmirror(sensor, hmirror ? 1 : 0);
++    sensor->set_vflip(sensor, vflip ? 1 : 0);
++    ESP_LOGI(TAG, "Camera orientation applied: hmirror=%d vflip=%d", hmirror, vflip);
++    return true;
++}
++
 +bool Esp32Camera::RecoverStream() {
 +    // Der DVP-Datenstrom bleibt nach laengerem Leerlauf stehen. Ein Neuaufsetzen
 +    // mit derselben Konfiguration holt ihn zurueck; das Geraet laeuft weiter.
@@ -30,6 +67,13 @@ index 7358633..d177251 100644
 +        return false;
 +    }
 +    streaming_on_ = true;
++    if (orientation_set_) {
++        sensor_t* sensor = esp_camera_sensor_get();
++        if (sensor) {
++            sensor->set_hmirror(sensor, want_hmirror_ ? 1 : 0);
++            sensor->set_vflip(sensor, want_vflip_ ? 1 : 0);
++        }
++    }
 +    ESP_LOGW(TAG, "Camera stream restarted");
 +    return true;
 +}
@@ -37,7 +81,7 @@ index 7358633..d177251 100644
  bool Esp32Camera::Capture() {
      if (encoder_thread_.joinable()) {
          encoder_thread_.join();
-@@ -82,12 +103,25 @@ bool Esp32Camera::Capture() {
+@@ -82,12 +147,25 @@ bool Esp32Camera::Capture() {
          return false;
      }
  
@@ -64,26 +108,60 @@ index 7358633..d177251 100644
          if (!current_fb_) {
              ESP_LOGE(TAG, "Camera capture failed");
              return false;
+@@ -152,21 +230,11 @@ bool Esp32Camera::Capture() {
+ }
+ 
+ bool Esp32Camera::SetHMirror(bool enabled) {
+-    sensor_t* s = esp_camera_sensor_get();
+-    if (!s) {
+-        return false;
+-    }
+-    s->set_hmirror(s, enabled ? 1 : 0);
+-    return true;
++    return ApplyOrientation(enabled, want_vflip_);
+ }
+ 
+ bool Esp32Camera::SetVFlip(bool enabled) {
+-    sensor_t* s = esp_camera_sensor_get();
+-    if (!s) {
+-        return false;
+-    }
+-    s->set_vflip(s, enabled ? 1 : 0);
+-    return true;
++    return ApplyOrientation(want_hmirror_, enabled);
+ }
+ 
+ bool Esp32Camera::SetSwapBytes(bool enabled) {
 diff --git a/main/boards/common/esp32_camera.h b/main/boards/common/esp32_camera.h
-index e3c73e7..2dbe4f6 100644
+index e3c73e7..1c4cb65 100644
 --- a/main/boards/common/esp32_camera.h
 +++ b/main/boards/common/esp32_camera.h
-@@ -28,6 +28,9 @@ private:
+@@ -28,6 +28,15 @@ private:
      camera_fb_t* current_fb_ = nullptr;
      uint8_t* encode_buf_ = nullptr;  // Buffer for JPEG encoding (with optional byte swap)
      size_t encode_buf_size_ = 0;
 +    // Konfiguration merken, um den Datenstrom neu aufsetzen zu koennen, wenn
 +    // er nach laengerem Leerlauf steht (siehe RecoverStream()).
 +    camera_config_t config_ = {};
++    // Gewuenschte Lage. Der Sensor kennt sie ueber seine Register; esp_camera_init
++    // setzt diese beim Neuaufsetzen zurueck, deshalb werden sie danach erneut
++    // angewandt (ApplyOrientation).
++    bool orientation_set_ = false;
++    bool want_hmirror_ = false;
++    bool want_vflip_ = false;
  
  public:
      Esp32Camera(const camera_config_t& config);
-@@ -35,6 +38,8 @@ public:
+@@ -35,6 +44,12 @@ public:
  
      virtual void SetExplainUrl(const std::string& url, const std::string& token) override;
      virtual bool Capture() override;
 +    // Setzt den DVP-Datenstrom mit der gemerkten Konfiguration neu auf.
 +    bool RecoverStream();
++    // Setzt die Kamerelage und laesst den Strom neu aufsetzen. Waehrend eines
++    // laufenden JPEG-Stroms duerfen die Flip-Register nicht einfach umgestellt
++    // werden: danach fehlen SOI/EOI-Marker und das Bild bleibt aus.
++    bool ApplyOrientation(bool hmirror, bool vflip);
      virtual bool SetHMirror(bool enabled) override;
      virtual bool SetVFlip(bool enabled) override;
      virtual bool SetSwapBytes(bool enabled) override;
