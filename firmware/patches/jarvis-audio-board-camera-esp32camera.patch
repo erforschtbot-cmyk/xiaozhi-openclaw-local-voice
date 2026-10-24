@@ -13,7 +13,7 @@ index 18e71ae..2754b41 100644
                  "CONFIG_SEND_WAKE_WORD_DATA=n"
              ]
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index aaf6d85..dcbf8f9 100644
+index aaf6d85..84cb597 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -15,7 +15,9 @@
@@ -36,7 +36,7 @@ index aaf6d85..dcbf8f9 100644
  
      // K1/K2/K3 haengen nicht am ESP, sondern am TCA9555-Expander
      // (EXIO9/EXIO10/EXIO11 laut Waveshare-Pinout und Schaltplan). Sie werden
-@@ -253,45 +255,75 @@ private:
+@@ -253,45 +255,102 @@ private:
          }
      }
  
@@ -92,13 +92,6 @@ index aaf6d85..dcbf8f9 100644
 -            .dvp_pin = dvp_pin_config,
 -            .xclk_freq = 12000000,
 -        };
--
--        esp_video_init_config_t video_config = {
--            .dvp = &dvp_config,
--        };
--
--        camera_ = new EspVideo(video_config);
--
 +        for (const auto& attempt : attempts) {
 +            camera_config_t config = {};
 +            // LEDC_TIMER_0/CHANNEL_0 gehoert dem Display-Backlight.
@@ -132,16 +125,47 @@ index aaf6d85..dcbf8f9 100644
 +            config.grab_mode = CAMERA_GRAB_LATEST;
 +
 +            // Esp32Camera initialisiert den Sensor selbst im Konstruktor.
-+            // Erfolg wird ueber den Sensor-Handle geprueft, nicht vermutet.
 +            auto* candidate = new Esp32Camera(config);
-+            if (esp_camera_sensor_get() != nullptr) {
++            if (esp_camera_sensor_get() == nullptr) {
++                ESP_LOGW(TAG, "esp32-camera init failed for %s", attempt.label);
++                delete candidate;
++                continue;
++            }
+ 
+-        esp_video_init_config_t video_config = {
+-            .dvp = &dvp_config,
+-        };
++            // Eine erfolgreiche Initialisierung beweist noch kein Bild. Belegt
++            // am 25.10.2026: bei 20MHz/2048x1536 meldete der Sensor
++            // "NO-EOI - JPEG end marker missing" und lieferte nie einen
++            // vollstaendigen Frame; das Foto scheiterte erst beim Ausloesen
++            // mit "Failed to capture photo". Deshalb hier einen echten Frame
++            // verlangen, bevor die Einstellung als tauglich gilt.
++            bool frame_ok = false;
++            for (int tries = 0; tries < 3 && !frame_ok; tries++) {
++                camera_fb_t* fb = esp_camera_fb_get();
++                if (fb == nullptr) {
++                    continue;
++                }
++                if (fb->len > 0 && fb->width > 0 && fb->height > 0) {
++                    frame_ok = true;
++                    ESP_LOGI(TAG, "Camera frame ok: %ux%u, len=%u",
++                             (unsigned)fb->width, (unsigned)fb->height,
++                             (unsigned)fb->len);
++                }
++                esp_camera_fb_return(fb);
++            }
+ 
+-        camera_ = new EspVideo(video_config);
++            if (frame_ok) {
 +                camera_ = candidate;
 +                ESP_LOGI(TAG, "Camera driver=esp32-camera setting=%s", attempt.label);
 +                return;
 +            }
-+            ESP_LOGW(TAG, "esp32-camera init failed for %s", attempt.label);
+ 
++            ESP_LOGW(TAG, "esp32-camera: init ok, aber kein Frame bei %s",
++                     attempt.label);
 +            delete candidate;
-+            esp_camera_deinit();
 +        }
 +        ESP_LOGE(TAG, "Camera: no working setting found");
 +        camera_ = nullptr;
