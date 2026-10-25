@@ -1,5 +1,5 @@
 diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
-index 7358633..641f6e2 100644
+index 7358633..b6e5d19 100644
 --- a/main/boards/common/esp32_camera.cc
 +++ b/main/boards/common/esp32_camera.cc
 @@ -31,6 +31,7 @@ static constexpr bool kConfiguredVFlip = false;
@@ -10,7 +10,7 @@ index 7358633..641f6e2 100644
      esp_err_t err = esp_camera_init(&config);
      if (err != ESP_OK) {
          ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
-@@ -73,21 +74,157 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
+@@ -73,6 +74,77 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
      explain_token_ = token;
  }
  
@@ -58,58 +58,6 @@ index 7358633..641f6e2 100644
 +    return true;
 +}
 +
-+struct Esp32Camera::StreamGuard {
-+    Esp32Camera* camera;
-+    explicit StreamGuard(Esp32Camera* c) : camera(c) {}
-+    ~StreamGuard() {
-+        // Der Sensor lief bisher ab dem Boot durchgehend und wurde warm;
-+        // warme Sensoren rauschen sichtbar. Nach dem Foto wieder abschalten
-+        // kostet beim naechsten Mal ~0,8 s Wecken, faellt hinter der
-+        // Spracherkennung nicht auf.
-+        if (camera != nullptr) {
-+            camera->PowerDown();
-+        }
-+    }
-+};
-+
-+void Esp32Camera::PowerDown() {
-+    if (!streaming_on_) {
-+        return;
-+    }
-+    // Der Frame gehoert dem Treiber. Wird er vor deinit NICHT zurueckgegeben,
-+    // raeumt deinit ihn ein zweites Mal ab: belegt am 25.10.2026 mit
-+    // "assert failed: tlsf_free ... block already marked as free" und einer
-+    // Boot-Schleife. Deshalb genau wie im Destruktor zurueckgeben.
-+    if (current_fb_ != nullptr) {
-+        esp_camera_fb_return(current_fb_);
-+        current_fb_ = nullptr;
-+    }
-+    esp_camera_deinit();
-+    streaming_on_ = false;
-+    ESP_LOGI(TAG, "Camera powered down until next photo");
-+}
-+
-+bool Esp32Camera::EnsureStream() {
-+    if (streaming_on_) {
-+        return true;
-+    }
-+    if (esp_camera_init(&config_) != ESP_OK) {
-+        ESP_LOGE(TAG, "Camera wake-up failed");
-+        return false;
-+    }
-+    streaming_on_ = true;
-+    // esp_camera_init setzt die Flip-Register zurueck.
-+    if (orientation_set_) {
-+        sensor_t* sensor = esp_camera_sensor_get();
-+        if (sensor) {
-+            sensor->set_hmirror(sensor, want_hmirror_ ? 1 : 0);
-+            sensor->set_vflip(sensor, want_vflip_ ? 1 : 0);
-+        }
-+    }
-+    ESP_LOGI(TAG, "Camera powered up for photo");
-+    return true;
-+}
-+
 +bool Esp32Camera::RecoverStream() {
 +    // Der DVP-Datenstrom bleibt nach laengerem Leerlauf stehen. Ein Neuaufsetzen
 +    // mit derselben Konfiguration holt ihn zurueck; das Geraet laeuft weiter.
@@ -140,10 +88,7 @@ index 7358633..641f6e2 100644
  bool Esp32Camera::Capture() {
      if (encoder_thread_.joinable()) {
          encoder_thread_.join();
-     }
- 
--    if (!streaming_on_) {
-+    if (!EnsureStream()) {
+@@ -82,12 +154,25 @@ bool Esp32Camera::Capture() {
          return false;
      }
  
@@ -170,7 +115,7 @@ index 7358633..641f6e2 100644
          if (!current_fb_) {
              ESP_LOGE(TAG, "Camera capture failed");
              return false;
-@@ -152,21 +289,11 @@ bool Esp32Camera::Capture() {
+@@ -152,21 +237,11 @@ bool Esp32Camera::Capture() {
  }
  
  bool Esp32Camera::SetHMirror(bool enabled) {
@@ -194,21 +139,11 @@ index 7358633..641f6e2 100644
  }
  
  bool Esp32Camera::SetSwapBytes(bool enabled) {
-@@ -183,6 +310,9 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string&
-         return std::unexpected("No camera frame captured");
-     }
- 
-+    // Schaltet den Sensor am Ende dieses Aufrufs ab (auch bei Fehlern).
-+    StreamGuard stream_guard(this);
-+
-     // Create local JPEG queue
-     QueueHandle_t jpeg_queue = xQueueCreate(40, sizeof(JpegChunk));
-     if (jpeg_queue == nullptr) {
 diff --git a/main/boards/common/esp32_camera.h b/main/boards/common/esp32_camera.h
-index e3c73e7..1f08133 100644
+index e3c73e7..1c4cb65 100644
 --- a/main/boards/common/esp32_camera.h
 +++ b/main/boards/common/esp32_camera.h
-@@ -28,6 +28,18 @@ private:
+@@ -28,6 +28,15 @@ private:
      camera_fb_t* current_fb_ = nullptr;
      uint8_t* encode_buf_ = nullptr;  // Buffer for JPEG encoding (with optional byte swap)
      size_t encode_buf_size_ = 0;
@@ -221,22 +156,15 @@ index e3c73e7..1f08133 100644
 +    bool orientation_set_ = false;
 +    bool want_hmirror_ = false;
 +    bool want_vflip_ = false;
-+    // Schaltet den Sensor nach einem Foto ab. Verschachtelt (nicht lokal),
-+    // damit der Waechter auf die privaten Felder zugreifen darf.
-+    struct StreamGuard;
  
  public:
      Esp32Camera(const camera_config_t& config);
-@@ -35,6 +47,16 @@ public:
+@@ -35,6 +44,12 @@ public:
  
      virtual void SetExplainUrl(const std::string& url, const std::string& token) override;
      virtual bool Capture() override;
 +    // Setzt den DVP-Datenstrom mit der gemerkten Konfiguration neu auf.
 +    bool RecoverStream();
-+    // Weckt den Sensor, falls er nach dem letzten Foto abgeschaltet wurde.
-+    bool EnsureStream();
-+    // Schaltet den Sensor jetzt ab (z. B. nach der Boot-Pruefung).
-+    void PowerDown();
 +    // Setzt die Kamerelage und laesst den Strom neu aufsetzen. Waehrend eines
 +    // laufenden JPEG-Stroms duerfen die Flip-Register nicht einfach umgestellt
 +    // werden: danach fehlen SOI/EOI-Marker und das Bild bleibt aus.
@@ -259,7 +187,7 @@ index 18e71ae..2754b41 100644
                  "CONFIG_SEND_WAKE_WORD_DATA=n"
              ]
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index aaf6d85..cd77d0e 100644
+index aaf6d85..366d4c8 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -15,7 +15,9 @@
@@ -282,7 +210,7 @@ index aaf6d85..cd77d0e 100644
  
      // K1/K2/K3 haengen nicht am ESP, sondern am TCA9555-Expander
      // (EXIO9/EXIO10/EXIO11 laut Waveshare-Pinout und Schaltplan). Sie werden
-@@ -253,45 +255,127 @@ private:
+@@ -253,45 +255,122 @@ private:
          }
      }
  
@@ -426,11 +354,6 @@ index aaf6d85..cd77d0e 100644
 +            if (frame_ok) {
 +                camera_ = candidate;
 +                ESP_LOGI(TAG, "Camera driver=esp32-camera setting=%s", attempt.label);
-+                // Der Sensor lief bisher ab dem Boot durchgehend und wurde
-+                // dadurch warm; warme Sensoren rauschen sichtbar. Die Pruefung
-+                // oben hat gezeigt, dass er funktioniert — jetzt schlafen
-+                // legen, geweckt wird beim naechsten Foto (~0,8 s).
-+                candidate->PowerDown();
 +                return;
 +            }
  
