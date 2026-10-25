@@ -1,0 +1,11 @@
+{
+  "_note": "Kamera-Lage pro Geraet. Schluessel ist die Device-Id (MAC) wie in room-map.json. hmirror spiegelt horizontal, vflip vertikal; beide zusammen ergeben eine 180-Grad-Drehung. Der Sensor dreht/spiegelt in Hardware (Register), es entsteht keine Verzoegerung und kein Umrechnen des JPEG. Die Bridge sendet die Werte beim MCP-Handshake an das Geraet. Aenderungen greifen beim naechsten Verbinden (Weckwort), ohne neuen Firmware-Build.",
+  "_howto": "1) Bridge starten, Geraet verbinden. 2) Im Log die Device-Id ablesen ('XiaoZhi connected from ... Device-Id ...' oder 'Raum aus Device-Id ...'). 3) Hier eintragen: \"aa:bb:cc:dd:ee:ff\": {\"hmirror\": false, \"vflip\": true}. 4) Geraet neu verbinden. Fehlt ein Geraet hier, bleibt die Sensoreinstellung unveraendert.",
+  "_herleitung": "Steht das Bild auf dem Kopf UND ist es spiegelverkehrt, ist das netto nur vertikal gespiegelt (Mh*(Mh*Mv) = Mv) -> vflip=true, hmirror=false. Ist es nur auf dem Kopf, braucht es hmirror=true UND vflip=true. Ist es nur seitenverkehrt, hmirror=true allein.",
+  "devices": {
+    "aa:bb:cc:dd:ee:ff": {
+      "hmirror": false,
+      "vflip": true
+    }
+  }
+}

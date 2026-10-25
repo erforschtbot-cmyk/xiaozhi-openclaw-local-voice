@@ -109,6 +109,14 @@ if [[ ! -e "$install_dir/room-map.json" ]]; then
   echo "room-map.json aus Vorlage angelegt — Device-Ids noch eintragen (siehe Datei)."
 fi
 
+# camera-orientation.json: Kameralage pro Geraet. Ohne sie bleibt die
+# Sensoreinstellung unveraendert — die Bridge laeuft trotzdem. Bestehende
+# Eintraege bleiben bei erneutem Installieren erhalten.
+if [[ ! -e "$install_dir/camera-orientation.json" ]]; then
+  install -m 0644 "$repo_dir/gateway/camera-orientation.json" "$install_dir/camera-orientation.json"
+  echo "camera-orientation.json aus Vorlage angelegt — Device-Ids/Lage eintragen (siehe Datei)."
+fi
+
 # Modus-Schalter: Existenz der Datei schaltet den alten Bridge-Direktpfad AUS.
 # Genau EIN Ausfuehrer (die Gateway-Weiche) soll schalten. Leere Datei = korrekt.
 install -m 0644 "$repo_dir/gateway/disable-smart-home-fastpath" "$install_dir/disable-smart-home-fastpath"
@@ -220,7 +228,7 @@ for required in "${runtime_files[@]%:*}"; do
     missing=1
   fi
 done
-for required in room-map.json disable-smart-home-fastpath voice-mode; do
+for required in room-map.json disable-smart-home-fastpath voice-mode camera-orientation.json; do
   if [[ ! -e "$install_dir/$required" ]]; then
     echo "MISSING: $install_dir/$required" >&2
     missing=1
