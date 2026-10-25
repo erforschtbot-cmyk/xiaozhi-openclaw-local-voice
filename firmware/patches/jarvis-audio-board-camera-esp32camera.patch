@@ -1,5 +1,5 @@
 diff --git a/main/boards/common/esp32_camera.cc b/main/boards/common/esp32_camera.cc
-index 7358633..789a9d2 100644
+index 7358633..641f6e2 100644
 --- a/main/boards/common/esp32_camera.cc
 +++ b/main/boards/common/esp32_camera.cc
 @@ -31,6 +31,7 @@ static constexpr bool kConfiguredVFlip = false;
@@ -64,15 +64,10 @@ index 7358633..789a9d2 100644
 +    ~StreamGuard() {
 +        // Der Sensor lief bisher ab dem Boot durchgehend und wurde warm;
 +        // warme Sensoren rauschen sichtbar. Nach dem Foto wieder abschalten
-+        // kostet beim naechsten Mal ~0,8 s Wecken (Boot-Log: 578 ms Erkennung
-+        // -> 1338 ms bereit), faellt hinter der Spracherkennung nicht auf.
-+        if (camera != nullptr && camera->streaming_on_) {
-+            if (camera->current_fb_ != nullptr) {
-+                camera->current_fb_ = nullptr;
-+            }
-+            esp_camera_deinit();
-+            camera->streaming_on_ = false;
-+            ESP_LOGI(TAG, "Camera powered down until next photo");
++        // kostet beim naechsten Mal ~0,8 s Wecken, faellt hinter der
++        // Spracherkennung nicht auf.
++        if (camera != nullptr) {
++            camera->PowerDown();
 +        }
 +    }
 +};
@@ -81,7 +76,12 @@ index 7358633..789a9d2 100644
 +    if (!streaming_on_) {
 +        return;
 +    }
++    // Der Frame gehoert dem Treiber. Wird er vor deinit NICHT zurueckgegeben,
++    // raeumt deinit ihn ein zweites Mal ab: belegt am 25.10.2026 mit
++    // "assert failed: tlsf_free ... block already marked as free" und einer
++    // Boot-Schleife. Deshalb genau wie im Destruktor zurueckgeben.
 +    if (current_fb_ != nullptr) {
++        esp_camera_fb_return(current_fb_);
 +        current_fb_ = nullptr;
 +    }
 +    esp_camera_deinit();
