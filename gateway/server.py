@@ -17,7 +17,7 @@ from websockets.asyncio.server import serve
 
 # Raum-Zuordnung: das Geraet schickt seine MAC im Handshake (Device-Id).
 # Daraus wird der Raum ermittelt und fuer die Weiche hinterlegt.
-from room_command import publish_active_room, room_for_device
+from room_command import publish_active_room, room_for_device, normalize_mac
 
 # Lokale Sprachausgabe. Das Modul wird nur importiert, wenn der lokale
 # TTS-Pfad aktiv ist; so bleibt der Provider-Pfad ohne Piper-Abhaengigkeit
@@ -336,27 +336,69 @@ class XiaozhiSession:
             host = self.args.public_host
         return f"http://{host}:{self.args.ota_port}/photo"
 
+    def camera_orientation(self):
+        """Kamera-Lage dieses Geraets aus camera-orientation.json.
+
+        Der Einbau ist Sache des Aufbaus, nicht des Modells: dieselbe Platine
+        kann die Kamera kopfüber oder gespiegelt tragen. Der Sensor dreht das
+        Bild in Hardware, deshalb kostet es keine Zeit. Fehlt ein Eintrag,
+        bleibt die Sensoreinstellung unverändert (None).
+        """
+        device_id = getattr(self, "device_id", None)
+        if not device_id:
+            return None
+        path = Path(__file__).resolve().parent / "camera-orientation.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        devices = data.get("devices") if isinstance(data, dict) else None
+        if not isinstance(devices, dict):
+            return None
+        entry = devices.get(normalize_mac(device_id))
+        if not isinstance(entry, dict):
+            return None
+        hmirror = entry.get("hmirror")
+        vflip = entry.get("vflip")
+        if not isinstance(hmirror, bool) and not isinstance(vflip, bool):
+            return None
+        return {"hmirror": bool(hmirror), "vflip": bool(vflip)}
+
     async def initialize_mcp(self):
         try:
             # capabilities.vision ist der einzige Weg, dem Geraet die
             # Upload-Adresse mitzuteilen (McpServer::ParseCapabilities).
+            # hmirror/vflip reisen mit: der Sensor dreht das Bild dann in
+            # Hardware, passend zum Einbau dieses Geraets.
+            vision = {
+                "url": self.photo_endpoint(),
+                "token": "local-openclaw",
+            }
+            orientation = self.camera_orientation()
+            if orientation is not None:
+                vision.update(orientation)
+            # Grosszuegiger als die Standard-3s: setzt das Geraet dabei die
+            # Kamerlage, baut es den Sensor neu auf (deinit/init + Pruefung).
+            # Belegt am 25.10.2026: mit 3 s kam "Device MCP initialization
+            # failed" mit leerer Meldung, weil die Antwort zu spaet kam.
             response = await self.send_mcp_request(
                 "initialize",
-                {"capabilities": {"vision": {
-                    "url": self.photo_endpoint(),
-                    "token": "local-openclaw",
-                }}},
-                timeout=3.0,
+                {"capabilities": {"vision": vision}},
+                timeout=15.0,
             )
             if "error" in response:
                 raise RuntimeError(response["error"])
             self.mcp_ready.set()
             print(
-                f"{self.tag} Device MCP initialized (vision -> {self.photo_endpoint()})",
+                f"{self.tag} Device MCP initialized (vision -> {self.photo_endpoint()}"
+                + (f", hmirror={orientation['hmirror']}, vflip={orientation['vflip']}"
+                   if orientation is not None else "")
+                + ")",
                 flush=True,
             )
         except Exception as exc:
-            print(f"{self.tag} Device MCP initialization failed: {exc}", flush=True)
+            detail = str(exc) or f"{type(exc).__name__} (keine Meldung)"
+            print(f"{self.tag} Device MCP initialization failed: {detail}", flush=True)
 
     async def call_device_tool(self, name, arguments, timeout=3.0):
         await asyncio.wait_for(self.mcp_ready.wait(), timeout=3.0)
@@ -1743,6 +1785,18 @@ class XiaozhiSession:
             self.tts_text_buffer = self.tts_text_buffer[boundary:]
             if phrase:
                 self.tts_pending += 1
+                # Der Arbeiter wird erst in start_local_tts() angelegt. Kommt
+                # Text davor an (z. B. wenn der Abschluss schon lief), waere
+                # tts_queue None: belegt am 25.10.2026 mit
+                # "event relay failed: 'NoneType' object has no attribute
+                # 'put_nowait'". Deshalb hier die Queue anlegen — aber NICHT
+                # ueber start_local_tts(), weil das den Textpuffer leert und
+                # den Rest des Satzes verschluckt.
+                if self.tts_queue is None:
+                    self.tts_queue = asyncio.Queue()
+                    self.tts_worker_task = asyncio.create_task(
+                        self._local_tts_worker()
+                    )
                 self.tts_queue.put_nowait(phrase)
 
     @staticmethod
@@ -1787,6 +1841,11 @@ class XiaozhiSession:
         self.tts_text_buffer = ""
         if rest:
             self.tts_pending += 1
+            if self.tts_queue is None:
+                self.tts_queue = asyncio.Queue()
+                self.tts_worker_task = asyncio.create_task(
+                    self._local_tts_worker()
+                )
             self.tts_queue.put_nowait(rest)
         if self.tts_queue is not None:
             self.tts_queue.put_nowait(None)
@@ -2465,6 +2524,36 @@ async def main():
             session.device_id = device_id
             session.device_room = room
             if device_id:
+                # Ein Geraet darf nur EINE Sitzung fuehren. Reconnect waehrend
+                # einer laufenden Sitzung (Firmware baut die WebSocket neu auf,
+                # waehrend die alte noch nicht abgebaut ist) erzeugte sonst
+                # zwei Zuhoerer desselben Geraets. Belegt 24.10.2026: dieselbe
+                # IP verlor die Weckwort-Absprache gegen sich selbst
+                # ("wake_arbitration_lost" 2 s nach "connected").
+                previous = ACTIVE_SESSIONS.get(device_id.upper())
+                if previous is not None and previous is not session:
+                    print(
+                        f"{dev_tag} Doppelte Sitzung fuer Device-Id {device_id}: "
+                        f"schliesse vorherige {previous.tag}",
+                        flush=True,
+                    )
+                    # Sperre des Vorgaengers sofort loesen, sonst blockiert
+                    # dessen stehengebliebener Pegel das neue Fenster.
+                    if getattr(previous, "arbiter", None) is not None:
+                        previous.arbiter.release(previous)
+                    previous.input_stopped = True
+                    try:
+                        await asyncio.wait_for(
+                            previous.websocket.close(
+                                code=1000, reason="superseded_by_reconnect"
+                            ),
+                            timeout=5.0,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"{dev_tag} Vorherige Sitzung nicht geschlossen: {exc!r}",
+                            flush=True,
+                        )
                 ACTIVE_SESSIONS[device_id.upper()] = session
             try:
                 await session.run()
