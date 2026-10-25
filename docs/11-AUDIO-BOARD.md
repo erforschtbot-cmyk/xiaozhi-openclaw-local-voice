@@ -122,6 +122,89 @@ angegeben. Dasselbe Vorgehen nutzen andere Waveshare-Boards im Upstream (z. B.
 `esp32-c6-lcd-0.85`, `esp32-s3-lcd-0.85`): sie rufen ihre Farbhelfer ebenfalls
 mit `(green, red, blue)`.
 
+## Kamera
+
+Das Board trägt eine **OV5640** (DVP, I²C-Adresse `0x3c`). Der Sensor wird beim
+Boot automatisch erkannt; die OV2640 wird zuerst probiert und meldet
+`get sensor ID failed` — das ist der erste Suchschritt, kein Fehler.
+
+### Treiber: `esp32-camera`, nicht `esp_video`
+
+Belegt am 25.10.2026: mit `esp_video` kam das Bild **magentafarben**, weil dieser
+Treiber beim OV5640 nur Spiegeln/Drehen kennt, keinen Weißabgleich. Der klassische
+`esp32-camera`-Treiber setzt den Sensor-Weißabgleich und liefert JPEG **direkt aus
+dem Sensor**; die YUV-Wandlung im Software-Encoder entfällt.
+
+Umgesetzt in `firmware/patches/jarvis-audio-board-camera-esp32camera.patch`
+(Board-Datei + `config.json`). Der Build wendet ihn nach Ring- und PSRAM-Patch an.
+
+### Auflösung: Leiter mit echter Frame-Prüfung
+
+Hohe Auflösungen scheitern an der PSRAM-DMA, nicht am Sensor. Belegt:
+
+| Auflösung | Rahmenpuffer | gemessener Frame | Ergebnis |
+|---|---:|---:|---|
+| 2048×1536 @ 20 MHz | 629.145 B | 597.382 B | `cam_hal: DMA overflow` |
+| 1600×1200 @ 20 MHz | 384.000 B | 322.075 B | `cam_hal: DMA overflow` |
+| **800×600 @ 12 MHz** | **96.000 B** | **~38.000 B** | **stabil** |
+
+Entscheidend ist die Prüfung: eine Einstellung gilt erst als tauglich, wenn
+**drei Frames hintereinander** ankommen. Ein einzelner Treffer beweist nichts —
+bei 2048×1536 kam genau ein Frame knapp unter der Puffergröße durch und galt
+damals fälschlich als Erfolg.
+
+Der Treiber setzt den Strom außerdem selbst zurück, wenn er nach längerem
+Leerlauf steht (`RecoverStream`, Logzeile `Camera stream restarted`).
+
+### Kamera-Lage ohne Neubau
+
+Dieselbe Platine kann die Kamera kopfüber oder gespiegelt tragen. Die Lage ist
+deshalb **keine Firmware-Eigenschaft**, sondern Konfiguration:
+`camera-orientation.json` im Bridge-Verzeichnis, Schlüssel ist die Device-Id.
+
+```json
+"90:70:69:eb:1e:b4": { "hmirror": false, "vflip": true }
+```
+
+Die Bridge sendet die Werte beim MCP-Handshake (`capabilities.vision`), das
+Gerät setzt die Sensor-Register. **Kein Umrechnen des JPEG, keine Verzögerung.**
+Änderungen greifen beim nächsten Verbinden (Weckwort), ohne Build.
+
+| Beobachtung | Einstellung |
+|---|---|
+| auf dem Kopf **und** spiegelverkehrt | `vflip: true`, `hmirror: false` (netto nur vertikal gespiegelt) |
+| nur auf dem Kopf | `hmirror: true`, `vflip: true` (180°-Drehung) |
+| nur seitenverkehrt | `hmirror: true`, `vflip: false` |
+
+Die Register dürfen **nicht bei laufendem JPEG-Strom** umgestellt werden — danach
+fehlen SOI/EOI-Marker und das Bild bleibt aus (`NO-SOI - JPEG start marker
+missing`). Deshalb setzt eine Änderung den Strom neu auf (dauert einige Sekunden;
+der MCP-Handshake der Bridge wartet dafür bis zu 15 s). Eine **wiederholte**
+gleiche Lage wird erkannt und kostet nichts.
+
+### Hitze: Kamera läuft dauerhaft
+
+Der Sensor ist ab dem Boot durchgehend aktiv (`streaming_on_`) und wird warm;
+warme Sensoren rauschen sichtbar. Ein Abschalten nach dem Foto über
+`esp_camera_deinit()` im laufenden Betrieb ist **gescheitert**: der Treiber gibt
+Puffer doppelt frei (`assert failed: tlsf_free … block already marked as free` →
+Boot-Schleife). Auch das vorherige Zurückgeben des Frames per
+`esp_camera_fb_return()` half nicht.
+
+Wer das angehen will, braucht eine belegte Messung (Heap-Verbrauch,
+`deinit`-Semantik im Treiber) — nicht weitere Builds auf Verdacht. Ein
+aussichtsreicher Weg wäre der Sensor-Software-Standby über Register `0x3008`
+Bit 6, der keinen Heap anfasst.
+
+**Notfall:** wenn ein Kamera-Build das Gerät in eine Boot-Schleife bringt, das
+zuletzt bekannte gute App-Image direkt schreiben:
+
+```bash
+sudo .venv-esptool/bin/esptool --chip esp32s3 --port /dev/ttyACM0 \
+  write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
+  0x20000 <bekannt-gutes-xiaozhi.bin>
+```
+
 ## Bauen
 
 ```bash
