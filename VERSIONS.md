@@ -8,8 +8,8 @@ Erkennung und Stimme laufen lokal auf dem Host.
 
 | Komponente | Version / Pin |
 |---|---|
-| OpenClaw | `2026.10.4` (Ist-Stand 2026-10-17) |
-| Node.js | `26.7.0` auf dem Referenzhost |
+| OpenClaw | `2026.10.7` (Ist-Stand 2026-10-27; exakter Patchsatz unter `patches/openclaw-2026.10.7/`) |
+| Node.js | `26.12.1` auf dem Referenzhost |
 | Python | `3.14.7` auf dem Referenzhost |
 | XiaoZhi Upstream | `78/xiaozhi-esp32@4632dc51f0a5ad26e08542e131e6e48da41e4ff3` |
 | uart-uhci Upstream | `78/uart-uhci@6ea5f576af84640209aa6b98e27be92b8ce418c5` |
@@ -26,8 +26,8 @@ Erkennung und Stimme laufen lokal auf dem Host.
 | Canary-Modellquelle | `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` |
 | Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |
 | Provider-Stimme (nur noch Rueckfall) | `cove` |
-| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
-| Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
+| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v6` (konstant, ohne UUID-Anhang) |
+| Talk-Consult-Key | `agent:voice:xiaozhi-consult-v6` (konstant, ohne UUID-Anhang) |
 | Schnellweg Schaltbefehle | Gateway-Weiche `jarvis-safe-router-v1` + `jarvis-direct-completion-v2`; erkannt bis Alexa **7-51 ms** (belegt 2026-10-18) |
 | Schnellweg-Sessions | `agent:voice:xiaozhi-realtime-v5` **und** `…-v6` (Muster `^agent:voice:xiaozhi-realtime-v\d+$`) |
 | Alexa-Geraeteliste | aus `alexa2.0.Smart-Home-Devices.*`, 102 erkannt / 23 zugelassen, taeglich per Timer, fail-closed nach 48 h |

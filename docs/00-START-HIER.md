@@ -2,7 +2,9 @@
 
 Stand: 23.10.2026. **Die lokale Sprachkette (Canary + Piper) ist am Gerät
 abgenommen.** Der Host-Aufbau ist durch `scripts/install-host.sh` abgedeckt und
-prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.10.6 vor.
+prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.10.7 vor.
+Der verbindliche Dateibestand steht in
+[`00-DATEIBESTAND.md`](00-DATEIBESTAND.md).
 
 Für einen Nachbau ohne Vorwissen gilt: **`docs/01-HOST-INSTALLATION.md` in der
 Reihenfolge abarbeiten, nicht querlesen.** Dort steht nach jedem Schritt, was
@@ -32,7 +34,8 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | OTA-Konfigurationsserver | verrät dem Gerät seine WebSocket-Adresse | Bestandteil von `gateway/server.py`, TCP 8766 |
 | Audio-Bridge | übersetzt XiaoZhi/Opus zum OpenClaw-Talk-Pfad | `gateway/server.py`, TCP 8765 |
 | Gateway-Helfer | authentifizierte Talk-Verbindung | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.6`, TLS TCP 18789 |
+| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.7`, TLS TCP 18789 |
+| Lokaler Smart-Home-Resolver | eindeutige Befehle ohne Agentenlauf | `local-smarthome/`, ioBroker Simple API |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
 | Agent-Werkzeug-Plugin | Alexa-Aufrufe des Agenten | `plugins/iobroker-alexa/`, TypeScript, JS, Tests und Lockdatei |
@@ -55,7 +58,7 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
 2. Linux-Host mit Node/npm, Python/venv/libopus, Git und Docker vorbereiten.
    Die Referenz erwartet Benutzer `/home/openclaw` und npm unter
    `/home/openclaw/.npm-global`; die Pfade sind derzeit nicht portabel.
-3. OpenClaw **2026.10.6** installieren, Gateway konfigurieren, Provider anmelden
+3. OpenClaw **2026.10.7** installieren, Gateway konfigurieren, Provider anmelden
    und das Talk-/Consult-Sessionziel `agent:voice:…` prüfen. **Die Host-Anleitung
    automatisiert diesen Teil nicht** — Schritt 3 bleibt Handarbeit, ist aber in
    `docs/01-HOST-INSTALLATION.md` mit Prüfpunkt beschrieben.
@@ -159,18 +162,21 @@ End-to-End-Test durchgeführt.
 - Gemeinsame Firmware-Dateien beider Repos: bytegleich.
 - Cloud: 28 vorhandene Bridge-Dateien bytegleich zum Live-Verzeichnis;
   kein dort vorhandenes Python-/MJS-Modul fehlt im Cloud-Repo.
-- Lokal: vier abweichende Dateien und elf fehlende Live-Python-/MJS-Dateien
-  (einschließlich Tests). Das ist **kein** aktuelles Spiegelbild des Cloud-Hosts.
+- Lokal, erneuter Audit 27.10.2026: die heute aktiven Bridge-Korrekturen
+  (lokale Antwort aus `assistant_done`, Doppelsprechschutz, 180-ms-TTS-Vorlauf),
+  Foto-Deduplizierung und der lokale Smart-Home-Resolver sind im Repo. Der
+  Resolver war zuvor eine harte, vollständig fehlende Außenabhängigkeit.
 - JavaScript-Routertests Cloud: 145 bestanden, 0 fehlgeschlagen.
 - Python-Tests Cloud mit Bridge-venv: 45 ausgeführt, 8 Fehler und 1 Fehlschlag;
   u. a. referenziert `test_conversation_timing.py` eine nicht vorhandene Methode
   `note_followup_audio`. Kein Beleg für einen kaputten laufenden Dienst,
   aber auch keine grüne Testbasis für einen Neubau.
-- Behoben im Cloud-Installer: Routertests und Katalog-Units werden jetzt
-  mitgeliefert; bestehende Raumzuordnungen bleiben erhalten, falsche Installations-
-  pfade werden abgewiesen. Die lokale Variante ist damit noch nicht angeglichen.
-- Host-Bootstrap, portable Konfiguration und beide Firmware-/Hardware-Abnahmen
-  sind noch nicht vollständig nachgewiesen. **Keine pauschale Vollständigkeitszusage.**
+- Der lokale Installer liefert jetzt zusätzlich den Resolver samt Importkette,
+  erhält gepflegte Zuordnungen und prüft jede Pflichtdatei.
+- Host-Bootstrap und ein End-to-End ab vollständig leerem Host/Flash sind noch
+  nicht abgenommen. Der neue 4B-Helligkeitspatch wurde auf frischem Checkout
+  angewendet, aber noch nicht als vollständiger Neubau geflasht und am Gerät
+  nach einem Neustart abgenommen. **Keine pauschale Vollständigkeitszusage.**
 
 ## Zusätzlich gefunden: Agent-Werkzeug-Plugin
 

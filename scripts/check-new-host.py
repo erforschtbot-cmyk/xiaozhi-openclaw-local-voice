@@ -25,6 +25,7 @@ def check(ok, label):
 
 home = Path.home()
 bridge = home / ".local/share/jarvis-realtime-bridge"
+local_smarthome = home / ".local/share/alexa-direct"
 
 print(f"Benutzer: {home}")
 print(f"Bridge:   {bridge}")
@@ -106,6 +107,12 @@ required = [
 ]
 for filename in required:
     check((bridge / filename).is_file(), "Bridge-Datei: " + filename)
+
+for filename in [
+    "catalog.py", "control.py", "fuzzy.py", "localmap.py", "resolver.py",
+    "rooms.py", "smarthome_cli.py", "bridges.json", "rooms_overrides.json",
+]:
+    check((local_smarthome / filename).is_file(), "Lokaler Resolver: " + filename)
 
 python = bridge / ".venv/bin/python"
 if python.exists():

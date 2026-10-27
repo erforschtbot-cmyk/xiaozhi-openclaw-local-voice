@@ -1,0 +1,14 @@
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+index 067e313..b46b5b0 100644
+--- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+@@ -380,7 +380,8 @@ public:
+         InitializeButtons();
+         InitializeTools();
+         InitializeKeyMonitor();  // 启动按键监听
+-        GetBacklight()->SetBrightness(100);
++        // Restore the persistent MCP setting instead of forcing 100% at every boot.
++        GetBacklight()->RestoreBrightness();
+     }
+ 
+     virtual AudioCodec* GetAudioCodec() override {

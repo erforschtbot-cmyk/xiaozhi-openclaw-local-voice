@@ -6,7 +6,7 @@ Die bisher fehlende Agent-Werkzeugseite ergänzt den Gateway-Schnellweg.
 
 ## Bauen
 
-Voraussetzung: OpenClaw 2026.10.4 unter
+Voraussetzung: OpenClaw 2026.10.7 unter
 `/home/openclaw/.npm-global/lib/node_modules/openclaw`. package.json/Lockfile
 verweisen per `file:` darauf. Andere npm-Pfade erfordern eine angepasste
 Abhängigkeit und neu geprüfte Lockdatei.

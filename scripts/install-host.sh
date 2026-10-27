@@ -63,6 +63,8 @@ done
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$install_dir" "$HOME/.config/systemd/user"
+local_smarthome_dir="${XDG_DATA_HOME:-$HOME/.local/share}/alexa-direct"
+mkdir -p "$local_smarthome_dir"
 
 # --- Laufzeitcode: ALLE Module, nicht nur das Einstiegsprogramm ------------
 # Warum vollstaendig: server.py importiert room_command hart. Der Gateway-Patch
@@ -98,6 +100,19 @@ for entry in "${runtime_files[@]}"; do
     exit 1
   fi
   install -m "$mode" "$repo_dir/gateway/$src" "$install_dir/$src"
+done
+
+# Lokaler Smart-Home-Schnellweg. Python-Quellen werden aktualisiert; die aus
+# ioBroker erzeugten Kataloge bleiben unversioniert. Gepflegte Zuordnungen
+# werden beim ersten Lauf angelegt und bei spaeteren Installationen erhalten.
+for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py; do
+  install -m 0644 "$repo_dir/local-smarthome/$source_file" "$local_smarthome_dir/$source_file"
+done
+install -m 0644 "$repo_dir/local-smarthome/test_resolver.py" "$local_smarthome_dir/test_resolver.py"
+for config_file in bridges.json rooms_overrides.json; do
+  if [[ ! -e "$local_smarthome_dir/$config_file" ]]; then
+    install -m 0644 "$repo_dir/local-smarthome/$config_file" "$local_smarthome_dir/$config_file"
+  fi
 done
 
 # --- Konfiguration, die vorhanden sein MUSS -------------------------------
@@ -231,6 +246,12 @@ done
 for required in room-map.json disable-smart-home-fastpath voice-mode camera-orientation.json; do
   if [[ ! -e "$install_dir/$required" ]]; then
     echo "MISSING: $install_dir/$required" >&2
+    missing=1
+  fi
+done
+for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py bridges.json rooms_overrides.json; do
+  if [[ ! -e "$local_smarthome_dir/$required" ]]; then
+    echo "MISSING: $local_smarthome_dir/$required" >&2
     missing=1
   fi
 done

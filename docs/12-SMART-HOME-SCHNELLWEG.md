@@ -110,7 +110,8 @@ verworfen, das Gerät bekommt kein `stream_end` und bleibt im Zustand
 Abschluss stattdessen an den bestehenden Voice-Owner und verifiziert dabei
 weiter Session, Abbruch und Lifecycle-Generation.
 
-Für OpenClaw 2026.10.4 exakt wiederherstellen und prüfen:
+Für die installierte OpenClaw-Version exakt wiederherstellen und prüfen
+(der Ordner `patches/openclaw-<version>/` muss vorhanden sein):
 
 ```bash
 python3 scripts/restore-openclaw-baseline.py \

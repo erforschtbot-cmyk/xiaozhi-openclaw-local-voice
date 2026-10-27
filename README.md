@@ -3,6 +3,8 @@
 > **Neuaufbau ab leerem Gerät:** zuerst [START HIER / Audit 20.10.2026](docs/00-START-HIER.md) lesen.
 > Der bisherige Stand ist **nicht vollständig als Nullstart abgenommen**.
 > Dort stehen die festgestellten Lücken und der geprüfte Gateway-Wiederaufbau.
+> Der genaue Pflicht-/Laufzeit-/Außenbestand steht in
+> [`docs/00-DATEIBESTAND.md`](docs/00-DATEIBESTAND.md).
 
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um ein funktionierendes Jarvis-System auf einem leeren Linux-/OpenClaw-Host
@@ -74,6 +76,7 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Bridge-Skript 2 (Node, lokale Erkennung + Piper) | `gateway/local-voice.mjs` |
 | Lokale Erkennung (Wyoming-STT) | `gateway/local_stt.mjs` |
 | Lokale Stimme (Piper) | `gateway/piper_speaker.py` |
+| Lokaler Smart-Home-Resolver (ohne Agentenlauf) | `local-smarthome/` |
 | **Schnellweg für einfache Schaltbefehle** (Gateway-Weiche, ohne KI-Lauf) | `gateway/smart-home-router.mjs`, `docs/12-SMART-HOME-SCHNELLWEG.md` |
 | Alexa-Geräteliste für den Schnellweg (taeglich erneuert) | `gateway/refresh-alexa-catalog.mjs`, `systemd/jarvis-alexa-catalog.timer` |
 | Tests des Schnellwegs (41 Faelle, kein Geraetezugriff) | `gateway/test-smart-home-router.mjs` |
@@ -192,8 +195,8 @@ python3 -m piper.download_voices de_DE-kerstin-low
 `server.py` setzt seit dem 27.09.2026 **konstante** Schlüssel:
 
 ```python
-OPENCLAW_TALK_SESSION_KEY    = self.args.session_key        # agent:voice:xiaozhi-realtime-v5
-OPENCLAW_TALK_CONSULT_SESSION_KEY = self.args.consult_session_key  # agent:allgemein:xiaozhi-realtime-v5
+OPENCLAW_TALK_SESSION_KEY    = self.args.session_key        # agent:voice:xiaozhi-realtime-v6
+OPENCLAW_TALK_CONSULT_SESSION_KEY = self.args.consult_session_key  # agent:voice:xiaozhi-consult-v6
 ```
 
 Vorher hing an beiden Schlüsseln eine UUID. Damit wurde für **jede** Äußerung

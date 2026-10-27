@@ -4,8 +4,9 @@ After=network-online.target openclaw-gateway.service
 
 [Service]
 Type=simple
+Environment=OPENCLAW_NPM_ROOT=/home/openclaw/.npm-global/lib/node_modules
 WorkingDirectory=/home/openclaw/.local/share/jarvis-realtime-bridge
-ExecStart=/home/openclaw/.local/share/jarvis-realtime-bridge/.venv/bin/python /home/openclaw/.local/share/jarvis-realtime-bridge/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host 192.168.178.143 --model gpt-live-1-codex --voice cove --session-key agent:voice:xiaozhi-realtime-v5 --consult-session-key agent:allgemein:xiaozhi-realtime-v5 --stt-local --stt-uri 127.0.0.1:10303 --stt-language de --tts-local --tts-voice de_DE-kerstin-low --tts-voice-dir /home/openclaw/.local/share/piper-voices --tts-split sentence --gateway-ca %h/.openclaw/ssl/gateway.crt
+ExecStart=/home/openclaw/.local/share/jarvis-realtime-bridge/.venv/bin/python /home/openclaw/.local/share/jarvis-realtime-bridge/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host 192.168.178.143 --helper /home/openclaw/.local/share/jarvis-realtime-bridge/local-voice.mjs --session-key agent:voice:xiaozhi-realtime-v6 --consult-session-key agent:voice:xiaozhi-consult-v6 --stt-local --stt-uri 127.0.0.1:10303 --stt-language de --tts-local --tts-voice de_DE-kerstin-low --tts-voice-dir /home/openclaw/.local/share/piper-voices --tts-split sentence --gateway-ca %h/.openclaw/ssl/gateway.crt
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

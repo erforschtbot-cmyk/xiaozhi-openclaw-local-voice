@@ -1,0 +1,17 @@
+{
+  "version": "2026.10.7",
+  "files": [
+    {
+      "path": "dist/handlers-BLJdZkG-.mjs",
+      "patch": "handlers-BLJdZkG-.mjs.patch",
+      "before": "a174f91c8f996812ab6616c744c892851e637cf1ffff14a1a8c2654976b88d54",
+      "after": "c07ccf5958f03facfe59b856291f6e9ed8b7b791b7f99d1b4b5e15493c114b1d"
+    },
+    {
+      "path": "dist/agent-tools.before-tool-call-CReBJLEA.mjs",
+      "patch": "agent-tools.before-tool-call-CReBJLEA.mjs.patch",
+      "before": "cd9eeb8a55dec75154c4733044cf85cd9250fb3206da0413bd4d4abb6c4fbbca",
+      "after": "c6b434806927ad829ffa3d295f81a656bf481dd3b9ebc711f839cf4721eee5a5"
+    }
+  ]
+}

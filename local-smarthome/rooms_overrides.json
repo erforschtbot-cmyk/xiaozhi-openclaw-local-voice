@@ -1,0 +1,20 @@
+{
+  "_comment": "Vom Eigentuemer bestaetigte Raum-Zuordnungen. Haben Vorrang vor der Ableitung aus Skripten und Aliasen. Aenderungen nur nach ausdruecklicher Bestaetigung.",
+  "rooms": {
+    "terrasse": {
+      "room": "Terrasse",
+      "lights": [
+        "wled.0.84f3ebfb5bf9.on",
+        "ham.0.Feuer.Switch.On"
+      ],
+      "note": "Eigentuemer 2026-10-27: 'terasse (das waere terasse wled und feuer)'"
+    },
+    "arbeitszimmer": {
+      "room": "Arbeitszimmer",
+      "lights": [
+        "zigbee.0.group_1.state"
+      ],
+      "note": "Eigentuemer 2026-10-27: 'arbeitszimmer ist group1. was gleichzeitig die gruppe ist im zigbee adapter. was gleichzeitig die 3 arbeitszimmer zigbee lampen sind'"
+    }
+  }
+}

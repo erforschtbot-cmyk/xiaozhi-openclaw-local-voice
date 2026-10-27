@@ -293,6 +293,11 @@ class XiaozhiSession:
         self.tts_local = self.speaker is not None
         self.stt_local = getattr(args, "stt_local", False)
         self.tts_text_buffer = ""
+        # Wurde in dieser Runde schon Text an die lokale Stimme gegeben?
+        # Noetig, weil zwei Ereignisse denselben Text liefern koennen:
+        # `assistant_delta` (Agenten-Antwort) und `assistant_done` (immer).
+        # Ohne diesen Merker wurde der Text doppelt gesprochen.
+        self.tts_text_fed = False
         self.tts_queue = None
         self.tts_worker_task = None
         self.tts_pending = 0
@@ -1717,6 +1722,15 @@ class XiaozhiSession:
 
     TTS_LEAD_FRAMES = 3
     TTS_FRAME_SECONDS = 0.060
+    # Vorlauf-Stille vor dem ersten gesprochenen Rahmen einer Antwort.
+    # Belegt 27.10.2026: Piper liefert Sprache praktisch ab Sample 0 (keine
+    # eigene Stille). Die Bridge schickt "tts start" und im selben Moment das
+    # erste Paket. Das Geraet muss beim Zustandswechsel aber erst Decoder und
+    # Wiedergabe oeffnen; was in dieser Luecke ankommt, geht verloren. Hoerbar
+    # als fehlende erste Silbe ("dann ist ok" -> "n ist ok"), und zwar
+    # gelegentlich, weil die Oeffnungszeit schwankt.
+    # 3 Rahmen = 180 ms Stille absorbieren das, ohne die Antwort zu verzoegern.
+    TTS_LEAD_SILENCE = b"\x00" * (24000 * 180 // 1000 * 2)
 
     def start_local_tts(self):
         """Startet den Sprach-Arbeiter fuer eine Antwort."""
@@ -1744,13 +1758,25 @@ class XiaozhiSession:
                     print(f"{self.tag} local TTS failed: {exc!r}", flush=True)
                     pcm = b""
                 if pcm:
-                    await self.send_pcm_paced(pcm)
+                    # Nur der erste Satz der Antwort bekommt den Vorlauf;
+                    # sonst entstuenden hörbare Pausen zwischen den Saetzen.
+                    await self.send_pcm_paced(
+                        pcm, lead_in=self.local_pcm_bytes_sent == 0
+                    )
                     self.local_pcm_bytes_sent += len(pcm)
         finally:
             self.tts_drain_event.set()
 
-    async def send_pcm_paced(self, pcm):
-        """Sendet PCM in 60-ms-Rahmen, an der Wanduhr getaktet."""
+    async def send_pcm_paced(self, pcm, lead_in=False):
+        """Sendet PCM in 60-ms-Rahmen, an der Wanduhr getaktet.
+
+        `lead_in` schiebt die Vorlauf-Stille vor den ersten Rahmen einer
+        Antwort. Sie zaehlt bewusst NICHT zu `local_pcm_bytes_sent`: die
+        Nachlauf-Schaetzung hat genug Reserve, und der gesprochene Text bleibt
+        so die Bezugsgroesse.
+        """
+        if lead_in and pcm:
+            pcm = self.TTS_LEAD_SILENCE + pcm
         frame_bytes = 24000 * 60 // 1000 * 2
         loop = asyncio.get_running_loop()
         started = loop.time()
@@ -1777,6 +1803,7 @@ class XiaozhiSession:
             self.tts_text_buffer += text
             return
         self.tts_text_buffer += text
+        self.tts_text_fed = True
         while True:
             boundary = self._tts_boundary(self.tts_text_buffer, mode)
             if boundary <= 0:
@@ -1903,6 +1930,9 @@ class XiaozhiSession:
                         )
                     self.photo_speaking = False
                     self.cancel_photo_guard()
+                    # Neue Runde: der Merker entscheidet spaeter, ob
+                    # `assistant_done` den Text noch sprechen muss.
+                    self.tts_text_fed = False
                     transcript = event.get("text", "")
                     # Nur das lauteste Geraet darf antworten. Ein Geraet mit
                     # hoeherem Pegel uebernimmt und schickt dieses hier in
@@ -2026,6 +2056,30 @@ class XiaozhiSession:
                                 flush=True,
                             )
                         elif self.tts_local:
+                            # Lokale Stimme: den Antworttext selbst sprechen.
+                            # Belegt 27.10.2026 02:50 ("Monitor aus"): der
+                            # lokale Pfad emittiert nur assistant_done, nie ein
+                            # assistant_delta. Damit lief die Queue leer und
+                            # tts_started blieb False -> es gab nie ein
+                            # "tts start"/"stream_end", das Geraet blieb gruen
+                            # im Zuhoeren. Ausserdem ist der Text hier die
+                            # einzige Stelle, an der der Wortlaut ankommt.
+                            if self.tts_text_fed:
+                                # Der Agent liefert Text ueber
+                                # `assistant_delta`; hier NICHT erneut
+                                # sprechen (belegt 27.10.2026 13:43:
+                                # "Was gibt's?" 76032 B statt 51840 B).
+                                print(
+                                    f"{self.tag} assistant_done: Text bereits "
+                                    "gesprochen, kein zweiter Durchlauf",
+                                    flush=True,
+                                )
+                            else:
+                                # Lokaler Weg (local-voice.mjs) schickt nur
+                                # `assistant_done`; hier ist der Text die
+                                # einzige Quelle.
+                                self.start_local_tts()
+                                self.feed_tts_text(event["text"])
                             self.schedule_local_stream_end(process)
                         else:
                             self.schedule_stream_end(process)

@@ -210,6 +210,70 @@ const detector = new UtteranceDetector({
 let busy = false;
 let pendingUtterance = null;
 
+// Muss zu XiaozhiSession.PHOTO_PATTERN in server.py passen. Bewusst eng:
+// nur ausdrueckliche Foto-/Bild-Absichten, damit "mach das Licht an" nicht
+// hier landet und stumm bleibt.
+const PHOTO_RE = new RegExp(
+  String.raw`\b(?:mach|mache|nimm|nehme|schiess|schieße|knips|schick|schicke)\b` +
+    String.raw`[^.]{0,40}\b(?:foto|bild)\b` +
+    String.raw`|\b(?:foto|bild)\b[^.]{0,40}\b(?:mach|machen|aufnehmen|schiessen|schießen|schicken|schick)\b` +
+    String.raw`|\bwas\s+(?:siehst|erkennst)\s+du\b` +
+    String.raw`|\bschau\s+(?:mal|dir)\b` +
+    String.raw`|\bsieh\s+dir\s+(?:das|mal)\s+an\b`,
+  "iu",
+);
+
+function isPhotoRequest(text) {
+  const normalized = String(text || "").toLowerCase().replace(/%/g, " prozent ").replace(/\s+/g, " ").trim();
+  return PHOTO_RE.test(normalized);
+}
+
+// Lokaler Smart-Home-Weg. Der Satz wird in einem eigenen Python-Prozess
+// aufgeloest und direkt auf die belegten ioBroker-Datenpunkte geschrieben.
+// Kein Agentenlauf. Liegt das Flag vor, ist der Weg aus.
+const DATA_HOME =
+  process.env.XDG_DATA_HOME || `${process.env.HOME}/.local/share`;
+const LOCAL_SMARTHOME_DIR =
+  process.env.JARVIS_LOCAL_SMARTHOME_DIR || `${DATA_HOME}/alexa-direct`;
+const BRIDGE_DIR =
+  process.env.JARVIS_BRIDGE_DIR || `${DATA_HOME}/jarvis-realtime-bridge`;
+const LOCAL_SMARTHOME_FLAG = `${BRIDGE_DIR}/disable-local-smarthome`;
+const LOCAL_SMARTHOME_CLI = `${LOCAL_SMARTHOME_DIR}/smarthome_cli.py`;
+const LOCAL_SMARTHOME_PY = `${BRIDGE_DIR}/.venv/bin/python`;
+
+function tryLocalSmartHome(text) {
+  if (fs.existsSync(LOCAL_SMARTHOME_FLAG)) return null;
+  let raw;
+  try {
+    raw = execFileSync(
+      LOCAL_SMARTHOME_PY,
+      [LOCAL_SMARTHOME_CLI, text],
+      {
+        encoding: "utf8",
+        timeout: 8000,
+        env: { ...process.env, PYTHONPATH: LOCAL_SMARTHOME_DIR },
+      },
+    );
+  } catch (error) {
+    log(`Lokaler Smart-Home-Weg nicht nutzbar: ${error.message}`);
+    return null;
+  }
+  let result;
+  try {
+    result = JSON.parse(String(raw).trim().split("\n").pop());
+  } catch {
+    log(`Lokaler Smart-Home-Weg: Antwort unlesbar: ${String(raw).slice(0, 120)}`);
+    return null;
+  }
+  if (!result || result.ok !== true) {
+    if (result && result.reason) {
+      log(`Lokaler Smart-Home-Weg: nicht aufgeloest (${result.reason})`);
+    }
+    return null;
+  }
+  return result;
+}
+
 /**
  * Nimmt eine erkannte Aeusserung zur Verarbeitung an.
  *
@@ -263,6 +327,37 @@ async function handleUtterance(pcm) {
 
     emit("user_transcript", { text });
     log(`Erkannt: ${text}`);
+
+    // Foto-Absicht: Die Bridge loest die Kamera selbst aus. Ein zusaetzlicher
+    // chat.send hier erzeugt einen zweiten Lauf ohne Bildkontext.
+    if (isPhotoRequest(text)) {
+      log("Foto-Absicht: kein Agentenaufruf (Bridge uebernimmt Kamera und Antwort)");
+      emit("assistant_done", {
+        text: "",
+        audioFrameCount: 0,
+        audioByteCount: 0,
+        msSinceLastAudio: null,
+      });
+      return;
+    }
+
+    // Eindeutige lokale Schaltbefehle vor chat.send ausfuehren.
+    const local = tryLocalSmartHome(text);
+    if (local) {
+      log(
+        `Lokal geschaltet: ${local.room || local.device} ` +
+          `(${local.targets ? local.targets + " Lampen" : local.datapoint})`,
+      );
+      const answer = local.confirmation || "Erledigt.";
+      emit("assistant_done", {
+        text: answer,
+        audioFrameCount: 0,
+        audioByteCount: 0,
+        msSinceLastAudio: null,
+      });
+      log(`Antwort: ${answer}`);
+      return;
+    }
 
     // Textzustand fuer die Delta-Berechnung zuruecksetzen.
     assistantText = "";

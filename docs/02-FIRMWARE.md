@@ -78,6 +78,12 @@ erneute WLAN-Provisionierung erforderlich.
 
 ## Aus Quellen bauen
 
+Der zusätzliche 4B-Patch
+`firmware/patches/jarvis-4b-restore-brightness.patch` stellt beim Booten den
+in NVS gespeicherten Helligkeitswert wieder her. Ohne ihn überschreibt der
+Upstream-Konstruktor jeden gespeicherten Wert mit 100 %. Eine per MCP auf 5 %
+gesetzte Helligkeit bleibt damit auch nach einem Neustart erhalten.
+
 ```bash
 ./scripts/build-firmware.sh --public-host 192.168.178.143
 ```

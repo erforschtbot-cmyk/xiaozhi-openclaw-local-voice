@@ -1,0 +1,6 @@
+catalog.json
+localmap.json
+rooms.json
+unstimmigkeiten.json
+__pycache__/
+*.pyc

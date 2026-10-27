@@ -1,0 +1,12 @@
+{
+ "Meine_Geräte.0.Terrasse_Regebogen": {
+  "min": 0,
+  "max": 100,
+  "switches": [
+   "wled.0.84f3ebfb5bf9.on"
+  ],
+  "scripts": [
+   "Terrasse Regenbogen"
+  ]
+ }
+}
