@@ -139,9 +139,24 @@ if shutil.which("systemctl"):
             capture_output=True)
         check(result.returncode == 0, "Dienst aktiv: " + service)
 
-for filename in ["panel.py", "overrides.py", "resolver.py", "control.py"]:
+for filename in ["panel.py", "overrides.py", "resolver.py", "control.py",
+                 "hassil_router.py", "NOTICE.md"]:
     check((local_smarthome / filename).is_file(),
           "Geraeteverwaltung/Resolver: " + filename)
+check((local_smarthome / "hassil-data" / "sentences" / "_common.yaml").is_file(),
+      "HassIL-Satzvorlagen (hassil-data/sentences/_common.yaml)")
+
+# Die zweite Stufe braucht hassil im Bridge-venv. Fehlt es, arbeitet der
+# lokale Weg weiter - nur ohne Farbe und Farbtemperatur.
+if python is not None:
+    hat_hassil = subprocess.run(
+        [str(python), "-c", "import hassil, yaml"], capture_output=True).returncode == 0
+    if hat_hassil:
+        check(True, "Python: hassil und pyyaml importierbar")
+    else:
+        print("HINWEIS hassil fehlt im Bridge-venv - zweite Stufe (Farbe,")
+        print("        Farbtemperatur) bleibt aus. Nachinstallieren mit:")
+        print("        pip install -r gateway/requirements.txt")
 
 model_dir = home / ".cache/jarvis-stt-cand5-canary1b-onnx"
 for filename in [

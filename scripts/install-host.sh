@@ -105,10 +105,19 @@ done
 # Lokaler Smart-Home-Schnellweg. Python-Quellen werden aktualisiert; die aus
 # ioBroker erzeugten Kataloge bleiben unversioniert. Gepflegte Zuordnungen
 # werden beim ersten Lauf angelegt und bei spaeteren Installationen erhalten.
-for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py; do
+for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py hassil_router.py; do
   install -m 0644 "$repo_dir/local-smarthome/$source_file" "$local_smarthome_dir/$source_file"
 done
 install -m 0644 "$repo_dir/local-smarthome/test_resolver.py" "$local_smarthome_dir/test_resolver.py"
+# Herkunft und Lizenzen der HassIL-Vorlagen (CC-BY 4.0 verlangt die Nennung).
+install -m 0644 "$repo_dir/local-smarthome/NOTICE.md" "$local_smarthome_dir/NOTICE.md"
+install -m 0755 "$repo_dir/local-smarthome/restore-vor-hassil.sh" "$local_smarthome_dir/restore-vor-hassil.sh"
+# Satzvorlagen fuer die zweite Erkennungsstufe. Sie sind unveraenderte Kopien
+# aus OHF-Voice/intents; ohne sie findet hassil_router.py nichts.
+if [[ -d "$repo_dir/local-smarthome/hassil-data" ]]; then
+  rm -rf "$local_smarthome_dir/hassil-data"
+  cp -a "$repo_dir/local-smarthome/hassil-data" "$local_smarthome_dir/hassil-data"
+fi
 for config_file in bridges.json rooms_overrides.json; do
   if [[ ! -e "$local_smarthome_dir/$config_file" ]]; then
     install -m 0644 "$repo_dir/local-smarthome/$config_file" "$local_smarthome_dir/$config_file"
@@ -249,12 +258,16 @@ for required in room-map.json disable-smart-home-fastpath voice-mode camera-orie
     missing=1
   fi
 done
-for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py bridges.json rooms_overrides.json; do
+for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py hassil_router.py bridges.json rooms_overrides.json NOTICE.md; do
   if [[ ! -e "$local_smarthome_dir/$required" ]]; then
     echo "MISSING: $local_smarthome_dir/$required" >&2
     missing=1
   fi
 done
+if [[ ! -d "$local_smarthome_dir/hassil-data" ]]; then
+  echo "MISSING: $local_smarthome_dir/hassil-data (Satzvorlagen der zweiten Stufe)" >&2
+  missing=1
+fi
 if (( missing )); then
   echo "Installation unvollstaendig — Abbruch vor dem Start." >&2
   exit 1

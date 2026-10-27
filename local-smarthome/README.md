@@ -128,6 +128,74 @@ im Wohnzimmer zu hören.
 - „Löschen" heißt ausblenden. Das Gerät verschwindet aus Liste und Sprachweg,
   bleibt in ioBroker aber unverändert.
 
+## Zweite Erkennungsstufe: HassIL
+
+Der eigene Resolver deckt **an/aus** und **Prozent** ab. Alles andere —
+Farbe, Farbtemperatur, „maximum", „dimme auf 20" — landete bisher beim Agenten
+und brauchte 7–12 s. Dafür gibt es jetzt eine zweite Stufe:
+**HassIL**, der Intent-Parser von Home Assistant, mit fertigen deutschen
+Satzvorlagen.
+
+```text
+Satz → eigener Resolver (erprobt)  → brauchbarer Wert? → schalten, fertig
+                                   → sonst HassIL     → Wert? → schalten
+                                                       → sonst → Agent
+```
+
+**Der eigene Weg behält Vorrang.** HassIL springt nur ein, wenn dort nichts
+Brauchbares herauskommt — auch dann, wenn der Resolver zwar „Treffer" meldet,
+aber keinen Wert hat (`action=percent, value=None` bei „auf maximum"). Genau
+das war vorher der Fall: die Lampe wurde auf `null` gesetzt.
+
+### Was jetzt lokal geht
+
+| Befehl | Ziel |
+|---|---|
+| „Licht Arbeitszimmer blau" | `group_1.color` = `{"r":0,"g":0,"b":255}` |
+| „Licht Arbeitszimmer auf warmweiß" | `group_1.colortemp` = 370 (2700 K als Mired) |
+| „Licht Arbeitszimmer auf maximum" | `group_1.brightness` = 100 |
+| „dimme das Licht in der Küche auf 20" | `…brightness` = 20 |
+| „Monitorlicht auf 50 prozent" | `…brightness` = 50 |
+
+Gemessen: 14 von 15 geprüften Sätzen werden schaltbar.
+
+### Grenzen, ehrlich
+
+- **„heller"/„dunkler" bleibt offen.** HassIL kennt ebenfalls keine relativen
+  Angaben ohne Istwert. Das ist ein eigener Punkt.
+- **Farbtemperatur wird nach Mired umgerechnet** (1000000 / Kelvin), weil
+  zigbee das so führt. 2700 K → 370. Stimmt für die vorhandenen Lampen,
+  ist aber eine Annahme, die an einer Lampe geprüft werden sollte.
+- **Räume lösen auf ein Gerät auf.** Nennt ein Raum mehrere Lampen
+  (Wohnzimmer: 5), nimmt die Stufe die erste passende — nicht alle. Für
+  „alle Lichter im Wohnzimmer" bleibt der Raum-Gruppen-Weg des eigenen
+  Resolvers zuständig, und der greift vorher.
+
+### Herkunft und Lizenz
+
+Die Vorlagen unter `hassil-data/` sind **unveränderte Kopien** aus
+[OHF-Voice/intents](https://github.com/OHF-Voice/intents) (CC-BY 4.0).
+Der Parser [hassil](https://github.com/OHF-Voice/hassil) ist Apache-2.0.
+Beides verlangt Nennung — sie steht dauerhaft in
+[`NOTICE.md`](NOTICE.md). Die YAML-Dateien selbst werden **nicht** angepasst;
+alles Haus-spezifische steckt in `hassil_router.py`.
+
+### Zurücksetzen
+
+Die Integration ist vollständig rückbaubar:
+
+```bash
+cd ~/.local/share/alexa-direct
+./restore-vor-hassil.sh            # zeigt nur, was passieren würde
+./restore-vor-hassil.sh --apply    # stellt wirklich zurück
+systemctl --user restart geraeteverwaltung.service
+systemctl --user restart jarvis-realtime-bridge.service
+```
+
+Zurückgesetzt wird `control.py` aus dem Backup
+(`alexa-direct-backup-vor-hassil-*`), entfernt werden `hassil_router.py`,
+`NOTICE.md` und `hassil-data/`. Namen, Räume und Kataloge bleiben unberührt.
+
 ## Erstaufbau und Prüfung
 
 ```bash

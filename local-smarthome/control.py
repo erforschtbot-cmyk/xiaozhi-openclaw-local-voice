@@ -435,6 +435,68 @@ def handle(text, dry_run=False, prefer_local=False):
                 result, _ = execute(resolution, dry_run=True)
                 result["utterance"] = text
                 result["corrected_utterance"] = fixed
+    # ------------------------------------------------------------------
+    # Zweite Stufe: HassIL (Home Assistant Intent Language)
+    #
+    # Der eigene Resolver deckt an/aus und Prozent ab. Farbe, Farbtemperatur,
+    # "maximum"/"minimum" und Formulierungen wie "stelle die Helligkeit im
+    # Arbeitszimmer auf 50 prozent" kennt er nicht - die landeten bisher beim
+    # Agenten und brauchten 7-12 s. HassIL bringt fertige deutsche Vorlagen.
+    #
+    # Bewusst NACH dem eigenen Weg: der ist erprobt, kennt Raum-Gruppen und
+    # bevorzugte Datenpunkte. HassIL springt nur ein, wenn dort nichts
+    # gefunden wurde.
+    # ------------------------------------------------------------------
+    # HassIL auch dann fragen, wenn der eigene Weg zwar "gefunden" meldet,
+    # aber keinen brauchbaren Wert hat. Belegt 27.10.2026:
+    #   "Licht Arbeitszimmer auf maximum"  -> action=percent, value=None
+    #   "Licht Arbeitszimmer auf warmweiß" -> action=percent, value=None
+    #   "dimme das Licht in der Küche auf 20" -> action=relative, value=True
+    # Der eigene Resolver kennt Woerter wie "maximum" oder "warmweiß" nicht
+    # und relative Angaben ohne Istwert auch nicht. HassIL kennt beides.
+    #
+    # Der bewaehrte Weg behaelt Vorrang, solange er einen echten Wert hat
+    # (z.B. "auf 40 prozent" -> value=40).
+    _wertlos = (
+        resolution.ok
+        and resolution.action in ("percent", "relative")
+        and (resolution.value is None or isinstance(resolution.value, bool))
+    )
+    if not resolution.ok or _wertlos:
+        try:
+            import hassil_router
+            erkannt = hassil_router.parse(text)
+            befehl = hassil_router.als_schaltbefehl(erkannt) if erkannt else None
+        except Exception as exc:  # noqa: BLE001
+            print(f"hassil nicht nutzbar: {exc!r}", flush=True)
+            erkannt, befehl = None, None
+
+        if befehl:
+            ziel, wert = befehl
+            if wert is None:
+                befehl = None
+        if befehl:
+            ziel, wert = befehl
+            lokal = localmap._is_local(ziel)
+            treffer = {
+                "ok": True,
+                "engine": "hassil",
+                "intent": (erkannt or {}).get("intent"),
+                "device": (erkannt or {}).get("name") or (erkannt or {}).get("area") or text,
+                "room": (erkannt or {}).get("area"),
+                "action": "set",
+                "datapoint": ziel,
+                "value": wert,
+                "route": "local" if lokal else "alexa2-cloud",
+                "utterance": text,
+            }
+            if dry_run:
+                return treffer
+            ok, status, dauer, detail = write_state(ziel, wert)
+            treffer.update({"ok": ok, "http": status,
+                            "seconds": round(dauer, 3), "detail": detail[:200]})
+            return treffer
+
     result["route"] = "alexa2-cloud"
 
     if resolution.ok and prefer_local:
