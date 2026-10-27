@@ -297,6 +297,7 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:9px;paddin
     <pre id="result" style="margin-top:10px;display:none"></pre>
   </div>
 
+  <datalist id="raumliste"></datalist>
   <div id="rooms"></div>
 </main>
 <div id="msg"></div>
@@ -339,7 +340,8 @@ function row(d) {
     + '<td><input class="inline" data-f="name" data-v="' + esc(d.name)
     + '" value="' + esc(d.name) + '" oninput="touch(this)">' + base + '</td>'
     + '<td><input class="inline" data-f="room" data-v="' + esc(room)
-    + '" value="' + esc(room) + '" placeholder="—" oninput="touch(this)" style="min-width:105px"></td>'
+    + '" value="' + esc(room) + '" placeholder="—" list="raumliste"'
+    + ' oninput="touch(this)" style="min-width:105px"></td>'
     + '<td>' + badge + broken + '</td>'
     + '<td>' + stateText(d.state, d.readable) + '</td>'
     + '<td class="dp"><input class="dpin" data-f="target" data-v="' + esc(d.target || "")
@@ -355,6 +357,23 @@ function row(d) {
         : '<button class="del" onclick="deleteDevice(this)" title="ausblenden">löschen</button>')
     + '</td>'
     + '</tr>';
+}
+
+// Vorschlagsliste fuer die Raum-Spalte: bestehende Raeume aus rooms.json
+// plus alles, was schon in der Liste eingetragen ist. Freie Eingabe bleibt
+// moeglich - datalist schlaegt nur vor, es zwingt nichts.
+function raumVorschlaege() {
+  const namen = new Set();
+  for (const d of DATA) {
+    const r = (d.room || "").trim();
+    if (r) namen.add(r);
+  }
+  const liste = document.getElementById("raumliste");
+  if (!liste) return;
+  liste.innerHTML = [...namen]
+    .sort((a, b) => a.localeCompare(b, "de"))
+    .map(r => '<option value="' + esc(r) + '">')
+    .join("");
 }
 
 function render() {
@@ -380,6 +399,8 @@ function render() {
       + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th><th></th><th></th></tr></thead><tbody>'
       + list.map(row).join("") + '</tbody></table></div>';
   }).join("");
+
+  raumVorschlaege();
 
   const local = DATA.filter(d => d.route === "local").length;
   const broken = DATA.filter(d => d.broken && d.broken.length).length;
