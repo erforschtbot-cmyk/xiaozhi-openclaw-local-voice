@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
-import collections
 import json
 import os
 import re
@@ -101,27 +100,6 @@ class WakeArbiter:
     # eingesteuert und bleibt leer.
     SETTLE_SECONDS = 1.4
     _burst_deadline = 0.0
-
-    def begin_burst(self):
-        """Gemeinsame Frist fuer alle Geraete dieses Weckvorgangs."""
-        now = time.monotonic()
-        if self._burst_deadline <= 0.0 or now > self._burst_deadline:
-            self._burst_deadline = now + self.SETTLE_SECONDS
-        return self._burst_deadline
-
-    def awaiting_burst(self, session):
-        """Laeuft gerade ein Weckvorgang mit mehreren Geraeten?
-
-        Zwei Faelle zaehlen: ein anderes Geraet hoert jetzt zu, ODER es laeuft
-        noch eine Sammelfrist. Der zweite Fall ist entscheidend: beim Eintritt
-        in die Arbitrierung setzt jedes Geraet sein `awaiting_command` zurueck.
-        Kam das zweite Geraet danach an, sah es niemanden mehr wach und
-        arbitrierte sofort - die gemeinsame Frist wurde nie abgewartet
-        (belegt 27.10.2026 19:42).
-        """
-        if self._burst_deadline > time.monotonic():
-            return True
-        return self.other_awake(session)
 
     def other_awake(self, session):
         """Hoert ein anderes Geraet JETZT ebenfalls auf einen Befehl?
@@ -724,28 +702,6 @@ class XiaozhiSession:
             print(f"{self.tag} Photo voice failed: {exc!r}", flush=True)
             return None
         return self._photo_voice
-
-    @staticmethod
-    def _photo_answer_text(result):
-        """Antworttext aus einem MCP-Tool-Ergebnis ziehen."""
-        def walk(node):
-            if isinstance(node, str):
-                return node
-            if isinstance(node, dict):
-                for key in ("content", "result", "text"):
-                    if key in node:
-                        found = walk(node[key])
-                        if found:
-                            return found
-                return ""
-            if isinstance(node, list):
-                for item in node:
-                    found = walk(item)
-                    if found:
-                        return found
-            return ""
-
-        return walk(result).strip()
 
     async def speak_photo_answer(self, text):
         """Zeigt und spricht die Bildantwort, dann regulaerer Abschluss."""
