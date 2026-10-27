@@ -19,6 +19,7 @@ import urllib.request
 import catalog
 import fuzzy
 import localmap
+import overrides
 import resolver
 import rooms
 
@@ -173,7 +174,11 @@ def execute(resolution, dry_run=False):
         return {"ok": False, "reason": resolution.reason,
                 "candidates": resolution.candidates}, 0.0
 
-    dp = f"{resolution.device_id}.{resolution.state}"
+    # Vorgegebenes Ziel schlaegt den abgeleiteten Datenpunkt. Betrifft den
+    # Alexa-Zweig (device_id + state); der lokale Zweig wird in
+    # local_target() behandelt.
+    vorgabe = overrides.target_for(resolution.device_id, resolution.device)
+    dp = vorgabe["datapoint"] if vorgabe else f"{resolution.device_id}.{resolution.state}"
     value = resolution.value
 
     if resolution.relative is not None:
@@ -211,13 +216,40 @@ LOCAL_CAP_FOR = {
 }
 
 
-def local_target(device_name, action, value=None):
+def local_target(device_name, action, value=None, ident=None):
     """Lokales Ziel aus dem iot-/alias-Abgleich, falls belegt.
 
     Gibt (datapoint, value) zurueck oder None. Es wird nur zurueckgegriffen,
     wenn der NAME exakt dem smartName entspricht — kein Fuzzy-Match auf
     Datenpunkte, sonst schaltet ein aehnlicher Name das falsche Geraet.
+
+    `ident` ist die Kennung, unter der eine Eigentuemer-Vorgabe gespeichert
+    ist (Datenpunkt-id). Ohne sie wird eine Vorgabe uebersehen, wenn sie unter
+    der id statt unter dem Sprechnamen liegt (belegt 27.10.2026).
     """
+    # Vom Eigentuemer vorgegebenes Ziel hat Vorrang vor dem abgeleiteten.
+    # Gedacht fuer defekte Aliasse und falsch erkannte Aktoren; ohne diese
+    # Pruefung waere die Angabe im Panel reine Anzeige.
+    vorgabe = overrides.target_for(ident, device_name)
+    if vorgabe:
+        ziel = vorgabe["datapoint"]
+        cap = (vorgabe.get("cap") or "").strip()
+        if action == "temperature":
+            return (ziel, value) if value is not None else None
+        if cap in ("brightness", "percentage", "color-brightness"):
+            return (ziel, value) if value is not None else None
+        if action == "on":
+            return ziel, True
+        if action == "off":
+            return ziel, False
+        if action == "toggle":
+            current = _read_value(ziel)
+            if current is None:
+                return None
+            return ziel, not bool(current)
+        if value is not None:
+            return ziel, value
+
     key = localmap.normalize(device_name)
     for dev in localmap.load()["devices"]:
         if dev["key"] != key:
@@ -302,9 +334,15 @@ def room_batch(text):
     room = resolver.room_in(text)
     if not room:
         return None
-    # Nur wenn der Satz keinen konkreten Geraetenamen nennt
-    devices = localmap.load()["devices"]
-    matches = resolver.match_devices(text, devices)
+    # Nur wenn der Satz keinen konkreten Geraetenamen nennt.
+    # local_devices() statt localmap-Rohdaten: die Rohdaten haben kein Feld
+    # `id`, match_devices greift aber darauf zu (KeyError 'id', belegt
+    # 27.10.2026 bei "arbeitszimmer Heizung an").
+    devices = local_devices()
+    if not devices:
+        matches = []
+    else:
+        matches = resolver.match_devices(text, devices)
     if matches and matches[0].score >= 100:
         return None
     entry = rooms.lights_for(room)
@@ -400,11 +438,18 @@ def handle(text, dry_run=False, prefer_local=False):
     result["route"] = "alexa2-cloud"
 
     if resolution.ok and prefer_local:
-        hit = local_target(resolution.device, resolution.action, resolution.value)
+        hit = local_target(resolution.device, resolution.action, resolution.value,
+                           ident=resolution.device_id)
         if hit:
             target, value = hit
-            result["route"] = "local"
-            result["alexa2_datapoint"] = result.get("datapoint")
+            # Nicht jedes vorgeschlagene Ziel ist wirklich lokal: eine
+            # Eigentuemer-Vorgabe darf auch auf einen Alexa-Kanal zeigen.
+            # Dann bleibt die Kennzeichnung "alexa2-cloud", sonst behauptet
+            # das Ergebnis einen Cloud-freien Weg, den es nicht gibt.
+            if localmap._is_local(target):
+                result["route"] = "local"
+            else:
+                result["alexa2_datapoint"] = result.get("datapoint")
             result["datapoint"] = target
             result["value"] = value
 

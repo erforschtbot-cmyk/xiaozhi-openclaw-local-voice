@@ -161,9 +161,25 @@ def collect():
         })
 
     by_dp = datapoint_rooms()
+    try:
+        vorgegeben = overrides.load().get("targets") or {}
+    except Exception:
+        vorgegeben = {}
     for dev in devices:
         if not dev.get("room"):
             dev["room"] = by_dp.get(dev.get("target")) or by_dp.get((dev.get("local") or {}).get("target"))
+        # Vom Eigentuemer vorgegebenes Ziel: anzeigen und den Loeschknopf
+        # einblenden. Die Kennung ist die id, sonst der Name.
+        ident = dev.get("id") or dev.get("name")
+        vorgabe = vorgegeben.get(ident)
+        if isinstance(vorgabe, dict) and vorgabe.get("datapoint"):
+            dev["target"] = vorgabe["datapoint"]
+            dev["targetOverridden"] = True
+        elif isinstance(vorgabe, str) and vorgabe:
+            dev["target"] = vorgabe
+            dev["targetOverridden"] = True
+        else:
+            dev["targetOverridden"] = False
 
     values = live_values([d["target"] for d in devices if d.get("target")])
     for dev in devices:
@@ -237,6 +253,8 @@ tr:hover td{background:#1e242c}
 .on{color:var(--ok)} .off{color:var(--dim)} .unknown{color:#5c6773}
 .dp{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);word-break:break-all;max-width:330px}
 input.inline{width:100%;min-width:130px;background:#141920}
+input.dpin{width:100%;min-width:250px;background:#141920;font-family:ui-monospace,monospace;font-size:11px;padding:4px 7px}
+input.dpin.changed{border-color:var(--warn)}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
 #msg.ok{border-color:#1f4d2b} #msg.bad{border-color:#5d2626}
@@ -303,7 +321,13 @@ function row(d) {
     + '<td><input class="inline" value="' + esc(room) + '" placeholder="—" onchange="setRoom(this)" style="min-width:105px"></td>'
     + '<td>' + badge + broken + '</td>'
     + '<td>' + stateText(d.state, d.readable) + '</td>'
-    + '<td class="dp">' + esc(d.target || "—") + '</td>'
+    + '<td class="dp"><input class="dpin" value="' + esc(d.target || "")
+    + '" placeholder="Datenpunkt" onchange="setTarget(this)" title="'
+    + (d.targetOverridden ? "vom Eigentümer vorgegeben" : "automatisch ermittelt")
+    + '"></td>'
+    + (d.targetOverridden
+        ? '<td><button onclick="clearTarget(this)" title="Vorgabe entfernen">×</button></td>'
+        : '<td></td>')
     + '</tr>';
 }
 
@@ -327,7 +351,7 @@ function render() {
     const list = groups.get(room);
     return '<div class="roomgroup"><div class="roomhead">' + esc(room)
       + ' <span class="n">' + list.length + '</span></div>'
-      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th></tr></thead><tbody>'
+      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th><th></th></tr></thead><tbody>'
       + list.map(row).join("") + '</tbody></table></div>';
   }).join("");
 
@@ -389,6 +413,31 @@ async function setRoom(input) {
     await load();
   } catch (e) {
     toast("Raum nicht gespeichert: " + e.message, "bad");
+  }
+}
+
+async function setTarget(input) {
+  const tr = input.closest("tr");
+  const key = tr.dataset.k;
+  try {
+    await post("/api/change-target", {id: key, datapoint: input.value});
+    toast("Datenpunkt gespeichert", "ok");
+    await load();
+  } catch (e) {
+    toast("Datenpunkt nicht gespeichert: " + e.message, "bad");
+    await load();
+  }
+}
+
+async function clearTarget(button) {
+  const tr = button.closest("tr");
+  const key = tr.dataset.k;
+  try {
+    await post("/api/change-target", {id: key, datapoint: ""});
+    toast("Vorgabe entfernt", "ok");
+    await load();
+  } catch (e) {
+    toast("Vorgabe nicht entfernt: " + e.message, "bad");
   }
 }
 
@@ -459,6 +508,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/room":
                 overrides.set_room(body.get("id"), body.get("room"))
+                self._json(200, {"ok": True})
+                return
+            if path in ("/api/target", "/api/change-target"):
+                overrides.set_target(body.get("id"), body.get("datapoint"),
+                                     body.get("cap") or "")
                 self._json(200, {"ok": True})
                 return
             if path == "/api/test":

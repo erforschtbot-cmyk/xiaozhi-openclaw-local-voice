@@ -63,6 +63,31 @@ sofort im Sprachweg — **und der alte funktioniert danach nicht mehr**. Wer
 „Monitor" in „Bildschirm" umbenennt, muss „Bildschirm" sagen. Ein leerer Name
 löscht die Zuordnung und stellt den ursprünglichen Namen wieder her.
 
+### Datenpunkt ändern
+
+Die Spalte „Datenpunkt" ist ein Eingabefeld. Ein eingetragener Wert
+überschreibt das automatisch ermittelte Ziel — gedacht für defekte Aliasse,
+falsch erkannte Aktoren oder Geräte, die bisher nur über die Alexa-Cloud
+liefen. Der `×`-Knopf entfernt die Vorgabe wieder.
+
+Die Vorgabe wirkt **auch im Sprachweg**, nicht nur in der Anzeige:
+`local_target()` und `execute()` prüfen sie vor dem abgeleiteten Ziel. Ob der
+Weg danach `lokal` oder `Alexa-Cloud` heißt, richtet sich nach dem Ziel selbst
+(`alexa2.`, `iot.` und `cloud.` bleiben Cloud) — sonst behauptet die Anzeige
+einen Amazon-freien Weg, den es nicht gibt.
+
+Gültige Ziele sind alle schreibbaren ioBroker-Datenpunkte, z. B.:
+
+```text
+zigbee.0.0017880103544b64.state          Schalter
+zigbee.0.<id>.brightness                 Helligkeit
+0_userdata.0.Raum.Geraet                 eigener Zustand
+alexa2.0.Smart-Home-Devices.<id>.powerState   Alexa-Kanal
+```
+
+Bevor du speicherst: Der Datenpunkt muss existieren und `write: true` haben,
+sonst schlägt das Schalten später fehl. Die Seite prüft das nicht.
+
 ### Satz testen
 
 Der Knopf „Auflösen" schickt den Satz durch `control.handle(..., dry_run=True)`.
@@ -76,6 +101,8 @@ im Wohnzimmer zu hören.
 - Live-Werte kommen aus `getBulk`; reine Befehlsdatenpunkte liefern dort nichts.
 - Räume stammen aus `rooms.json` (abgeleitet) plus den Overrides. Ein Raum
   erscheint also nur, wenn er dort belegt ist.
+- Ein geänderter Datenpunkt wird nicht auf Existenz geprüft. Ein Tippfehler
+  fällt erst beim Schalten auf.
 
 ## Erstaufbau und Prüfung
 

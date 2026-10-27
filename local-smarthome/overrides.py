@@ -24,7 +24,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 OVERRIDES = os.path.join(HERE, "names_overrides.json")
 
-_EMPTY = {"names": {}, "rooms": {}}
+_EMPTY = {"names": {}, "rooms": {}, "targets": {}}
 
 
 def _read() -> dict:
@@ -37,6 +37,7 @@ def _read() -> dict:
         return dict(_EMPTY)
     data.setdefault("names", {})
     data.setdefault("rooms", {})
+    data.setdefault("targets", {})
     return data
 
 
@@ -90,6 +91,52 @@ def set_room(device_id: str, room: str) -> dict:
         data["rooms"].pop(key, None)
     _write(data)
     return data
+
+
+def set_target(ident: str, datapoint: str, cap: str = "") -> dict:
+    """Anderen Datenpunkt als Schaltziel vorgeben.
+
+    Gedacht fuer Geraete, deren automatisch ermitteltes Ziel falsch oder
+    unbrauchbar ist (Alexa-Kanal statt lokalem Aktor, defekter Alias). `cap`
+    bestimmt den Wertetyp: bool-artig (onoff/powerState/active) oder Zahl
+    (brightness/percentage). Leerer Datenpunkt loescht die Vorgabe.
+    """
+    data = _read()
+    key = str(ident or "").strip()
+    if not key:
+        raise ValueError("Kennung fehlt")
+    dp = str(datapoint or "").strip()
+    if dp:
+        entry = {"datapoint": dp}
+        clean_cap = str(cap or "").strip()
+        if clean_cap:
+            entry["cap"] = clean_cap
+        data["targets"][key] = entry
+    else:
+        data["targets"].pop(key, None)
+    _write(data)
+    return data
+
+
+def target_for(*idents):
+    """Vorgegebenes Ziel als {"datapoint": ..., "cap": ...} oder None.
+
+    Nimmt mehrere Kennungen entgegen und probiert sie der Reihe nach. Noetig,
+    weil eine Vorgabe je nach Herkunft unter der Datenpunkt-id ODER unter dem
+    Sprechnamen stehen kann. Ohne diese Reihenfolge fanden Aufrufer mit der
+    jeweils anderen Kennung die Vorgabe nicht (belegt 27.10.2026: Ziel wurde
+    geschrieben, die Weg-Kennzeichnung blieb aber "alexa2-cloud").
+    """
+    targets = _read()["targets"]
+    for ident in idents:
+        if not ident:
+            continue
+        entry = targets.get(str(ident).strip())
+        if isinstance(entry, str) and entry:
+            return {"datapoint": entry}
+        if isinstance(entry, dict) and entry.get("datapoint"):
+            return entry
+    return None
 
 
 def apply(devices: list) -> list:
