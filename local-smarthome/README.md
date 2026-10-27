@@ -128,24 +128,59 @@ im Wohnzimmer zu hören.
 - „Löschen" heißt ausblenden. Das Gerät verschwindet aus Liste und Sprachweg,
   bleibt in ioBroker aber unverändert.
 
-## Zweite Erkennungsstufe: HassIL
+## Erkennung: HassIL zuerst
 
-Der eigene Resolver deckt **an/aus** und **Prozent** ab. Alles andere —
-Farbe, Farbtemperatur, „maximum", „dimme auf 20" — landete bisher beim Agenten
-und brauchte 7–12 s. Dafür gibt es jetzt eine zweite Stufe:
-**HassIL**, der Intent-Parser von Home Assistant, mit fertigen deutschen
-Satzvorlagen.
+**HassIL** ist der Intent-Parser von Home Assistant, mit fertigen deutschen
+Satzvorlagen. Er ist die **erste** Stufe; der eigene Resolver ist der
+Rückfall.
 
 ```text
-Satz → eigener Resolver (erprobt)  → brauchbarer Wert? → schalten, fertig
-                                   → sonst HassIL     → Wert? → schalten
-                                                       → sonst → Agent
+Satz → room_batch      (<Raum> an/aus → alle Lampen des Raums)
+     → HassIL          (Farbe, Farbtemperatur, maximum, „dimme auf 20", …)
+     → eigener Resolver (was HassIL nicht kennt)
+     → Agent
 ```
 
-**Der eigene Weg behält Vorrang.** HassIL springt nur ein, wenn dort nichts
-Brauchbares herauskommt — auch dann, wenn der Resolver zwar „Treffer" meldet,
-aber keinen Wert hat (`action=percent, value=None` bei „auf maximum"). Genau
-das war vorher der Fall: die Lampe wurde auf `null` gesetzt.
+### Warum der eigene Resolver bleibt
+
+„Komplett auf HassIL" hieße, ihn zu entfernen. Das wurde gemessen, nicht
+geschätzt — an den 34 Regressionstests:
+
+| | HassIL allein | mit eigenem Resolver |
+|---|---|---|
+| schaltbare Fälle | 18 von 25 | **25 von 25** |
+| fälschlich geschaltet | 0 von 9 | 0 von 9 |
+
+Diese sieben gingen ohne ihn verloren, weil HassIL dort **nichts** findet:
+
+```text
+"mach die jalousie runter"        → device_class blind, kein Gerät
+"schalte alle lampen an"          → nur domain, kein Gerät
+"starte den kino pc"              → „Kino Arbeitszimmer" statt „KinoPC"
+"stell die lampe im schlafzimmer auf 20 prozent"
+"schalte die steckdose am sofa ab"
+"dreh die deckenstrahler links runter"
+"stell die temperatur klimaanlage auf 22 grad"
+```
+
+Sie landen jetzt beim eigenen Resolver statt beim Agenten (7–12 s). Der
+Vergleich alt/neu über alle 34 Fälle: **gleicher Datenpunkt, gleicher Wert,
+gleiche Ablehnungen** — HassIL entscheidet 16 davon, der Resolver 18.
+
+### Zwei Schutzregeln, die nötig waren
+
+Beides beim Umstieg gefunden (27.10.2026):
+
+**`floor` wird verworfen.** Es gibt hier keine Etagen. Trifft HassIL darauf,
+hat es den Namen nicht verstanden, sondern Reste als Etage gedeutet:
+`"monitorlich an"` → `name="Monitor", floor="lich"` — geschaltet wurde der
+Monitor statt des Monitorlichts.
+
+**Name und Raum müssen zusammenpassen.** `"heizung badezimmer an"` ergab
+`name="Heizung"` (gehört zum Arbeitszimmer) und `area="Badezimmer"`. Ohne
+Prüfung wurde die Heizung im **falschen Raum** geschaltet. Jetzt gewinnt das
+Gerät, dessen Name beide Teile enthält (`Badezimmer Heizung`); passt nichts
+eindeutig, wird abgelehnt statt geraten.
 
 ### Was jetzt lokal geht
 

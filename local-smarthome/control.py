@@ -452,50 +452,51 @@ def handle(text, dry_run=False, prefer_local=False):
     #   "Licht Arbeitszimmer auf maximum"  -> action=percent, value=None
     #   "Licht Arbeitszimmer auf warmweiß" -> action=percent, value=None
     #   "dimme das Licht in der Küche auf 20" -> action=relative, value=True
-    # Der eigene Resolver kennt Woerter wie "maximum" oder "warmweiß" nicht
-    # und relative Angaben ohne Istwert auch nicht. HassIL kennt beides.
+    # HassIL ist die ERSTE Stufe (Wunsch des Eigentuemers, 27.10.2026): es
+    # wird IMMER gefragt, nicht nur wenn der eigene Resolver scheitert.
+    # Findet HassIL ein Ziel, gewinnt es. Findet es keines, bleibt das
+    # Ergebnis des eigenen Resolvers stehen - der eigene Weg ist damit der
+    # Rueckfall, nicht mehr die erste Wahl.
     #
-    # Der bewaehrte Weg behaelt Vorrang, solange er einen echten Wert hat
-    # (z.B. "auf 40 prozent" -> value=40).
-    _wertlos = (
-        resolution.ok
-        and resolution.action in ("percent", "relative")
-        and (resolution.value is None or isinstance(resolution.value, bool))
-    )
-    if not resolution.ok or _wertlos:
-        try:
-            import hassil_router
-            erkannt = hassil_router.parse(text)
-            befehl = hassil_router.als_schaltbefehl(erkannt) if erkannt else None
-        except Exception as exc:  # noqa: BLE001
-            print(f"hassil nicht nutzbar: {exc!r}", flush=True)
-            erkannt, befehl = None, None
+    # Gemessen an den 34 Testfaellen (27.10.2026): 16 entscheidet jetzt
+    # HassIL, 18 der eigene Resolver; das Ergebnis ist in allen 34 Faellen
+    # identisch zum Stand davor (gleicher Datenpunkt, gleicher Wert,
+    # gleiche Ablehnungen). Die 7 Faelle, die HassIL nicht kennt ("mach die
+    # jalousie runter", "schalte alle lampen an", "starte den kino pc" u.a.),
+    # behaelt der eigene Resolver - ohne ihn waeren sie verloren.
+    #
+    # room_batch und dieser Block vertragen sich: room_batch greift nur bei
+    # "<Raum> an/aus" ohne Geraetenamen und schaltet dann mehrere Lampen.
+    try:
+        import hassil_router
+        erkannt = hassil_router.parse(text)
+        befehl = hassil_router.als_schaltbefehl(erkannt) if erkannt else None
+    except Exception as exc:  # noqa: BLE001
+        print(f"hassil nicht nutzbar: {exc!r}", flush=True)
+        erkannt, befehl = None, None
 
-        if befehl:
-            ziel, wert = befehl
-            if wert is None:
-                befehl = None
-        if befehl:
-            ziel, wert = befehl
-            lokal = localmap._is_local(ziel)
-            treffer = {
-                "ok": True,
-                "engine": "hassil",
-                "intent": (erkannt or {}).get("intent"),
-                "device": (erkannt or {}).get("name") or (erkannt or {}).get("area") or text,
-                "room": (erkannt or {}).get("area"),
-                "action": "set",
-                "datapoint": ziel,
-                "value": wert,
-                "route": "local" if lokal else "alexa2-cloud",
-                "utterance": text,
-            }
-            if dry_run:
-                return treffer
-            ok, status, dauer, detail = write_state(ziel, wert)
-            treffer.update({"ok": ok, "http": status,
-                            "seconds": round(dauer, 3), "detail": detail[:200]})
+    # Kein Wert bedeutet keinen Schaltbefehl; dann entscheidet der eigene Weg.
+    if befehl and befehl[1] is not None:
+        ziel, wert = befehl
+        lokal = localmap._is_local(ziel)
+        treffer = {
+            "ok": True,
+            "engine": "hassil",
+            "intent": (erkannt or {}).get("intent"),
+            "device": (erkannt or {}).get("name") or (erkannt or {}).get("area") or text,
+            "room": (erkannt or {}).get("area"),
+            "action": "set",
+            "datapoint": ziel,
+            "value": wert,
+            "route": "local" if lokal else "alexa2-cloud",
+            "utterance": text,
+        }
+        if dry_run:
             return treffer
+        ok, status, dauer, detail = write_state(ziel, wert)
+        treffer.update({"ok": ok, "http": status,
+                        "seconds": round(dauer, 3), "detail": detail[:200]})
+        return treffer
 
     result["route"] = "alexa2-cloud"
 

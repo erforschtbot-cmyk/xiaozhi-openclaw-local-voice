@@ -49,6 +49,14 @@ PLACEHOLDER = (
     "state", "floor", "lock_states", "cover_classes", "cover_states",
 )
 
+def _norm_raum(text):
+    """Raumnamen vergleichbar machen (Gross/Klein, Umlaute)."""
+    t = str(text or "").strip().casefold()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        t = t.replace(a, b)
+    return "".join(ch for ch in t if ch.isalnum())
+
+
 _lock = threading.Lock()
 _intents = None
 
@@ -258,6 +266,51 @@ def _geraet_fuer_raum(raum, cap):
     return None
 
 
+def _geraet_raum(geraet):
+    """Raum eines Geraets bestimmen, ueber die Datenpunkt-Praefixe.
+
+    rooms.json nennt je Raum die Ein/Aus-Punkte (z.B. zigbee.0.group_1.state).
+    Ein Geraet gehoert zu diesem Raum, wenn eines seiner Ziele unter demselben
+    Praefix liegt.
+    """
+    _namen, caps = _geraete()
+    meine = [str(d) for d in (caps.get(geraet) or {}).values()]
+    # Manche Geraete tragen den Raum im Namen ("arbeitszimmer Heizung",
+    # "Badezimmer Heizung"), ihre Datenpunkte liegen aber nicht unter einem
+    # Raum-Praefix (0_userdata.*). Deshalb zuerst der Name.
+    g_norm = _norm_raum(geraet)
+    for r in _raeume():
+        if _norm_raum(r.get("room")) and _norm_raum(r.get("room")) in g_norm:
+            return r.get("room")
+    for r in _raeume():
+        for dp in (r.get("lights") or []):
+            for ende in (".state", ".on", ".power"):
+                if dp.endswith(ende):
+                    praefix = dp[: -len(ende)]
+                    if any(d.startswith(praefix + ".") for d in meine):
+                        return r.get("room")
+    return None
+
+
+def _geraet_mit_name_und_raum(name, raum):
+    """Geraet suchen, dessen Name Name UND Raum enthaelt.
+
+    "Heizung" + "Badezimmer" -> "Badezimmer Heizung". Genau dieses Geraet ist
+    gemeint; das reine "Heizung" gehoert zum Arbeitszimmer.
+    """
+    _namen, caps = _geraete()
+    n_raum, n_name = _norm_raum(raum), _norm_raum(name)
+    treffer = None
+    for geraet in caps:
+        g = _norm_raum(geraet)
+        if n_raum in g and n_name in g:
+            # kuerzester passender Name gewinnt ("Badezimmer Heizung" vor
+            # "Badezimmer Heizung links")
+            if treffer is None or len(geraet) < len(treffer):
+                treffer = geraet
+    return treffer
+
+
 def als_schaltbefehl(ergebnis):
     """Erkanntes Ergebnis in die Sprache von control.handle() uebersetzen.
 
@@ -268,6 +321,29 @@ def als_schaltbefehl(ergebnis):
     intent = ergebnis.get("intent") or ""
     name = ergebnis.get("name")
     raum = ergebnis.get("area")
+
+    # "floor" ist bei uns bedeutungslos: es gibt keine Etagen. Trifft HassIL
+    # darauf, hat es den Namen nicht verstanden, sondern Reste als Etage
+    # gedeutet. Belegt 27.10.2026: "monitorlich an" -> name="Monitor",
+    # floor="lich"; geschaltet wurde der Monitor statt des Monitorlichts.
+    if ergebnis.get("floor"):
+        return None
+
+    # Name UND Raum genannt: dann muss ein Geraet zu beidem passen.
+    # Belegt 27.10.2026: "heizung badezimmer an" -> name="Heizung",
+    # area="Badezimmer"; ohne diese Pruefung wurde die Heizung im
+    # ARBEITSZIMMER geschaltet (0_userdata.0.Arbeitszimmer.Heizung) - der
+    # falsche Raum, und das faellt niemandem auf, weil es funktioniert.
+    if name and raum:
+        passend = _geraet_mit_name_und_raum(name, raum)
+        if passend:
+            name = passend
+        else:
+            eigener = _geraet_raum(name)
+            if eigener is None or _norm_raum(eigener) != _norm_raum(raum):
+                # Kein Geraet passt zu beidem, und der Raum des Namens ist
+                # unbekannt oder ein anderer: nicht raten.
+                return None
 
     def ziel(cap):
         if name:
