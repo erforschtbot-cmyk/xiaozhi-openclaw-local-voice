@@ -18,7 +18,11 @@ import urllib.request
 from collections import defaultdict
 import overrides
 
-BASE = os.environ.get("IOBROKER_SIMPLE_API", "http://192.168.178.24:8087")
+# Adresse kommt aus settings.py (Oberflaeche -> Env -> Referenz).
+# Frueher stand hier die IP fest; wer das nachbaut, hat eine andere und
+# musste im Quelltext suchen.
+import settings
+BASE = settings.base()
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "localmap.json")
 MAX_AGE = 6 * 3600

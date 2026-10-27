@@ -5,3 +5,4 @@ unstimmigkeiten.json
 __pycache__/
 *.pyc
 names_overrides.json
+settings.json

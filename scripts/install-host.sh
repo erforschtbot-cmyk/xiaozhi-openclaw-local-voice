@@ -105,7 +105,7 @@ done
 # Lokaler Smart-Home-Schnellweg. Python-Quellen werden aktualisiert; die aus
 # ioBroker erzeugten Kataloge bleiben unversioniert. Gepflegte Zuordnungen
 # werden beim ersten Lauf angelegt und bei spaeteren Installationen erhalten.
-for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py hassil_router.py; do
+for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py; do
   install -m 0644 "$repo_dir/local-smarthome/$source_file" "$local_smarthome_dir/$source_file"
 done
 install -m 0644 "$repo_dir/local-smarthome/test_resolver.py" "$local_smarthome_dir/test_resolver.py"
@@ -258,7 +258,7 @@ for required in room-map.json disable-smart-home-fastpath voice-mode camera-orie
     missing=1
   fi
 done
-for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py hassil_router.py bridges.json rooms_overrides.json NOTICE.md; do
+for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py bridges.json rooms_overrides.json NOTICE.md; do
   if [[ ! -e "$local_smarthome_dir/$required" ]]; then
     echo "MISSING: $local_smarthome_dir/$required" >&2
     missing=1

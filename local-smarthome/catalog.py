@@ -14,7 +14,11 @@ import time
 import urllib.request
 import overrides
 
-BASE = os.environ.get("IOBROKER_SIMPLE_API", "http://192.168.178.24:8087")
+# Adresse kommt aus settings.py (Oberflaeche -> Env -> Referenz).
+# Frueher stand hier die IP fest; wer das nachbaut, hat eine andere und
+# musste im Quelltext suchen.
+import settings
+BASE = settings.base()
 ADAPTER = os.environ.get("ALEXA2_INSTANCE", "alexa2.0")
 PREFIX = f"{ADAPTER}.Smart-Home-Devices."
 HERE = os.path.dirname(os.path.abspath(__file__))

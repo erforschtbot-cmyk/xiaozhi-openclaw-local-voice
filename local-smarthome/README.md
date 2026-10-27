@@ -7,13 +7,43 @@ Dieser Quellbaum ist eine harte Laufzeitabhängigkeit von
 ## Installation
 
 `scripts/install-host.sh` kopiert die Quellen nach
-`~/.local/share/alexa-direct/`. Der ioBroker-Endpunkt kann gesetzt werden:
+`~/.local/share/alexa-direct/`.
+
+### ioBroker-Adresse eintragen
+
+**Der wichtigste Punkt für einen Nachbau.** Früher stand die Adresse fest im
+Quelltext (drei Dateien); wer das Projekt kopiert, hat eine andere IP und muss
+sonst im Code suchen.
+
+Am einfachsten im Panel: Feld **„ioBroker"** oben, Adresse eintragen, `setzen`.
+Gilt sofort, ohne Neustart.
+
+Alternativ ohne Oberfläche:
 
 ```bash
 export IOBROKER_SIMPLE_API=http://IOBROKER-IP:8087
 ```
 
-Ohne Variable gilt der Referenzwert `http://192.168.178.24:8087`. Die Dateien
+oder in `settings.json`:
+
+```json
+{ "iobroker_url": "http://IOBROKER-IP:8087" }
+```
+
+Reihenfolge (erste Quelle gewinnt):
+
+| Rang | Quelle | gedacht für |
+|---|---|---|
+| 1 | `settings.json` | Eintrag in der Oberfläche |
+| 2 | `IOBROKER_SIMPLE_API` | headless, Container, systemd |
+| 3 | Referenzwert im Code | frischer Klon ohne Konfiguration |
+
+Ohne jede Angabe gilt `http://192.168.178.24:8087` — der Wert aus dem Aufbau
+dieses Hauses, also **nicht** für fremde Installationen geeignet. Die
+Oberfläche zeigt an, woher der aktuelle Wert stammt, und markiert das Feld rot,
+wenn die Adresse nicht erreichbar ist.
+
+`settings.json` ist eigentümerspezifisch und deshalb **nicht** versioniert. Die Dateien
 `catalog.json`, `localmap.json` und `rooms.json` werden aus ioBroker
 erzeugt und sind deshalb nicht versioniert. `bridges.json` und
 `rooms_overrides.json` sind dagegen gepflegte Konfiguration.

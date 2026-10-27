@@ -33,7 +33,11 @@ import localmap
 import overrides
 import resolver
 
-BASE = os.environ.get("IOBROKER_SIMPLE_API", "http://192.168.178.24:8087")
+# Adresse kommt aus settings.py (Oberflaeche -> Env -> Referenz).
+# Frueher stand hier die IP fest; wer das nachbaut, hat eine andere und
+# musste im Quelltext suchen.
+import settings
+BASE = settings.base()
 CAPS_ORDER = ("onoff", "brightness", "color", "colortemp", "position",
               "temperature", "targetTemperature")
 
@@ -279,6 +283,12 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:9px;paddin
 </style></head><body>
 <header>
   <h1>Geräteverwaltung</h1>
+  <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)">
+    ioBroker
+    <input id="ioburl" placeholder="http://IP:8087" style="min-width:200px"
+           onkeydown="if(event.key==='Enter'){speichereAdresse();}">
+    <button onclick="speichereAdresse()" title="ioBroker-Adresse speichern">setzen</button>
+  </label>
   <input id="filter" placeholder="Gerät filtern …" style="min-width:210px">
   <button id="savebtn" class="primary" onclick="saveAll()" disabled>Speichern</button>
   <button onclick="load()">Neu laden</button>
@@ -413,12 +423,40 @@ function render() {
     + (weg ? '<span><b>' + weg + '</b> ausgeblendet</span>' : '');
 }
 
+// ioBroker-Adresse anzeigen. Sie kommt aus /api/devices, damit man sofort
+// sieht, wogegen die Seite gerade arbeitet - auch wenn sie aus einer
+// Umgebungsvariable stammt und nicht aus der eigenen Einstellung.
+function zeigeAdresse(info) {
+  const feld = document.getElementById("ioburl");
+  if (!feld) return;
+  feld.value = (info && info.iobroker) || "";
+  feld.title = info && info.quelle
+    ? "Quelle: " + info.quelle
+    : "";
+  feld.style.borderColor = info && info.erreichbar === false ? "var(--bad)" : "";
+}
+
+async function speichereAdresse() {
+  const feld = document.getElementById("ioburl");
+  const wert = feld.value.trim();
+  if (!wert) { toast("Adresse fehlt", "bad"); return; }
+  try {
+    const res = await post("/api/settings", {iobroker: wert});
+    toast("ioBroker-Adresse gespeichert", "ok");
+    if (res.hinweis) toast(res.hinweis, "ok");
+    await load();
+  } catch (e) {
+    toast("Nicht gespeichert: " + e.message, "bad");
+  }
+}
+
 async function load() {
   document.getElementById("meta").textContent = "lädt …";
   try {
     const res = await fetch("/api/devices");
     const data = await res.json();
     DATA = data.devices || [];
+    zeigeAdresse(data);
     render();
     document.getElementById("meta").textContent =
       new Date().toLocaleTimeString("de-DE") + " · " + (data.rooms || []).length + " Räume";
@@ -589,7 +627,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/devices":
             try:
                 devices = collect()
-                self._json(200, {"devices": devices, "rooms": room_list(devices)})
+                adresse = settings.base()
+                self._json(200, {
+                    "devices": devices,
+                    "rooms": room_list(devices),
+                    "iobroker": adresse,
+                    "quelle": settings.quelle(),
+                })
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": repr(exc)})
             return
@@ -621,6 +665,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 saved = overrides.save_batch(changes)
                 self._json(200, {"ok": True, "saved": saved})
+                return
+            if path == "/api/settings":
+                try:
+                    gespeichert = settings.setzen(body.get("iobroker"))
+                except ValueError as exc:
+                    self._json(400, {"ok": False, "error": str(exc)})
+                    return
+                self._json(200, {"ok": True, "iobroker": gespeichert,
+                                 "hinweis": "Gilt ab dem naechsten Aufruf."})
                 return
             if path == "/api/delete":
                 overrides.set_deleted(body.get("id"), bool(body.get("deleted")))
