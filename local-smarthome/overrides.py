@@ -139,6 +139,54 @@ def target_for(*idents):
     return None
 
 
+def save_batch(changes: list) -> int:
+    """Mehrere Aenderungen in EINEM Schreibvorgang uebernehmen.
+
+    Die Oberflaeche sammelt Aenderungen und schickt sie erst auf Knopfdruck.
+    Dadurch wird die Datei einmal geschrieben statt je Feld - und ein
+    abgebrochener Speichervorgang hinterlaesst keinen halben Stand.
+
+    Erwartet eine Liste von {"id": ..., optional "name"/"room"/"target": ...}.
+    Ein leerer Wert loescht die jeweilige Vorgabe.
+    """
+    data = _read()
+    saved = 0
+    for item in changes or []:
+        if not isinstance(item, dict):
+            continue
+        ident = str(item.get("id") or "").strip()
+        if not ident:
+            continue
+        if "name" in item:
+            clean = " ".join(str(item.get("name") or "").split())
+            if clean:
+                data["names"][ident] = clean
+            else:
+                data["names"].pop(ident, None)
+            saved += 1
+        if "room" in item:
+            clean = " ".join(str(item.get("room") or "").split())
+            if clean:
+                data["rooms"][ident] = clean
+            else:
+                data["rooms"].pop(ident, None)
+            saved += 1
+        if "target" in item:
+            dp = str(item.get("target") or "").strip()
+            if dp:
+                entry = {"datapoint": dp}
+                cap = str(item.get("cap") or "").strip()
+                if cap:
+                    entry["cap"] = cap
+                data["targets"][ident] = entry
+            else:
+                data["targets"].pop(ident, None)
+            saved += 1
+    if saved:
+        _write(data)
+    return saved
+
+
 def apply(devices: list) -> list:
     """Overrides ueber eine Geraeteliste legen (in place, Liste zurueck).
 

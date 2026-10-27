@@ -171,6 +171,10 @@ def collect():
         # Vom Eigentuemer vorgegebenes Ziel: anzeigen und den Loeschknopf
         # einblenden. Die Kennung ist die id, sonst der Name.
         ident = dev.get("id") or dev.get("name")
+        # Automatisch ermitteltes Ziel merken, bevor eine Vorgabe es
+        # ueberschreibt. Der X-Knopf in der Oberflaeche setzt das Feld darauf
+        # zurueck; ohne diesen Wert wuerde er es leeren.
+        dev["autoTarget"] = dev.get("target")
         vorgabe = vorgegeben.get(ident)
         if isinstance(vorgabe, dict) and vorgabe.get("datapoint"):
             dev["target"] = vorgabe["datapoint"]
@@ -255,6 +259,9 @@ tr:hover td{background:#1e242c}
 input.inline{width:100%;min-width:130px;background:#141920}
 input.dpin{width:100%;min-width:250px;background:#141920;font-family:ui-monospace,monospace;font-size:11px;padding:4px 7px}
 input.dpin.changed{border-color:var(--warn)}
+input.inline.changed{border-color:var(--warn);background:#221c10}
+tr.dirty td{background:#1d1a12}
+button#savebtn:disabled{opacity:.45;cursor:default}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
 #msg.ok{border-color:#1f4d2b} #msg.bad{border-color:#5d2626}
@@ -263,7 +270,9 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:9px;paddin
 <header>
   <h1>Geräteverwaltung</h1>
   <input id="filter" placeholder="Gerät filtern …" style="min-width:210px">
+  <button id="savebtn" class="primary" onclick="saveAll()" disabled>Speichern</button>
   <button onclick="load()">Neu laden</button>
+  <span id="dirty" style="color:var(--warn);font-size:12px"></span>
   <span id="meta" style="color:var(--dim);font-size:12px"></span>
 </header>
 <main>
@@ -317,17 +326,20 @@ function row(d) {
     ? '<div class="base">vorher: ' + esc(d.baseName) + '</div>' : "";
   const room = d.room || "";
   return '<tr data-k="' + esc(key) + '">'
-    + '<td><input class="inline" value="' + esc(d.name) + '" onchange="rename(this)">' + base + '</td>'
-    + '<td><input class="inline" value="' + esc(room) + '" placeholder="—" onchange="setRoom(this)" style="min-width:105px"></td>'
+    + '<td><input class="inline" data-f="name" data-v="' + esc(d.name)
+    + '" value="' + esc(d.name) + '" oninput="touch(this)">' + base + '</td>'
+    + '<td><input class="inline" data-f="room" data-v="' + esc(room)
+    + '" value="' + esc(room) + '" placeholder="—" oninput="touch(this)" style="min-width:105px"></td>'
     + '<td>' + badge + broken + '</td>'
     + '<td>' + stateText(d.state, d.readable) + '</td>'
-    + '<td class="dp"><input class="dpin" value="' + esc(d.target || "")
-    + '" placeholder="Datenpunkt" onchange="setTarget(this)" title="'
+    + '<td class="dp"><input class="dpin" data-f="target" data-v="' + esc(d.target || "")
+    + '" data-base="' + esc(d.autoTarget || d.target || "")
+    + '" value="' + esc(d.target || "") + '" placeholder="Datenpunkt" oninput="touch(this)" title="'
     + (d.targetOverridden ? "vom Eigentümer vorgegeben" : "automatisch ermittelt")
     + '"></td>'
-    + (d.targetOverridden
-        ? '<td><button onclick="clearTarget(this)" title="Vorgabe entfernen">×</button></td>'
-        : '<td></td>')
+    + '<td>' + (d.targetOverridden
+        ? '<button onclick="clearTarget(this)" title="Vorgabe entfernen">×</button>'
+        : '') + '</td>'
     + '</tr>';
 }
 
@@ -390,55 +402,73 @@ async function post(url, body) {
   return data;
 }
 
-async function rename(input) {
+// ---- Änderungen sammeln, erst auf Knopfdruck schreiben ----
+// Jedes Feld merkt sich seinen Ausgangswert in data-v. Weicht der Inhalt ab,
+// wird die Zeile markiert; gespeichert wird ausschliesslich in saveAll().
+function touch(input) {
   const tr = input.closest("tr");
-  const key = tr.dataset.k;
-  const value = input.value;
+  const geaendert = input.value !== input.dataset.v;
+  input.classList.toggle("changed", geaendert);
+  tr.classList.toggle("dirty", !!tr.querySelector("input.changed"));
+  updateDirty();
+}
+
+function sammle() {
+  const out = [];
+  document.querySelectorAll("tr.dirty").forEach(tr => {
+    const eintrag = {id: tr.dataset.k};
+    let hat = false;
+    tr.querySelectorAll("input[data-f]").forEach(inp => {
+      const feld = inp.dataset.f;
+      const alt = inp.dataset.v || "";
+      if (inp.value !== alt) {
+        eintrag[feld] = inp.value;
+        hat = true;
+      }
+    });
+    if (hat) out.push(eintrag);
+  });
+  return out;
+}
+
+function updateDirty() {
+  const n = document.querySelectorAll("tr.dirty").length;
+  const knopf = document.getElementById("savebtn");
+  const hinweis = document.getElementById("dirty");
+  knopf.disabled = n === 0;
+  hinweis.textContent = n === 0 ? "" : n + " Zeile(n) geändert";
+}
+
+async function saveAll() {
+  const changes = sammle();
+  if (!changes.length) {
+    toast("Nichts zu speichern", "ok");
+    return;
+  }
+  const knopf = document.getElementById("savebtn");
+  knopf.disabled = true;
+  knopf.textContent = "speichert …";
   try {
-    await post("/api/rename", {id: key, name: value});
-    toast("Name gespeichert", "ok");
-    await load();
+    const res = await post("/api/save-batch", {changes});
+    toast(res.saved + " Änderung(en) gespeichert", "ok");
   } catch (e) {
-    toast("Name nicht gespeichert: " + e.message, "bad");
+    toast("Nicht gespeichert: " + e.message, "bad");
+  } finally {
+    knopf.textContent = "Speichern";
     await load();
   }
 }
 
-async function setRoom(input) {
-  const tr = input.closest("tr");
-  const key = tr.dataset.k;
-  try {
-    await post("/api/room", {id: key, room: input.value});
-    toast("Raum gespeichert", "ok");
-    await load();
-  } catch (e) {
-    toast("Raum nicht gespeichert: " + e.message, "bad");
-  }
-}
-
-async function setTarget(input) {
-  const tr = input.closest("tr");
-  const key = tr.dataset.k;
-  try {
-    await post("/api/change-target", {id: key, datapoint: input.value});
-    toast("Datenpunkt gespeichert", "ok");
-    await load();
-  } catch (e) {
-    toast("Datenpunkt nicht gespeichert: " + e.message, "bad");
-    await load();
-  }
-}
-
-async function clearTarget(button) {
+function clearTarget(button) {
+  // Vorgabe entfernen heisst: Feld auf den automatisch ermittelten Wert
+  // zurueckzusetzen. Geschrieben wird erst beim Speichern.
   const tr = button.closest("tr");
-  const key = tr.dataset.k;
-  try {
-    await post("/api/change-target", {id: key, datapoint: ""});
-    toast("Vorgabe entfernt", "ok");
-    await load();
-  } catch (e) {
-    toast("Vorgabe nicht entfernt: " + e.message, "bad");
-  }
+  const feld = tr.querySelector('input[data-f="target"]');
+  if (!feld) return;
+  feld.value = feld.dataset.base || "";
+  feld.classList.add("changed");
+  tr.classList.add("dirty");
+  updateDirty();
 }
 
 async function testSentence() {
@@ -509,6 +539,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/room":
                 overrides.set_room(body.get("id"), body.get("room"))
                 self._json(200, {"ok": True})
+                return
+            if path == "/api/save-batch":
+                changes = body.get("changes") or []
+                if not isinstance(changes, list):
+                    self._json(400, {"ok": False, "error": "changes muss eine Liste sein"})
+                    return
+                saved = overrides.save_batch(changes)
+                self._json(200, {"ok": True, "saved": saved})
                 return
             if path in ("/api/target", "/api/change-target"):
                 overrides.set_target(body.get("id"), body.get("datapoint"),
