@@ -10,6 +10,7 @@ bleibt es unveraendert und der Aufrufer fragt nach. Nie raten.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 
 # Ab dieser Aehnlichkeit gilt ein STT-Fehler als erkannt.
@@ -95,12 +96,42 @@ def ratio(a: str, b: str) -> float:
     return 1.0 - distance(a, b) / longest
 
 
+def _sauber(word: str) -> str:
+    """Sprechbaren Namen aus einem ioBroker-Namen machen.
+
+    Entfernt Anfuehrungszeichen und sonstige Satzzeichen, laesst Buchstaben,
+    Ziffern, Umlaute, ß und einzelne Bindestriche stehen. Reine Reste wie
+    '"' oder '...' ergeben einen leeren String und werden verworfen.
+    """
+    text = str(word or "").strip()
+    if not text:
+        return ""
+    text = text.replace('"', "").replace("'", "").replace("„", "").replace("“", "")
+    text = re.sub(r"[^0-9A-Za-zÄÖÜäöüß\- ]+", " ", text)
+    return " ".join(text.split())
+
+
 class Vocabulary:
     """Woerter, die in einem Smart-Home-Satz vorkommen koennen."""
 
     def __init__(self, words):
+        # Namen aus ioBroker sind nicht immer sprechbar: der Alexa-Adapter
+        # fuehrt Reste wie '"Licht Arbeitszimmer"off' oder '"Tannenbaum"'
+        # Umschalten:ON / OFF...'. Beim Zerlegen entstehen daraus Woerter mit
+        # Anfuehrungszeichen und Doppelpunkten. Stand so ein Wort im
+        # Vokabular, hat correct() es unveraendert zurueckgegeben - und damit
+        # JEDEN Satz mit "Licht" zu '"Licht ...' verunstaltet. Belegt
+        # 27.10.2026: aus "Licht Arbeitszimmer an." wurde '"Licht
+        # Arbeitszimmer an.'; HassIL deutete das Anfuehrungszeichen als Etage.
+        #
+        # Deshalb: Woerter saeubern und reine Schmutzreste verwerfen.
+        sauber = set()
+        for w in words:
+            c = _sauber(w)
+            if c:
+                sauber.add(c)
         # laengste zuerst: bei Gleichstand gewinnt das spezifischere Wort
-        self.words = sorted({w for w in words if w}, key=lambda w: (-len(w), w))
+        self.words = sorted(sauber, key=lambda w: (-len(w), w))
         self._norm = {w: _norm(w) for w in self.words}
 
     def correct(self, token: str) -> tuple[str, bool, float]:
