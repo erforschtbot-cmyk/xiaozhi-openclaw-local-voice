@@ -201,7 +201,20 @@ class WakeArbiter:
             # Dieses Geraet fuehrt bereits; Folgeaeusserungen bleiben bei ihm.
             if self._winner == session.session_id:
                 self._winner_at = now
-                return True
+                # Ohne Konkurrenz sofort zustimmen - und das Gate schreiben.
+                # Fehlte das Gate, wartete der Helfer die vollen
+                # TURN_GATE_WAIT_MS (2600 ms) ab, weil im Nachhoerfenster
+                # niemand eines schreibt. Belegt 27.10.2026 22:38:49
+                # "Turn-Gate fehlt nach 2600 ms; fahre fort" - reine Wartezeit
+                # bei jeder Folgefrage.
+                #
+                # Hoert ein anderes Geraet ebenfalls zu, wird NICHT sofort
+                # zugestimmt: dann muss gesammelt werden, sonst sendet dieses
+                # Geraet bevor der Pegelvergleich entschieden ist (belegt
+                # 27.10.2026 19:42, zwei Agentenlaeufe).
+                if not (self.other_awake(session) or self._burst_running()):
+                    write_turn_gate(getattr(session, "device_id", ""), True)
+                    return True
 
             competing = self.other_awake(session) or self._burst_running()
             if competing:

@@ -188,12 +188,25 @@ def _score_name(dev_tokens: list[str], utt_tokens: list[str]) -> tuple[float, st
     #     damit "kino regenbogen" nicht "KinoPC" trifft.
     dev_joined = "".join(dev_tokens)
     if len(dev_joined) >= 5:
+        # Getrennt gesprochen, zusammen geschrieben: "kino pc" -> "KinoPC".
         for size in (2, 3):
             if size > len(utt_tokens):
                 continue
             for start in range(len(utt_tokens) - size + 1):
                 if "".join(utt_tokens[start:start + size]) == dev_joined:
                     return 96.0 + 4.0 * len(dev_tokens), "zusammengesetzt", 0
+        # Umgekehrte Richtung: zusammen gehoert, getrennt geschrieben.
+        # Der Zerleger hoert "Licht Arbeitszimmer" als EIN Wort
+        # ("Lichtarbeitszimmer"). Die Fenster oben greifen dann nicht, weil
+        # sie mindestens zwei Satzwoerter brauchen - die Aeusserung hat aber
+        # nur eins. Belegt 27.10.2026 22:38: der lokale Schnellweg fiel aus,
+        # die KI brauchte 9 s statt 20 ms.
+        #
+        # Nur exakte Gleichheit zaehlt, damit "Lichtschalter" nicht
+        # "Licht Schalter" trifft. Zusaetzlich muss der Name mindestens zwei
+        # Teile haben, sonst waere es kein Zusammensetzen.
+        if len(dev_tokens) >= 2 and dev_joined in utt_tokens:
+            return 96.0 + 4.0 * len(dev_tokens), "zusammengesetzt", 0
 
     # 3) Kompositum: "monitorlich" -> "Monitorlicht". Streng, damit
     #    "alles" nicht "Alle Lampen" trifft.
