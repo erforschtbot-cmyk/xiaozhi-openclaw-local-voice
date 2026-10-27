@@ -93,9 +93,57 @@ class Intent:
     reason: str = ""
 
 
+# Gesprochene Zahlen. Schluessel in der Form, die normalize() erzeugt:
+# Umlaute sind dort bereits ersetzt (fünf -> fuenf, dreißig -> dreissig).
+# Belegt 27.10.2026 23:59: "Lichtarbeitszimmer fünf Prozent" scheiterte mit
+# "wert-fehlt", weil _number() nur Ziffern kannte. Die KI brauchte 8 s.
+_EINER = {
+    "null": 0, "eins": 1, "ein": 1, "zwei": 2, "drei": 3, "vier": 4,
+    "fuenf": 5, "sechs": 6, "sieben": 7, "acht": 8, "neun": 9,
+    "zehn": 10, "elf": 11, "zwoelf": 12, "dreizehn": 13, "vierzehn": 14,
+    "fuenfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18,
+    "neunzehn": 19,
+}
+_ZEHNER = {
+    "zwanzig": 20, "dreissig": 30, "vierzig": 40, "fuenfzig": 50,
+    "sechzig": 60, "siebzig": 70, "achtzig": 80, "neunzig": 90,
+}
+
+
+def _zahlwort(token: str) -> int | None:
+    """Eine gesprochene Zahl in einen Wert uebersetzen.
+
+    Deckt 0-99 ab, auch zusammengesetzt ("einundzwanzig") und "hundert".
+    Gibt None zurueck, wenn das Wort keine Zahl ist.
+    """
+    if not token:
+        return None
+    if token in _EINER:
+        return _EINER[token]
+    if token in _ZEHNER:
+        return _ZEHNER[token]
+    if token == "hundert":
+        return 100
+    # "einundzwanzig": Einer + "und" + Zehner
+    m = re.fullmatch(r"([a-z]+)und([a-z]+)", token)
+    if m:
+        einer, zehner = m.group(1), m.group(2)
+        if einer in _EINER and zehner in _ZEHNER and 0 < _EINER[einer] < 10:
+            return _ZEHNER[zehner] + _EINER[einer]
+    return None
+
+
 def _number(text: str) -> int | None:
-    m = re.search(r"\b(\d{1,3})\b", normalize(text))
-    return int(m.group(1)) if m else None
+    """Erste Zahl im Satz: Ziffer hat Vorrang vor dem Zahlwort."""
+    norm = normalize(text)
+    m = re.search(r"\b(\d{1,3})\b", norm)
+    if m:
+        return int(m.group(1))
+    for token in norm.split():
+        wert = _zahlwort(token)
+        if wert is not None:
+            return wert
+    return None
 
 
 def parse_action(text: str) -> Intent:
