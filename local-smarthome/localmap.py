@@ -16,6 +16,7 @@ import time
 import unicodedata
 import urllib.request
 from collections import defaultdict
+import overrides
 
 BASE = os.environ.get("IOBROKER_SIMPLE_API", "http://192.168.178.24:8087")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -265,7 +266,10 @@ def load(refresh=False):
                 # $HOME read-only, ein Neuaufbau kostet dort rund 1-3 s pro
                 # Befehl. Erneuert wird ausserhalb der Sandbox mit
                 # "python3 <modul>.py"; das ist der einzige vorgesehene Weg.
-                return payload
+                # Vom Eigentuemer vergebene Namen ueberlagern die Rohdaten.
+                return {"builtAt": payload.get("builtAt"),
+                        "base": payload.get("base"),
+                        "devices": overrides.apply(payload.get("devices") or [])}
         except (OSError, ValueError):
             pass
     return build()

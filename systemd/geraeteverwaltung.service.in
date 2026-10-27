@@ -1,0 +1,18 @@
+[Unit]
+Description=Geraeteverwaltung im Browser (Alexa-aehnliche Oberflaeche, ioBroker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ALEXA_DIR@
+Environment=IOBROKER_SIMPLE_API=@IOBROKER_URL@
+Environment=PANEL_HOST=0.0.0.0
+Environment=PANEL_PORT=@PANEL_PORT@
+Environment=PYTHONPATH=@ALEXA_DIR@
+ExecStart=@BRIDGE_VENV@/bin/python @ALEXA_DIR@/panel.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

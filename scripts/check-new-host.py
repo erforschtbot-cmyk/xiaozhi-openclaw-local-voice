@@ -132,11 +132,16 @@ if shutil.which("systemctl"):
         "openclaw-gateway.service",
         "jarvis-realtime-bridge.service",
         "wyoming-canary1b.service",
+        "geraeteverwaltung.service",
     ]:
         result = subprocess.run(
             ["systemctl", "--user", "is-active", "--quiet", service],
             capture_output=True)
         check(result.returncode == 0, "Dienst aktiv: " + service)
+
+for filename in ["panel.py", "overrides.py", "resolver.py", "control.py"]:
+    check((local_smarthome / filename).is_file(),
+          "Geraeteverwaltung/Resolver: " + filename)
 
 model_dir = home / ".cache/jarvis-stt-cand5-canary1b-onnx"
 for filename in [

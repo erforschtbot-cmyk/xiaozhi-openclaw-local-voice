@@ -18,6 +18,65 @@ Ohne Variable gilt der Referenzwert `http://192.168.178.24:8087`. Die Dateien
 erzeugt und sind deshalb nicht versioniert. `bridges.json` und
 `rooms_overrides.json` sind dagegen gepflegte Konfiguration.
 
+## Geräteverwaltung im Browser (`panel.py`)
+
+Eine Oberfläche für das, was sonst nur in JSON-Dateien steht: alle Geräte sehen,
+Räume zuordnen, Sprechnamen vergeben, einen Satz testen. Gedacht als Gegenstück
+zur Alexa-App — nur dass die Wahrheit in ioBroker bleibt und die Namen als
+Overrides daneben liegen.
+
+```bash
+python panel.py            # http://0.0.0.0:8088
+PANEL_PORT=9000 python panel.py
+```
+
+Dauerhaft: `systemd/geraeteverwaltung.service.in` (Platzhalter `@ALEXA_DIR@`,
+`@BRIDGE_VENV@`, `@IOBROKER_URL@`, `@PANEL_PORT@`).
+
+### Was die Oberfläche zeigt
+
+| Spalte | Bedeutung |
+|---|---|
+| Sprechname | Name, der gesprochen werden muss — hier änderbar |
+| Raum | Zuordnung; leer heißt „Ohne Raum" |
+| Weg | `lokal` = ohne Amazon, `Alexa-Cloud` = über Amazon |
+| Zustand | aktueller Wert aus ioBroker, live abgefragt |
+| Datenpunkt | das genaue Ziel, das geschrieben wird |
+
+**„kein Rückkanal"** bedeutet: Der Datenpunkt ist ein reiner Befehl
+(`common.read: false`, z. B. `.active` bei Szenen). Es gibt keinen Zustand
+zum Anzeigen — das ist kein Fehler, sondern Bauart des Adapters.
+
+### Namen ändern
+
+Die Namen liegen in `names_overrides.json` (nicht versioniert, weil
+eigentümerspezifisch). `catalog.py` und `localmap.py` legen sie beim Laden über
+die Rohdaten:
+
+```
+dev["name"]     = vergebener Name
+dev["baseName"] = ursprünglicher Name aus ioBroker
+```
+
+Der Abgleich in `resolver.py` arbeitet auf `name`. Ein neuer Name wirkt deshalb
+sofort im Sprachweg — **und der alte funktioniert danach nicht mehr**. Wer
+„Monitor" in „Bildschirm" umbenennt, muss „Bildschirm" sagen. Ein leerer Name
+löscht die Zuordnung und stellt den ursprünglichen Namen wieder her.
+
+### Satz testen
+
+Der Knopf „Auflösen" schickt den Satz durch `control.handle(..., dry_run=True)`.
+Es wird **nichts geschaltet** — die Antwort zeigt Gerät, Aktion, Weg und
+Datenpunkt. Das ist der schnellste Weg, eine Mehrdeutigkeit zu finden, ohne sie
+im Wohnzimmer zu hören.
+
+### Grenzen
+
+- Die Seite schaltet nichts. Schalten passiert weiter über den Sprachweg.
+- Live-Werte kommen aus `getBulk`; reine Befehlsdatenpunkte liefern dort nichts.
+- Räume stammen aus `rooms.json` (abgeleitet) plus den Overrides. Ein Raum
+  erscheint also nur, wenn er dort belegt ist.
+
 ## Erstaufbau und Prüfung
 
 ```bash
