@@ -210,6 +210,7 @@ const detector = new UtteranceDetector({
 let busy = false;
 let pendingUtterance = null;
 
+
 // Muss zu XiaozhiSession.PHOTO_PATTERN in server.py passen. Bewusst eng:
 // nur ausdrueckliche Foto-/Bild-Absichten, damit "mach das Licht an" nicht
 // hier landet und stumm bleibt.
@@ -229,17 +230,15 @@ function isPhotoRequest(text) {
 }
 
 // Lokaler Smart-Home-Weg. Der Satz wird in einem eigenen Python-Prozess
-// aufgeloest und direkt auf die belegten ioBroker-Datenpunkte geschrieben.
-// Kein Agentenlauf. Liegt das Flag vor, ist der Weg aus.
-const DATA_HOME =
-  process.env.XDG_DATA_HOME || `${process.env.HOME}/.local/share`;
-const LOCAL_SMARTHOME_DIR =
-  process.env.JARVIS_LOCAL_SMARTHOME_DIR || `${DATA_HOME}/alexa-direct`;
-const BRIDGE_DIR =
-  process.env.JARVIS_BRIDGE_DIR || `${DATA_HOME}/jarvis-realtime-bridge`;
-const LOCAL_SMARTHOME_FLAG = `${BRIDGE_DIR}/disable-local-smarthome`;
-const LOCAL_SMARTHOME_CLI = `${LOCAL_SMARTHOME_DIR}/smarthome_cli.py`;
-const LOCAL_SMARTHOME_PY = `${BRIDGE_DIR}/.venv/bin/python`;
+// aufgeloest (alexa-direct/resolver.py, gemessen 2,55 ms) und direkt auf
+// zigbee/wled/yeelight geschrieben. Kein Alexa, kein Amazon, kein Agent.
+// Liegt das Flag vor, ist der Weg aus und alles laeuft wie bisher.
+const LOCAL_SMARTHOME_FLAG =
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-local-smarthome";
+const LOCAL_SMARTHOME_CLI =
+  "/home/openclaw/.local/share/alexa-direct/smarthome_cli.py";
+const LOCAL_SMARTHOME_PY =
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/.venv/bin/python";
 
 function tryLocalSmartHome(text) {
   if (fs.existsSync(LOCAL_SMARTHOME_FLAG)) return null;
@@ -251,7 +250,7 @@ function tryLocalSmartHome(text) {
       {
         encoding: "utf8",
         timeout: 8000,
-        env: { ...process.env, PYTHONPATH: LOCAL_SMARTHOME_DIR },
+        env: { ...process.env, PYTHONPATH: "/home/openclaw/.local/share/alexa-direct" },
       },
     );
   } catch (error) {
@@ -266,6 +265,7 @@ function tryLocalSmartHome(text) {
     return null;
   }
   if (!result || result.ok !== true) {
+    // Nicht aufgeloest (Frage, mehrdeutig, unbekanntes Geraet): normaler Weg.
     if (result && result.reason) {
       log(`Lokaler Smart-Home-Weg: nicht aufgeloest (${result.reason})`);
     }
@@ -283,6 +283,53 @@ function tryLocalSmartHome(text) {
  * verloren. Ist bereits eine Aeusserung aktiv, wird die neue vorgemerkt
  * (die letzte gewinnt) und danach verarbeitet.
  */
+// --------------------------------------------------------------------------
+// Turn-Gate: Entscheidung der Pegel-Arbitrierung abwarten
+// --------------------------------------------------------------------------
+//
+// Problem: Der Helfer ruft `chat.send`, BEVOR die Bridge entschieden hat,
+// welches Geraet den Dialog fuehrt. Bei zwei wachen Geraeten starten dadurch
+// zwei Agentenlaeufe. Der Lauf des Verlierers wird verworfen; der Gewinner
+// bekommt seine Nachricht in den fremden Lauf eingesteuert
+// (`steerTargetRunId`) und damit eine LEERE Antwort. Folge: Antwort steht nur
+// in der Sitzung, das Geraet bleibt stumm im Zuhoeren (belegt 27.10.2026
+// 19:03, "Wie spaet ist das?"). Die Bridge hinterlegt ihre Entscheidung als
+// Datei je Device-ID; hier wird kurz darauf gewartet.
+const TURN_GATE_DIR =
+  process.env.OPENCLAW_TURN_GATE_DIR ||
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/turn-gates";
+// Muss groesser sein als die Sammelfrist des Servers (SETTLE_SECONDS = 1.4 s),
+// sonst laeuft der Helfer in die Zeitueberschreitung und sendet, bevor die
+// Entscheidung feststeht - genau der Fall vom 27.10.2026 19:42 (156 sendete,
+// wurde 0,1 s spaeter ueberholt, Antwort von 88 kam leer zurueck).
+const TURN_GATE_WAIT_MS = Number(
+  process.env.OPENCLAW_TURN_GATE_WAIT_MS || 2600,
+);
+
+async function awaitTurnGate(emittedAt) {
+  const deviceId = process.env.OPENCLAW_VOICE_DEVICE_ID || "";
+  // Ohne Geraetebezug gibt es nichts zu entscheiden - nie warten.
+  if (!deviceId) return true;
+  const safe = deviceId.replace(/[^0-9A-Za-z_.:-]/g, "_");
+  const file = path.join(TURN_GATE_DIR, `${safe}.json`);
+  const deadline = Date.now() + TURN_GATE_WAIT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      // Nur Entscheidungen akzeptieren, die NACH unserem Transkript entstanden.
+      if (Number(data.ts) * 1000 >= emittedAt - 100) {
+        return data.allow !== false;
+      }
+    } catch {
+      // Datei fehlt noch oder ist halb geschrieben: weiter warten.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // Zeitueberschreitung: durchlassen. Ein einzelnes Geraet darf nie haengen.
+  log(`Turn-Gate fehlt nach ${TURN_GATE_WAIT_MS} ms; fahre fort`);
+  return true;
+}
+
 function dispatchUtterance(frame) {
   if (busy) {
     pendingUtterance = frame;
@@ -325,11 +372,26 @@ async function handleUtterance(pcm) {
     }
     text = cleaned;
 
+    const emittedAt = Date.now();
     emit("user_transcript", { text });
     log(`Erkannt: ${text}`);
 
-    // Foto-Absicht: Die Bridge loest die Kamera selbst aus. Ein zusaetzlicher
-    // chat.send hier erzeugt einen zweiten Lauf ohne Bildkontext.
+    // Erst die Arbitrierung abwarten: nur das Geraet, das den Nutzer wirklich
+    // gehoert hat, fuehrt aus. Bewusst VOR Foto und lokalem Weg - sonst
+    // schalten zwei wache Geraete denselben Befehl doppelt (belegt
+    // 27.10.2026: neunfaches "Monitor" am selben Tag).
+    if (!(await awaitTurnGate(emittedAt))) {
+      log("Arbitrierung: anderes Geraet fuehrt den Dialog, keine Ausfuehrung");
+      return;
+    }
+
+    // Foto-/Bild-Absicht: Die Bridge loest die Kamera selbst aus und spricht
+    // die Bildantwort (server.py handle_device_voice_command -> "photo").
+    // Ein zusaetzlicher chat.send hier erzeugt einen ZWEITEN Agentenlauf,
+    // der das Bild nicht kennt und deshalb eine Antwort erfindet (belegt
+    // 24.10.2026: "Kamera ist wieder auf Standard, nur eine graue Flaeche"
+    // direkt nach der korrekten Bildbeschreibung). Deshalb hier bewusst
+    // kein Agentenaufruf, nur ein leerer Abschluss fuer die Bridge.
     if (isPhotoRequest(text)) {
       log("Foto-Absicht: kein Agentenaufruf (Bridge uebernimmt Kamera und Antwort)");
       emit("assistant_done", {
@@ -341,7 +403,8 @@ async function handleUtterance(pcm) {
       return;
     }
 
-    // Eindeutige lokale Schaltbefehle vor chat.send ausfuehren.
+    // Lokaler Smart-Home-Weg: eindeutige Schaltbefehle sofort ausfuehren.
+    // Wichtig: vor chat.send, damit gar kein Agentenlauf entsteht.
     const local = tryLocalSmartHome(text);
     if (local) {
       log(
@@ -380,7 +443,7 @@ async function handleUtterance(pcm) {
       if (!answer) {
         // Ohne Text nicht sprechen; die Bridge soll trotzdem sauber abschliessen.
         log("Leere Antwort; kein Sprechauftrag");
-        emit("assistant_done", {
+          emit("assistant_done", {
           text: "",
           audioFrameCount: 0,
           audioByteCount: 0,

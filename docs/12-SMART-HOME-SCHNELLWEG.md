@@ -155,13 +155,24 @@ Zwei Schichten, unabhängig voneinander:
 Zusätzlich wird der Wächter bei jeder neuen Äußerung neu bewaffnet, auch wenn
 vor dem finalen Transkript bereits Provider-Audio eintraf.
 
+## Wo im ioBroker nachsehen
+
+Wenn ein Befehl nicht greift, liegt es meist am Ziel, nicht am Schnellweg.
+Die vollständige Liste der Nachschlagestellen steht in
+[`14-KI-NEUAUFBAU-CHECKLISTE.md`](14-KI-NEUAUFBAU-CHECKLISTE.md) unter
+**„8. Wo eine KI in ioBroker nachsehen kann"** — Geräteadapter
+(`zigbee.0.*`, `wled.0.*`, `yeelight-2.0.*`, `shelly.0.*`), logische Zuordnung
+(`alias.0.*`, `common.alias.id`), Gruppen und Skripte
+(`zigbee.0.group_*`, `javascript.0.scriptProblem.*`) und Alexa als letzter
+Rückfall (`alexa2.0.Smart-Home-Devices.*`).
+
 ## Prüfung ohne Gerätezugriff
 
 ```bash
 node --test ~/.local/share/jarvis-realtime-bridge/test-smart-home-router.mjs
 ```
 
-**145 Tests** im aktuellen Bestand, alle Schreibvorgänge sind Attrappen — es wird kein Gerät
+**46 Tests** in `test-smart-home-router.mjs` (Gesamtsuite aller Routertests: 149), alle Schreibvorgänge sind Attrappen — es wird kein Gerät
 geschaltet. Abgedeckt: beide Session-Versionen (v5/v6/v7) und fremde
 Session-Keys, dein Beispielsatz mit Verzögerung, Fragen, Verneinungen,
 Zeitangaben, doppelte und unbekannte Namen, abgelaufener/fehlender Katalog,

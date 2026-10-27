@@ -29,6 +29,37 @@ except ImportError:  # pragma: no cover
     find_default_voice = None  # type: ignore[assignment]
 
 
+TURN_GATE_DIR = "/home/openclaw/.local/share/jarvis-realtime-bridge/turn-gates"
+TURN_GATE_TTL = 15.0
+
+
+def write_turn_gate(device_id, allow):
+    """Entscheidung der Pegel-Arbitrierung fuer den Helfer hinterlegen.
+
+    Warum: Der Helfer ruft `chat.send`, BEVOR die Bridge die Arbitrierung
+    getroffen hat. Bei zwei wachen Geraeten starten dadurch zwei
+    Agentenlaeufe; der des Verlierers wird verworfen, und der Gewinner bekommt
+    seine Nachricht in den fremden Lauf eingesteuert (`steerTargetRunId`) und
+    damit eine LEERE Antwort. Folge: Antwort nur in der Sitzung, Geraet bleibt
+    stumm im Zuhoeren (belegt 27.10.2026 19:03, "Wie spaet ist das?").
+    Der Helfer wartet deshalb kurz auf diese Datei.
+    """
+    if not device_id:
+        return False
+    try:
+        os.makedirs(TURN_GATE_DIR, exist_ok=True)
+        safe = re.sub(r"[^0-9A-Za-z_.:-]", "_", str(device_id))
+        target = os.path.join(TURN_GATE_DIR, f"{safe}.json")
+        payload = {"allow": bool(allow), "ts": time.time()}
+        tmp = f"{target}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(tmp, target)
+        return True
+    except OSError:
+        return False
+
+
 class WakeArbiter:
     """Nur das lauteste Geraet fuehrt den Dialog - ohne Zeitfenster.
 
@@ -52,8 +83,61 @@ class WakeArbiter:
         # timeout), alle anderen dauerhaft: der alte Peak bleibt fuer immer
         # stehen und kein leiseres Geraet kommt je darueber.
         self._winner_at = 0.0
+        # Sammellauf: alle Ansprueche eines Weckvorgangs werden gemeinsam
+        # ausgewertet (siehe claim/_decide).
+        self._burst_members = None
+        self._burst_result = None
+        self._burst_peak = 0
 
     STALE_SECONDS = 120.0
+
+    # Sammelfrist fuer gleichzeitig geweckte Geraete.
+    #
+    # Der Helfer sendet erst nach dieser Frist. Grund: die Transkripte
+    # treffen bis zu einer Sekunde versetzt ein (belegt 27.10.2026 19:14:
+    # 88 um :39, 156 um :40). Ohne gemeinsame Frist gewinnt 88 sofort und
+    # sendet, obwohl 156 mit hoeherem Pegel noch kommt - es kommt dann zu
+    # zwei Agentenlaeufen, und der des Gewinners wird in den fremden Lauf
+    # eingesteuert und bleibt leer.
+    SETTLE_SECONDS = 1.4
+    _burst_deadline = 0.0
+
+    def begin_burst(self):
+        """Gemeinsame Frist fuer alle Geraete dieses Weckvorgangs."""
+        now = time.monotonic()
+        if self._burst_deadline <= 0.0 or now > self._burst_deadline:
+            self._burst_deadline = now + self.SETTLE_SECONDS
+        return self._burst_deadline
+
+    def awaiting_burst(self, session):
+        """Laeuft gerade ein Weckvorgang mit mehreren Geraeten?
+
+        Zwei Faelle zaehlen: ein anderes Geraet hoert jetzt zu, ODER es laeuft
+        noch eine Sammelfrist. Der zweite Fall ist entscheidend: beim Eintritt
+        in die Arbitrierung setzt jedes Geraet sein `awaiting_command` zurueck.
+        Kam das zweite Geraet danach an, sah es niemanden mehr wach und
+        arbitrierte sofort - die gemeinsame Frist wurde nie abgewartet
+        (belegt 27.10.2026 19:42).
+        """
+        if self._burst_deadline > time.monotonic():
+            return True
+        return self.other_awake(session)
+
+    def other_awake(self, session):
+        """Hoert ein anderes Geraet JETZT ebenfalls auf einen Befehl?
+
+        Kriterium ist `awaiting_command`, nicht `input_stopped`: ein nur
+        verbundenes Geraet hat `input_stopped=False`, obwohl es gar nicht
+        zuhoert. Damit haette jedes zweite Geraet im Haus 1,4 s Verzoegerung
+        auf jeden Befehl gekostet.
+        """
+        for other in list(self._sessions.values()):
+            if other is session:
+                continue
+            if not getattr(other, "awaiting_command", False):
+                continue
+            return True
+        return False
 
     def register(self, session):
         self._sessions[session.session_id] = session
@@ -80,53 +164,109 @@ class WakeArbiter:
             and now - self._winner_at > self.STALE_SECONDS
         )
 
+    def _burst_running(self):
+        """Laeuft gerade ein Sammellauf, dessen Ergebnis noch offen ist?"""
+        return (
+            self._burst_members is not None
+            and self._burst_result is None
+            and time.monotonic() <= self._burst_deadline
+        )
+
+    def _join_burst(self, session, peak):
+        """Anspruch in den laufenden Sammellauf aufnehmen."""
+        now = time.monotonic()
+        if (
+            self._burst_members is None
+            or self._burst_result is not None
+            or now > self._burst_deadline
+        ):
+            self._burst_members = []
+            self._burst_result = None
+            self._burst_deadline = now + self.SETTLE_SECONDS
+        self._burst_members.append((session, peak))
+
     async def claim(self, session, peak):
         """True, wenn dieses Geraet den Dialog fuehren soll.
 
-        Der bisherige Gewinner wird dabei in Bereitschaft geschickt, sobald ein
-        Geraet mit hoeherem Pegel dazukommt.
+        Zwei Wege:
+
+        * **Sofort** - kein anderes Geraet wartet und kein Sammellauf laeuft.
+          Dann entscheidet der Pegelvergleich unmittelbar; ohne Konkurrenz
+          kostet ein Befehl keine Wartezeit.
+        * **Sammellauf** - ein anderes Geraet hoert ebenfalls zu. Dann sammeln
+          ALLE Anspruerche bis zur gemeinsamen Frist und werden genau einmal
+          ausgewertet. Erst danach werden die Gate-Dateien geschrieben, und
+          zwar fuer alle Beteiligten in einem Zug.
+
+        Der fruehere Weg schrieb das Gate direkt beim Anspruch. Dadurch stand
+        beim ersten Geraet True, bevor das zweite eingetroffen war; das
+        spaetere False kam zu spaet, weil der Helfer schon gesendet hatte
+        (belegt 27.10.2026 19:42: 156 sendete, wurde 0,1 s spaeter von 88
+        ueberholt, die Antwort von 88 kam als "final ohne Text" leer zurueck).
         """
         superseded = None
         previous_peak = 0
+        in_burst = False
+
         async with self._lock:
             now = time.monotonic()
-            # Ein Gewinner, der sich laenger nicht gemeldet hat, ist tot oder
-            # laengst fertig. Er darf die anderen nicht dauerhaft sperren.
             if self._winner_is_stale(now):
                 print(
-                    f"{session.tag} Wake arbitration: releasing stale winner "
+                    "Wake arbitration: releasing stale winner "
                     f"(idle {now - self._winner_at:.0f}s)",
                     flush=True,
                 )
                 self._winner = None
                 self._winner_peak = 0
                 self._winner_at = 0.0
+
+            # Dieses Geraet fuehrt bereits; Folgeaeusserungen bleiben bei ihm.
             if self._winner == session.session_id:
-                # Dieses Geraet fuehrt bereits; Folgeaeusserungen bleiben bei ihm.
                 self._winner_at = now
                 return True
-            if self._winner is None or peak > self._winner_peak:
+
+            competing = self.other_awake(session) or self._burst_running()
+            if competing:
+                self._join_burst(session, peak)
+                in_burst = True
+            elif self._winner is None or peak > self._winner_peak:
                 previous = self._sessions.get(self._winner) if self._winner else None
                 previous_peak = self._winner_peak
                 self._winner = session.session_id
                 self._winner_peak = peak
                 self._winner_at = now
-                if previous is not None and previous is not session:
-                    superseded = previous
+                write_turn_gate(getattr(session, "device_id", ""), True)
                 print(
                     f"{session.tag} Wake arbitration won (peak={peak}); "
                     f"active devices now: "
                     f"{', '.join(s.tag for s in self._sessions.values() if s is not session) or 'none'}",
                     flush=True,
                 )
+                if previous is not None and previous is not session:
+                    superseded = previous
             else:
+                write_turn_gate(getattr(session, "device_id", ""), False)
                 print(
                     f"{session.tag} Wake arbitration lost (peak={peak} < "
                     f"{self._winner_peak}); returning to standby",
                     flush=True,
                 )
                 return False
+
+        if in_burst:
+            while True:
+                if self._burst_result is not None:
+                    return self._burst_result is session
+                if time.monotonic() >= self._burst_deadline:
+                    winner = await self._decide()
+                    return winner is session
+                await asyncio.sleep(0.02)
+
         if superseded is not None:
+            # Der Ueberholte hatte sein Gate bereits auf True gesetzt. Ohne die
+            # Korrektur sendet er seinen Agentenlauf trotzdem und steuert damit
+            # die Antwort des Gewinners in einen fremden Lauf.
+            write_turn_gate(getattr(superseded, "device_id", ""), False)
             print(
                 f"{superseded.tag} superseded by louder device "
                 f"({peak} > {previous_peak}); returning to standby",
@@ -134,6 +274,57 @@ class WakeArbiter:
             )
             await superseded.return_to_standby("superseded_by_louder_device")
         return True
+
+    async def _decide(self):
+        """Alle Ansprueche eines Sammellaufs genau einmal auswerten."""
+        async with self._lock:
+            if self._burst_result is not None:
+                return self._burst_result
+            members = list(self._burst_members or [])
+            if not members:
+                return None
+
+            now = time.monotonic()
+            if self._winner_is_stale(now):
+                print(
+                    "Wake arbitration: releasing stale winner "
+                    f"(idle {now - self._winner_at:.0f}s)",
+                    flush=True,
+                )
+                self._winner = None
+                self._winner_peak = 0
+                self._winner_at = 0.0
+
+            best_session, best_peak = max(members, key=lambda m: m[1])
+            # Ein laufender Dialog eines Geraets, das an diesem Sammellauf NICHT
+            # beteiligt ist, bleibt bestehen, solange es lauter oder gleich
+            # laut ist. Sonst uebernimmt der Neue.
+            if self._winner is not None and self._winner != best_session.session_id:
+                current = self._sessions.get(self._winner)
+                member_ids = {m[0].session_id for m in members}
+                if current is not None and current.session_id not in member_ids:
+                    if best_peak <= self._winner_peak:
+                        best_session, best_peak = current, self._winner_peak
+
+            self._burst_result = best_session
+            print(
+                f"{best_session.tag} Wake arbitration won (peak={best_peak}); "
+                f"members={', '.join(m[0].tag for m in members)}",
+                flush=True,
+            )
+            # Gates fuer ALLE Beteiligten in einem Zug schreiben.
+            for member, member_peak in members:
+                write_turn_gate(
+                    getattr(member, "device_id", ""), member is best_session
+                )
+                if member is not best_session:
+                    print(
+                        f"{member.tag} superseded by louder device "
+                        f"({best_peak} > {member_peak}); returning to standby",
+                        flush=True,
+                    )
+            self._burst_members = None
+            return best_session
 
 
 class XiaozhiSession:
@@ -223,6 +414,13 @@ class XiaozhiSession:
         self.followup_forwarded_packets = 0
         self.followup_peak = 0
         self.followup_audio_guard_until = 0.0
+        self.audio_guard_until = 0.0
+        # Der Aktivierungston kommt 1-3 s nach `listen start`, nicht sofort.
+        # Eine feste Sperre ab `listen start` deckt ihn deshalb nicht ab
+        # (belegt 27.10.2026 18:47: peak=3180 erst 2 s nach dem Wecken).
+        # Stattdessen: der ERSTE laute Block nach dem Wecken ist der Ton.
+        self.popup_armed = False
+        self.popup_drop_until = 0.0
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
@@ -882,6 +1080,9 @@ class XiaozhiSession:
         self.last_mic_activity_at = 0.0
         self.speech_seen_since_wake = False
         self.mic_packets_total = 0
+        self.audio_guard_until = 0.0
+        self.popup_armed = False
+        self.popup_drop_until = 0.0
 
         env = os.environ.copy()
         env.update(
@@ -1014,9 +1215,9 @@ class XiaozhiSession:
                 if self.last_mic_activity_at > idle_since:
                     idle_since = self.last_mic_activity_at
                     continue
-                if loop.time() - idle_since >= self.followup_seconds():
+                if loop.time() - idle_since >= self.WAKE_IDLE_SECONDS:
                     print(
-                        f"{self.tag} No words for {self.followup_seconds():.0f}s "
+                        f"{self.tag} No words for {self.WAKE_IDLE_SECONDS:.0f}s "
                         "after wake; returning to standby",
                         flush=True,
                     )
@@ -1181,6 +1382,21 @@ class XiaozhiSession:
             f"pcm_bytes={self.pcm_bytes_received} turn={self.turn_id}",
             flush=True,
         )
+
+    # Der Aktivierungston (assets/common/popup.ogg, 486 ms) wird gespielt,
+    # NACHDEM das Mikrofon offen ist. Das Geraet hoert ihn deshalb selbst
+    # zurueck. Belegt 27.10.2026: 13 "Aeusserungen" mit 1,10-1,19 s, aber
+    # vier verschiedene Texte ("Ja.", "Danke.", "Ooh.", "Mm."). Gleiche
+    # Dauer bei wechselndem Text ist kein Sprachsignal, sondern dasselbe
+    # akustische Ereignis: Ton 0,49 s + silenceMs 0,70 s = 1,14 s.
+    # Eine Sperre dieser Laenge verwirft nur den Ton; echte Sprache beginnt
+    # erst, nachdem der Nutzer ihn gehoert hat, und bleibt erhalten.
+    POPUP_GUARD_SECONDS = 0.55
+
+    # Frist nach dem Wecken ohne erkanntes Wort. Bewusst NICHT
+    # followup_seconds(): das ist das Nachhoerfenster NACH einer Antwort und
+    # soll laenger bleiben. Hier geht es nur um "Jarvis" ohne Befehl.
+    WAKE_IDLE_SECONDS = 5.0
 
     # Ab diesem Pegel gilt ein Provider-Block als Sprache. Gemessen: reine
     # Stille liegt bei Peak 0, normale Sprache bei 700..17000. Der Wert ist
@@ -1456,15 +1672,15 @@ class XiaozhiSession:
     async def win_command_arbitration(self):
         """Nur das lauteste Geraet fuehrt den Dialog - Vergleich der Pegel.
 
-        Kein Zeitfenster: das erste Geraet gewinnt sofort. Kommt spaeter ein
-        Geraet mit hoeherem Pegel dazu, wird das bisher aktive in Bereitschaft
-        geschickt (siehe WakeArbiter).
+        Das Warten und die Auswertung liegen vollstaendig in
+        WakeArbiter.claim(): dort werden alle Ansprueche eines Weckvorgangs
+        gemeinsam verglichen und die Gate-Dateien in einem Zug geschrieben.
+        Hier bleibt nur die Weiterleitung des Ergebnisses.
         """
         if self.arbiter is None:
             return True
-        peak = self.turn_peak
         self.awaiting_command = False
-        won = await self.arbiter.claim(self, peak)
+        won = await self.arbiter.claim(self, self.turn_peak)
         if not won:
             await self.return_to_standby("wake_arbitration_lost")
         return won
@@ -1984,6 +2200,15 @@ class XiaozhiSession:
                             f"{self.tag} Device command complete; waiting for spoken acknowledgement",
                             flush=True,
                         )
+                        # Lokale Stimme: die Queue muss stehen, BEVOR der Text
+                        # als `assistant_done` ankommt. Sonst steigt
+                        # finish_local_tts bei `not self.tts_started` aus und
+                        # sendet nie `stream_end`; das Geraet bleibt im
+                        # Zuhoeren. Belegt 27.10.2026 18:32 ("Helligkeit fuenf
+                        # Prozent"): Antwort wurde nicht gesprochen, kein
+                        # stream_end, Verbindung brach erst 2 min spaeter.
+                        if self.tts_local:
+                            self.start_local_tts()
                         self.schedule_fast_path_stream_end(process)
                         continue
                     # Pause microphone forwarding while the assistant speaks,
@@ -2134,6 +2359,30 @@ class XiaozhiSession:
             # Aeusserungserkennung faellt sonst nicht auf.
             samples = memoryview(pcm).cast("h")
             peak = max((abs(sample) for sample in samples), default=0)
+            # Waehrend des Aktivierungstons NICHT als Sprache werten. Sonst
+            # setzt der Ton `speech_seen_since_wake` und der 5-Sekunden-Rueckweg
+            # steigt aus (belegt 27.10.2026 18:47: peak=3180 direkt nach dem
+            # Wecken, danach 13 s Zuhoeren ohne Befehl).
+            loop_now = asyncio.get_running_loop().time()
+            if getattr(self, "popup_armed", False) and peak >= self.MIC_SPEECH_PEAK:
+                # Erster lauter Block nach dem Wecken = Aktivierungston.
+                self.popup_armed = False
+                self.popup_drop_until = loop_now + self.POPUP_GUARD_SECONDS
+                print(
+                    f"{self.tag} Aktivierungston erkannt (peak={peak}); "
+                    f"{self.POPUP_GUARD_SECONDS * 1000:.0f} ms verworfen",
+                    flush=True,
+                )
+            in_popup_guard = (
+                loop_now < getattr(self, "audio_guard_until", 0.0)
+                or loop_now < getattr(self, "popup_drop_until", 0.0)
+            )
+            if in_popup_guard:
+                # Ton: nicht als Sprache zaehlen und nicht an die Erkennung
+                # geben. Sonst entwaffnet er den 5-Sekunden-Rueckweg.
+                self.audio_packets += 1
+                self.audio_peak = max(self.audio_peak, peak)
+                return
             if self.awaiting_command:
                 # Laeuft der laufende Befehl, wird der hoechste Pegel seit dem
                 # Wecken festgehalten. Das ist die Grundlage des Vergleichs.
@@ -2180,6 +2429,9 @@ class XiaozhiSession:
             and self.process.stdin
             and not self.process.stdin.is_closing()
         ):
+            if asyncio.get_running_loop().time() < getattr(self, "audio_guard_until", 0.0):
+                # Aktivierungston: nicht an die Erkennung geben.
+                return
             if (
                 self.followup_open
                 and asyncio.get_running_loop().time()
@@ -2281,8 +2533,29 @@ class XiaozhiSession:
                     self.turn_peak = 0
                     self.awaiting_command = True
                     self.input_stopped = False
+                    # Der Aktivierungston laeuft jetzt; seine Laenge nicht
+                    # als Sprachbeginn werten (siehe POPUP_GUARD_SECONDS).
+                    self.audio_guard_until = (
+                        asyncio.get_running_loop().time() + self.POPUP_GUARD_SECONDS
+                    )
+                    # Ton kommt spaeter: auf den ersten lauten Block warten.
+                    # Im Nachhoerfenster ist der Ton schon durch.
+                    self.popup_armed = not self.followup_open
+                    self.popup_drop_until = 0.0
                     print(f"{self.tag} Listen start from device", flush=True)
                     await self.start_realtime()
+                    # Waechter bei JEDEM Wecken neu bewaffnen. Bisher geschah
+                    # das nur beim Start eines NEUEN Helfers; laeuft der Helper
+                    # aus der Vorrunde noch, kehrte start_realtime() sofort
+                    # zurueck und es gab ueberhaupt keine Frist. Folge: das
+                    # Geraet blieb nach "Jarvis" ohne Befehl beliebig lange im
+                    # Zuhoeren (belegt 27.10.2026, 13 s bis zum Nachhoerfenster).
+                    # Nur beim echten Wecken. Das Geraet sendet `listen start`
+                    # AUCH beim Wechsel ins Nachhoerfenster (nach jeder
+                    # Antwort); dort gilt die 10-Sekunden-Frist von
+                    # open_followup_window, nicht die 5-Sekunden-Weckfrist.
+                    if self.process is not None and not self.followup_open:
+                        self.arm_helper_guard(self.process)
                     # Laeuft der Helper aus einer frueheren Runde noch, kommt
                     # kein neues `ready`-Ereignis. Das Geraet hat beim Wechsel
                     # auf Listening aber gerade seine Bereitschaft

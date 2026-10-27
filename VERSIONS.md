@@ -23,8 +23,9 @@ Erkennung und Stimme laufen lokal auf dem Host.
 | Erkennungsdienst (Rueckfall) | `wyoming-faster-whisper`, Port `10300`, `--vad-filter` |
 | **Lokale Erkennung (aktiver Referenzstand)** | **NVIDIA Canary 1B v2** via `onnx-asr` |
 | Erkennungsdienst (aktiv) | `gateway/wyoming_canary1b.py`, Port `10303` |
-| Canary-1B-Pythonpakete | `onnx-asr==0.12.0`, `onnxruntime==1.31.0`, `wyoming==1.10.2`, `numpy==2.5.4` |
+| Canary-1B-Pythonpakete | `onnx-asr==0.12.0`, `onnxruntime==1.31.0`, `wyoming==1.10.2`, `numpy==2.5.4`, `sherpa-onnx==1.13.8` |
 | Canary-1B-Modell | `nemo-canary-1b-v2`, NVIDIA/onnx-asr, lokaler Modellordner ca. 3,7 GB |
+| **VAD fuer Canary 1B v2** | Silero-VAD via `sherpa-onnx`, `silero_vad.onnx` (~630 kB), `threshold 0.3`, `min_speech 0.15` |
 | Leichtere Alternative | Canary 180M Flash INT8 via `sherpa-onnx`, `gateway/wyoming_canary.py`, Port `10301`, Silero-VAD |
 | Canary-Modellquelle | `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` |
 | Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |

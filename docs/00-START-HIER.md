@@ -171,11 +171,16 @@ End-to-End-Test durchgeführt.
   (lokale Antwort aus `assistant_done`, Doppelsprechschutz, 180-ms-TTS-Vorlauf),
   Foto-Deduplizierung und der lokale Smart-Home-Resolver sind im Repo. Der
   Resolver war zuvor eine harte, vollständig fehlende Außenabhängigkeit.
-- JavaScript-Routertests Cloud: 145 bestanden, 0 fehlgeschlagen.
-- Python-Tests Cloud mit Bridge-venv: 45 ausgeführt, 8 Fehler und 1 Fehlschlag;
-  u. a. referenziert `test_conversation_timing.py` eine nicht vorhandene Methode
-  `note_followup_audio`. Kein Beleg für einen kaputten laufenden Dienst,
-  aber auch keine grüne Testbasis für einen Neubau.
+- JavaScript-Routertests Cloud: 149 bestanden, 0 fehlgeschlagen (nachgezaehlt 27.10.2026, fuenf Suiten).
+- Python-Tests Cloud mit Bridge-venv: 61 ausgeführt, 8 Fehler, 0 Fehlschläge
+  (Stand 27.10.2026). Alle acht liegen in `test_conversation_timing.py` und
+  beruhen auf veralteten Test-Attrappen (u. a. `note_followup_audio`), nicht
+  auf dem laufenden Dienst: derselbe Fehlersatz tritt mit dem vorherigen
+  `server.py` byteidentisch auf. Die uebrigen Suiten (`test_wake_arbiter`,
+  `test_helper_guard`, `test_room_command`, `test_speaking_guard`,
+  `test_persistent_standby`) sind grün. Kein Beleg für einen kaputten
+  laufenden Dienst, aber auch keine vollständig grüne Testbasis für einen
+  Neubau.
 - Der lokale Installer liefert jetzt zusätzlich den Resolver samt Importkette,
   erhält gepflegte Zuordnungen und prüft jede Pflichtdatei.
 - Host-Bootstrap und ein End-to-End ab vollständig leerem Host/Flash sind noch

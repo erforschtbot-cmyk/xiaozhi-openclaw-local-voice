@@ -11,6 +11,9 @@ ExecStart=/home/openclaw/stt-cand5-venv/bin/python /home/openclaw/wyoming-canary
   --uri tcp://0.0.0.0:10303 \
   --model-name nemo-canary-1b-v2 \
   --model-path /home/openclaw/.cache/jarvis-stt-cand5-canary1b-onnx \
+  --vad-model /home/openclaw/wyoming-canary1b/silero_vad.onnx \
+  --vad-threshold 0.3 \
+  --vad-min-speech 0.15 \
   --language de
 Restart=on-failure
 RestartSec=10

@@ -11,6 +11,9 @@ ExecStart=@CANARY_VENV@/bin/python @CANARY_DIR@/wyoming_canary1b.py \
   --uri tcp://0.0.0.0:@CANARY_PORT@ \
   --model-name nemo-canary-1b-v2 \
   --model-path @MODEL_DIR@ \
+  --vad-model @CANARY_DIR@/silero_vad.onnx \
+  --vad-threshold 0.3 \
+  --vad-min-speech 0.15 \
   --language de
 Restart=on-failure
 RestartSec=10

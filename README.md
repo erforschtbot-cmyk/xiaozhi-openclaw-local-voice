@@ -86,7 +86,7 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Lokaler Smart-Home-Resolver (ohne Agentenlauf) | `local-smarthome/` |
 | **Schnellweg für einfache Schaltbefehle** (Gateway-Weiche, ohne KI-Lauf) | `gateway/smart-home-router.mjs`, `docs/12-SMART-HOME-SCHNELLWEG.md` |
 | Alexa-Geräteliste für den Schnellweg (taeglich erneuert) | `gateway/refresh-alexa-catalog.mjs`, `systemd/jarvis-alexa-catalog.timer` |
-| Tests des Schnellwegs (41 Faelle, kein Geraetezugriff) | `gateway/test-smart-home-router.mjs` |
+| Tests des Schnellwegs (46 Faelle, kein Geraetezugriff) | `gateway/test-smart-home-router.mjs` |
 | OpenClaw-`dist`-Patch der Weiche (nach jedem Update erneut anwenden) | `scripts/apply-jarvis-smart-home-router.py` |
 | Pruefung der Weiche | `scripts/verify-jarvis-smart-home-router.py` |
 | systemd-Userdienst | `systemd/` |

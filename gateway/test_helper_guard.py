@@ -22,7 +22,9 @@ def make_session(*, ready=False, turn_peak=0, state="listening", tts_started=Fal
     session.tts_started = tts_started
     session.pending_tool = False
     session.process = SimpleNamespace(returncode=None)
-    session.followup_seconds = lambda: 0.05
+    # Der Live-Code nutzt seit dem 27.10.2026 eine feste Konstante statt der
+    # Methode followup_seconds(); der Test muss denselben Wert stubben.
+    session.WAKE_IDLE_SECONDS = 0.05
     session.tts_started = False
     session.pending_tool = False
     session.last_mic_activity_at = 0.0

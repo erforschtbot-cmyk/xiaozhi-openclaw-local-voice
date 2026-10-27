@@ -151,11 +151,77 @@ Das live laufende Skript ist `gateway/wyoming_canary1b.py` (Laufzeit
   --uri tcp://0.0.0.0:10303 \
   --model-name nemo-canary-1b-v2 \
   --model-path ~/.cache/jarvis-stt-cand5-canary1b-onnx \
+  --vad-model ~/wyoming-canary1b/silero_vad.onnx \
+  --vad-threshold 0.3 \
+  --vad-min-speech 0.15 \
   --language de
 ```
 
-Abhängigkeiten: `onnx-asr`, `onnxruntime`, `wyoming`, `numpy` in einem eigenen
-venv. Der Modellordner enthält `encoder-model.onnx`,
+**Das VAD ist auch bei 1B v2 Pflicht.** Canary 1B v2 hat wie die 180M-Variante
+kein eigenes VAD. Ohne `--vad-model` schreibt es zu Stille und
+Hintergrundgeraeuschen Woerter — im Betrieb belegt am 27.10.2026: 20 solcher
+Transkripte an einem Tag, darunter „Ja.", „Danke.", „Mm." bei Aufnahmen mit
+`peak=0` (reine Stille) und `peak<900` (Rauschen). Ohne das Argument meldet der
+Dienst beim Start ausdruecklich:
+
+```text
+WARNING Kein VAD aktiv; Stille und Rauschen werden transkribiert
+```
+
+Abhängigkeiten: `onnx-asr`, `onnxruntime`, `wyoming`, `numpy` **und
+`sherpa-onnx`** in einem eigenen venv. `sherpa-onnx` liefert die
+VAD-Implementierung (`sherpa_onnx.VoiceActivityDetector`) und ist die einzige
+neue Abhaengigkeit gegenueber dem reinen 1B-Betrieb.
+
+Das VAD-Modell ist eine einzelne Datei (~630 kB) und kommt aus derselben Quelle
+wie bei der 180M-Variante:
+
+```bash
+curl -L -o ~/wyoming-canary1b/silero_vad.onnx \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+```
+
+#### Schwellen: gemessen, nicht geraten
+
+Die dokumentierten Vorgaben der 180M-Variante (0,5 / 0,25 s) sind fuer 1B v2
+**zu streng** — sie verwerfen legitime kurze Antworten. Gemessen am 27.10.2026
+mit Piper-Sprachproben:
+
+| Signal | Dauer | Sprache gefunden bei 0,5 / 0,3 |
+|---|---|---|
+| „Monitor an." | 0,85 s | 0,79 / 0,82 |
+| „Wie spaet ist es" | 1,06 s | 1,01 / 1,01 |
+| „Deckenventilator an." | 1,52 s | 1,49 / 1,49 |
+| „Ja." | 0,22 s | 0,21 / 0,21 |
+| „Danke." | 0,27 s | **0,18** / **0,27** |
+
+Bei 0,5 fiel „Danke." durch (0,18 s < 0,25 s Mindestlaenge), bei 0,3 nicht.
+Deshalb: `--vad-threshold 0.3 --vad-min-speech 0.15`.
+
+#### Zweiter Durchgang fuer lange Aufnahmen
+
+Das Tor darf filtern, aber keine lange Aufnahme verwerfen — sonst gehen leise
+oder aus der Ferne gesprochene Saetze verloren, bevor Canary sie sieht. Deshalb
+gibt es einen zweiten, empfindlicheren Durchgang:
+
+| erster Durchgang (0,3) | Aufnahme | zweiter Durchgang (0,15) | Ergebnis |
+|---|---|---|---|
+| Sprache | egal | wird nicht gebraucht | an Canary |
+| keine Sprache | **< 1,5 s** | wird nicht versucht | leer (Rauschen) |
+| keine Sprache | **>= 1,5 s** | Sprache | an Canary |
+| keine Sprache | **>= 1,5 s** | keine Sprache | leer |
+
+Warum 0,15 und nicht niedriger: bei 0,10 erkennt Silero bereits Rauschen
+(`amp 0.02`, 2 s) als Sprache — dann kaeme der Fehler zurueck. Bei 0,15 wird
+leise Sprache noch erkannt (gemessen bis `peak=983`, also 3 % Pegel), waehrend
+Rauschen bis `amp 0.04` und 3 s Dauer draussen bleibt.
+
+Das Verhalten ist im Log sichtbar:
+
+```text
+VAD: empfindlicher Durchgang (2.10s) -> keine Sprache
+Keine Sprache erkannt (VAD, 2.10s); kein Transkript
+``` Der Modellordner enthält `encoder-model.onnx`,
 `encoder-model.onnx.data`, `decoder-model.onnx`, `vocab.txt` und
 `config.json` (`model_type: nemo-conformer-aed`) — rund 3,7 GB.
 

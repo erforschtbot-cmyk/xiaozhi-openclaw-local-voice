@@ -208,7 +208,7 @@ Formatierung, behält aber den Inhalt.
 Nachgewiesen: Derselbe Satz mit und ohne Sternchen ergibt unterschiedlich
 langes Audio — Piper spricht `**` tatsächlich mit (2,74 s statt 2,68 s).
 
-## Vier Fehler, die erst im echten Betrieb auftraten
+## Fuenf Fehler, die erst im echten Betrieb auftraten
 
 Diese sind alle behoben. Sie stehen hier, weil keiner davon durch Tests mit
 künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
@@ -243,6 +243,79 @@ künstlichem Audio aufgefallen wäre — der wichtigste Hinweis für Nachbauer.
 
 Lehre: Die Sprachschwelle immer an **echtem Mikrofon-Audio** kalibrieren,
 nie an Synthese-Ausgabe.
+
+## Zwei Geräte, ein Befehl: wer antwortet?
+
+Stehen zwei Geräte in Hörweite, hören **beide** das Wachwort und schicken beide
+ein Transkript. Ohne Regel laufen zwei Agentenläufe; die Antwort des einen wird
+in den fremden Lauf eingesteuert und kommt leer zurück. Das Gerät bleibt stumm,
+obwohl der Text in der Sitzung steht.
+
+Der Schiedsrichter (`WakeArbiter` in `gateway/server.py`) löst das über den
+**Pegel**: das lautere Gerät hat den Nutzer gehört.
+
+### Zwei Wege
+
+| Lage | Verhalten | Dauer |
+|---|---|---|
+| nur ein Gerät wartet | entscheidet **sofort** | 0,00 s |
+| mehrere Geräte warten | gemeinsame Sammelfrist, dann ein Vergleich | 1,4 s |
+
+Die Sammelfrist (`SETTLE_SECONDS = 1.4`) ist nötig, weil die Transkripte
+versetzt eintreffen — im Betrieb gemessen bis zu einer Sekunde. Ohne sie
+entscheidet das erste Gerät, bevor das zweite überhaupt da ist. Die 1,4 s sind
+ein bewusster Kompromiss: hörbare Verzögerung bei Konkurrenz, dafür genau eine
+Antwort. Ein einzelnes Gerät zahlt die Wartezeit **nicht**.
+
+### Erst sammeln, dann schreiben
+
+Die Entscheidung läuft in drei Schritten:
+
+1. **Ansprüche merken** — noch kein Gate schreiben.
+2. **Bis zur Frist warten** — alle Ansprüche fallen in denselben Vergleich.
+3. **Genau einmal auswerten** und die Gate-Dateien für **alle** Beteiligten in
+   einem Zug schreiben: Gewinner `true`, Verlierer `false`.
+
+Der Helfer (`gateway/local-voice.mjs`) wartet seinerseits auf diese Datei
+(`TURN_GATE_WAIT_MS = 2600`, muss größer als die Sammelfrist sein).
+
+### Der Fehler, der das nötig machte
+
+Belegt am 27.10.2026, 19:42:
+
+```text
+19:42:16  156 gewinnt (peak=1443)  -> Gate true -> sendet sofort
+19:42:16  88  gewinnt (peak=1907)  -> überholt
+19:42:16  156 wird überholt        -> Gate false, aber zu spät
+19:42:18  88: "final ohne Text"    -> leere Antwort
+```
+
+Zwei Ursachen:
+
+- Das Gate wurde **pro Anspruch** geschrieben. Beim ersten Gerät stand `true`,
+  bevor das zweite eingetroffen war; das spätere `false` kam zu spät.
+- Die Sammelfrist brach sofort ab, weil jedes Gerät beim Eintritt in die
+  Arbitrierung sein `awaiting_command` zurücksetzt — damit sah keiner mehr
+  einen anderen warten, und **beide** fielen gleichzeitig aus dem Fenster.
+
+### Prüfen
+
+Die Regressionstests liegen in `gateway/test_wake_arbiter.py` (6 Fälle, kein
+Gerätezugriff):
+
+```bash
+cd gateway
+~/.local/share/jarvis-realtime-bridge/.venv/bin/python -m unittest test_wake_arbiter -v
+```
+
+Im Betrieb zeigt das Log die Entscheidung:
+
+```bash
+journalctl --user -u jarvis-realtime-bridge -f \
+  | grep -E "Wake arbitration|superseded|final ohne Text"
+```
+
+`final ohne Text` darf nicht mehr auftauchen.
 
 ## Wachwort-Reste im Transkript
 
@@ -313,7 +386,13 @@ Whisper (Rueckfall) und der Favorit **parallel** betreiben und mit
 
 | Dienst | Port | Rolle |
 |---|---|---|
-| Canary 180M Flash INT8 + Silero-VAD | `10301` | **Favorit** |
+| Canary 1B v2 (onnx-asr) + Silero-VAD | `10303` | **aktiver Referenzstand** |
+| Canary 180M Flash INT8 + Silero-VAD | `10301` | leichtere Alternative |
 | faster-whisper small + Silero-VAD | `10300` | Rueckfall |
+
+**Jeder der drei Dienste braucht ein VAD.** Canary hat keines eingebaut; ohne
+VAD schreibt es zu Stille und Rauschen Woerter („Ja.", „Danke.", „Mm."). Die
+Schwellen und das Verhalten stehen in
+[`10-CANARY-FAVORIT.md`](10-CANARY-FAVORIT.md#schwellen-gemessen-nicht-geraten).
 
 Einzelheiten, Installation und Umschalten: [`10-CANARY-FAVORIT.md`](10-CANARY-FAVORIT.md).

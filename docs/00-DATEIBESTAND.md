@@ -137,7 +137,7 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 
 - OpenClaw 2026.10.7: beide gepatchten `dist`-Dateien exakt zu den
   Manifest-`after`-Hashes.
-- Gateway-Routertests: 145/145 grün.
+- Gateway-Routertests: 149/149 grün (fünf Suiten, gemessen 27.10.2026).
 - Lokaler Resolver: 34/34 Offline-Fälle grün.
 - 4B-Basispatch und Helligkeitspatch: auf frischem Upstream-Checkout
   `4632dc51…` sauber anwendbar; Ergebnis enthält `RestoreBrightness()`.
