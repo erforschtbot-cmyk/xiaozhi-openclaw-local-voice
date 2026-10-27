@@ -494,7 +494,7 @@ async function deleteDevice(button) {
   const key = tr.dataset.k;
   const nameFeld = tr.querySelector('input[data-f="name"]');
   const name = nameFeld ? nameFeld.value : key;
-  if (!confirm("„" + name + "“ aus der Liste nehmen?\n\n" +
+  if (!confirm("„" + name + "“ aus der Liste nehmen?\\n\\n" +
                "Das Gerät wird danach nicht mehr geschaltet und nicht mehr " +
                "erkannt. In ioBroker bleibt es unverändert bestehen und kann " +
                "hier jederzeit wieder eingeblendet werden.")) {
