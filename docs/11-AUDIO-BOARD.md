@@ -5,11 +5,10 @@ zweites Jarvis-Gerät: das **nackte** Waveshare **ESP32-S3-AUDIO-Board**
 (SKU 32184/32185). Es nutzt **dieselbe Bridge** und **denselben Host** — es
 unterscheidet sich nur in der Firmware.
 
-> Die Firmware liegt in **beiden** Repositories identisch
-> (`xiaozhi-openclaw-voice-terminal` und `xiaozhi-openclaw-local-voice`) — genau
-> wie beim 4B. Es gibt keine Cloud-/Lokal-Variante des Board-Images. Die Firmware
-> muss also **nicht** angepasst werden, wenn dieses Board an einer lokalen
-> Installation betrieben wird.
+> Die Firmware ist technisch unabhängig von Cloud- oder Lokal-STT/TTS. Für den
+> hier beschriebenen Stand ist dieses lokale Repository maßgeblich. Eine Kopie
+> im Cloud-Repository gilt nur dann als identisch, wenn die Firmwarebäume
+> tatsächlich verglichen wurden; der Name des Repositories ist kein Beleg.
 
 ## Lokale Variante: was zu beachten ist
 

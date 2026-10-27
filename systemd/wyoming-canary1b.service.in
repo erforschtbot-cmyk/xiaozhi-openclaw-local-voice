@@ -1,0 +1,19 @@
+[Unit]
+Description=Wyoming Canary 1B v2 STT (NVIDIA canary-1b-v2 ONNX via onnx-asr)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@CANARY_DIR@
+Environment=HF_HUB_OFFLINE=1
+ExecStart=@CANARY_VENV@/bin/python @CANARY_DIR@/wyoming_canary1b.py \
+  --uri tcp://0.0.0.0:@CANARY_PORT@ \
+  --model-name nemo-canary-1b-v2 \
+  --model-path @MODEL_DIR@ \
+  --language de
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

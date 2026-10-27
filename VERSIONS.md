@@ -21,8 +21,11 @@ Erkennung und Stimme laufen lokal auf dem Host.
 | **Lokale Stimme** | `de_DE-kerstin-low` (16 kHz, 60,2 MB) |
 | **Lokale Erkennung** | `faster-whisper` **small**, int8, CPU (Wyoming-Dienst) |
 | Erkennungsdienst (Rueckfall) | `wyoming-faster-whisper`, Port `10300`, `--vad-filter` |
-| **Lokale Erkennung (Favorit)** | **NVIDIA Canary 180M Flash**, INT8 via `sherpa-onnx` |
-| Erkennungsdienst (Favorit) | `gateway/wyoming_canary.py`, Port `10301`, Silero-VAD |
+| **Lokale Erkennung (aktiver Referenzstand)** | **NVIDIA Canary 1B v2** via `onnx-asr` |
+| Erkennungsdienst (aktiv) | `gateway/wyoming_canary1b.py`, Port `10303` |
+| Canary-1B-Pythonpakete | `onnx-asr==0.12.0`, `onnxruntime==1.31.0`, `wyoming==1.10.2`, `numpy==2.5.4` |
+| Canary-1B-Modell | `nemo-canary-1b-v2`, NVIDIA/onnx-asr, lokaler Modellordner ca. 3,7 GB |
+| Leichtere Alternative | Canary 180M Flash INT8 via `sherpa-onnx`, `gateway/wyoming_canary.py`, Port `10301`, Silero-VAD |
 | Canary-Modellquelle | `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` |
 | Realtime-Modell (nur noch Rueckfall) | `gpt-live-1-codex` |
 | Provider-Stimme (nur noch Rueckfall) | `cove` |
@@ -63,7 +66,7 @@ Gemessen gegen den laufenden Wyoming-Dienst (CPU, int8) mit einem 3,12-s-Satz:
 
 Der frueher laufende `medium`-Dienst war 9- bis 18-mal langsamer als `base`.
 
-### Canary 180M Flash INT8 + Silero-VAD (Favorit)
+### Canary 180M Flash INT8 + Silero-VAD (leichtere, vermessene Alternative)
 
 Gemessen ueber `wyoming_canary.py` (Port `10301`, CPU, 8 Threads).
 

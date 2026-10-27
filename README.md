@@ -13,9 +13,9 @@ Sprachausgabe**. Das gesprochene Wort wird auf dem Host erkannt und
 gesprochen (Piper). **Kein Mikrofon-Audio und keine Stimme geht mehr an
 einen Cloud-Sprachdienst.**
 
-> **Favorit fuer die Erkennung: NVIDIA Canary 180M Flash (INT8) + Silero-VAD.**
-> Es versteht kurze deutsche Alltagsbefehle am Geraet besser als
-> `faster-whisper small` und laeuft auf einem eigenen Port parallel dazu.
+> **Aktiver Referenzstand: NVIDIA Canary 1B v2 über `onnx-asr`, Port 10303.**
+> Canary 180M Flash (INT8) + Silero-VAD auf 10301 bleibt als leichtere,
+> dokumentierte Alternative; `faster-whisper small` auf 10300 ist der Rückfall.
 > Anleitung: [`docs/10-CANARY-FAVORIT.md`](docs/10-CANARY-FAVORIT.md).
 > `faster-whisper small` bleibt als Rueckfall installiert.
 >
@@ -24,11 +24,18 @@ einen Cloud-Sprachdienst.**
 >
 > Die **Cloud-Variante** (Realtime-Stimme über OpenAI, `gpt-live-1-codex`) steht in
 > [`erforschtbot-cmyk/xiaozhi-openclaw-voice-terminal`](https://github.com/erforschtbot-cmyk/xiaozhi-openclaw-voice-terminal).
-> Die **Firmware ist in beiden Repos identisch** — es unterscheidet sich nur die
-> Host-Konfiguration.
+> Für den hier beschriebenen lokalen Aufbau ist **dieses Repository** die
+> maßgebliche Firmwarequelle. Die Cloud-Variante ist ein separates Repository;
+> Gleichheit darf nach Änderungen nicht angenommen, sondern muss per
+> `diff -rq firmware/ .../firmware/` geprüft werden.
 
 Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 [Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
+
+Für eine KI ohne Vorwissen ist
+[`docs/14-KI-NEUAUFBAU-CHECKLISTE.md`](docs/14-KI-NEUAUFBAU-CHECKLISTE.md)
+der Entscheidungs- und Fragenkatalog: beide Geräte, Gateway, OpenClaw-Patch,
+STT/TTS, Echtzeit-Schalten, ioBroker-Erkundung und vergessliche Geräteeinstellungen.
 
 ## Hardware
 
@@ -103,7 +110,7 @@ Python-Bridge  (server.py, systemd: jarvis-realtime-bridge.service)
   ├─ Opus-Audio vom Gerät, Nachhör-Fenster, OTA auf :8766
   ├─ startet Helfer: node local-voice.mjs        ← Erkenung + Agent + Text
   │    ├─ Erkennt Aeusserungsgrenzen (Pegel, 700 ms Stille)
-  │    ├─ Transkribiert lokal: Wyoming (127.0.0.1:10301, Canary  ← Favorit)
+  │    ├─ Transkribiert lokal: Wyoming (127.0.0.1:10303, Canary 1B v2)
   │    └─ Ruft den OpenClaw-Agenten auf (chat.send)
   └─ vertont den Antworttext lokal: piper_speaker.py (Piper, CPU)
           ↓
@@ -121,7 +128,8 @@ Audioausgabe am Gerät. Ueber das Gateway laeuft nur noch das **Denken**
 
 | Dienst | Port | Rolle |
 |---|---|---|
-| Canary 180M Flash INT8 + Silero-VAD | `10301` | **Favorit** |
+| Canary 1B v2 über onnx-asr | `10303` | **aktiver Referenzstand** |
+| Canary 180M Flash INT8 + Silero-VAD | `10301` | leichtere Alternative |
 | faster-whisper small + Silero-VAD | `10300` | Rueckfall |
 
 Die Bridge waehlt per `--stt-uri`. Umstellen ist ein Einzeiler — siehe
@@ -137,8 +145,9 @@ Die Bridge waehlt per `--stt-uri`. Umstellen ist ein Einzeiler — siehe
 3. `gateway/local_stt.mjs` — Wyoming-Protokoll und Aeusserungsgrenzen.
 4. `gateway/piper_speaker.py` — haelt das Piper-Stimmmodell warm und wandelt
    Text in PCM mit der vom Gerät erwarteten Rate (24 kHz).
-5. `gateway/wyoming_canary.py` — **Wyoming-Server fuer Canary 180M Flash**
-   mit Silero-VAD (Favorit, Port `10301`).
+5. `gateway/wyoming_canary1b.py` — aktiver Wyoming-Server für Canary 1B v2
+   über `onnx-asr` (Port `10303`); `wyoming_canary.py` ist die leichtere
+   180M-/Silero-Alternative auf Port `10301`.
 
 Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 [`docs/08-LOKALE-ERKENNUNG.md`](docs/08-LOKALE-ERKENNUNG.md),
@@ -156,7 +165,7 @@ Details: [`docs/07-LOKALE-STIMME.md`](docs/07-LOKALE-STIMME.md),
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
 | Bridge (Python, WebSocket-Server) | `gateway/server.py` |
 | Lokale Erkennung (Node) | `gateway/local-voice.mjs`, `gateway/local_stt.mjs` |
-| Lokale Erkennung (Canary, Favorit) | `gateway/wyoming_canary.py` |
+| Lokale Erkennung (aktiver Referenzstand) | `gateway/wyoming_canary1b.py` |
 | Lokale Sprachausgabe (Piper) | `gateway/piper_speaker.py` |
 | Provider-Helfer (Rückfallweg) | `gateway/openclaw-talk-realtime.mjs` |
 | OpenClaw-`dist`-Patches für den Voice-Pfad (**nur Notfall-Hilfe**) | `scripts/apply-openclaw-voice-dist-patches.py` |

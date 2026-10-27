@@ -1,0 +1,19 @@
+[Unit]
+Description=Wyoming Canary 1B v2 STT (NVIDIA canary-1b-v2 ONNX via onnx-asr)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/openclaw/wyoming-canary1b
+Environment=HF_HUB_OFFLINE=1
+ExecStart=/home/openclaw/stt-cand5-venv/bin/python /home/openclaw/wyoming-canary1b/wyoming_canary1b.py \
+  --uri tcp://0.0.0.0:10303 \
+  --model-name nemo-canary-1b-v2 \
+  --model-path /home/openclaw/.cache/jarvis-stt-cand5-canary1b-onnx \
+  --language de
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

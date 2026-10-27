@@ -1,5 +1,10 @@
 # Von leerem USB-Gerät zu OpenClaw — Einstieg und Audit
 
+Wenn eine KI diesen Aufbau ohne Vorwissen übernimmt, liest sie zusätzlich
+[`14-KI-NEUAUFBAU-CHECKLISTE.md`](14-KI-NEUAUFBAU-CHECKLISTE.md). Dort stehen
+die Rückfragen, die nicht aus Code ableitbar sind, und die vollständige Kette
+von beiden Firmwarezielen bis ioBroker, STT und TTS.
+
 Stand: 23.10.2026. **Die lokale Sprachkette (Canary + Piper) ist am Gerät
 abgenommen.** Der Host-Aufbau ist durch `scripts/install-host.sh` abgedeckt und
 prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.10.7 vor.

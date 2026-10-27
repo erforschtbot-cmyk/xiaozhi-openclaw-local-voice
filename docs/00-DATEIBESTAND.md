@@ -89,6 +89,7 @@ werden aus ioBroker erzeugt und gehören nicht ins Repository.
 | Provider-Anmeldung und Modell | interaktiv im eigenen OpenClaw einrichten |
 | Piper-Stimme | `~/.local/share/piper-voices/de_DE-kerstin-low.onnx` |
 | Wyoming-STT | Referenz `127.0.0.1:10303` |
+| Canary-1B-Laufzeit | `gateway/wyoming_canary1b.py`, `gateway/requirements-canary1b.txt`, `systemd/wyoming-canary1b.service.in` |
 | ioBroker Simple API | Referenz `http://192.168.178.24:8087`, per `IOBROKER_SIMPLE_API` änderbar |
 | Firmware-Hardware | Waveshare Smart-86-Box/Touch-LCD-4B oder Audio-Board |
 | USB-/Seriellrechte | nötig nur zum Flashen |

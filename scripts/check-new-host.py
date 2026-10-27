@@ -128,11 +128,22 @@ else:
 
 # --- Dienste --------------------------------------------------------------
 if shutil.which("systemctl"):
-    for service in ["openclaw-gateway.service", "jarvis-realtime-bridge.service"]:
+    for service in [
+        "openclaw-gateway.service",
+        "jarvis-realtime-bridge.service",
+        "wyoming-canary1b.service",
+    ]:
         result = subprocess.run(
             ["systemctl", "--user", "is-active", "--quiet", service],
             capture_output=True)
         check(result.returncode == 0, "Dienst aktiv: " + service)
+
+model_dir = home / ".cache/jarvis-stt-cand5-canary1b-onnx"
+for filename in [
+    "encoder-model.onnx", "encoder-model.onnx.data", "decoder-model.onnx",
+    "vocab.txt", "config.json",
+]:
+    check((model_dir / filename).is_file(), "Canary-1B-Modell: " + filename)
 
 print()
 print("Nur Vorbedingungen geprueft; weder Provider-Login noch Audio, WLAN, "

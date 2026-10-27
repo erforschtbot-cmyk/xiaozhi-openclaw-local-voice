@@ -155,8 +155,28 @@ Das live laufende Skript ist `gateway/wyoming_canary1b.py` (Laufzeit
 ```
 
 Abhängigkeiten: `onnx-asr`, `onnxruntime`, `wyoming`, `numpy` in einem eigenen
-venv. Der Modellordner enthält `encoder-model.onnx`, `decoder-model.onnx`,
-`vocab.txt` und `config.json` (`model_type: nemo-conformer-aed`) — rund 3,7 GB.
+venv. Der Modellordner enthält `encoder-model.onnx`,
+`encoder-model.onnx.data`, `decoder-model.onnx`, `vocab.txt` und
+`config.json` (`model_type: nemo-conformer-aed`) — rund 3,7 GB.
+
+Der exakt gepinnte Referenzsatz liegt in
+`gateway/requirements-canary1b.txt`. Die Unit-Vorlage steht unter
+`systemd/wyoming-canary1b.service.in`; die auf dem Referenzhost aktive,
+ausgefüllte Fassung unter `systemd/wyoming-canary1b.service.reference`.
+
+```bash
+python3 -m venv ~/stt-cand5-venv
+~/stt-cand5-venv/bin/python -m pip install -r gateway/requirements-canary1b.txt
+mkdir -p ~/wyoming-canary1b
+install -m 0755 gateway/wyoming_canary1b.py ~/wyoming-canary1b/
+```
+
+Beim ersten Modellbezug `HF_HUB_OFFLINE` noch nicht setzen; `onnx-asr`
+lädt `nemo-canary-1b-v2` in den angegebenen Modellpfad. Erst nachdem
+`encoder-model.onnx`, `encoder-model.onnx.data`, `decoder-model.onnx`,
+`vocab.txt` und
+`config.json` vollständig vorhanden sind, die Unit mit
+`HF_HUB_OFFLINE=1` starten.
 
 ## Bridge darauf umstellen
 
