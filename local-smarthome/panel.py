@@ -573,40 +573,60 @@ async function post(url, body) {
 // Jedes Feld merkt sich seinen Ausgangswert in data-v. Weicht der Inhalt ab,
 // wird die Zeile markiert; gespeichert wird ausschliesslich in saveAll().
 function touch(input) {
-  const tr = input.closest("tr");
-  const geaendert = input.value !== input.dataset.v;
-  input.classList.toggle("changed", geaendert);
-  tr.classList.toggle("dirty", !!tr.querySelector("input.changed"));
-  updateDirty();
+  markiere(input);
 }
 
 // Aenderung in einem Faehigkeits-Feld (Detailzeile). Die Markierung gehoert
 // an die Hauptzeile darueber - sonst zaehlt der Speichern-Knopf sie nicht.
-function touchCap(input) {
-  const detail = input.closest("tr");
-  const main = detail && detail.previousElementSibling;
-  const geaendert = input.value !== (input.dataset.v || "");
-  input.classList.toggle("changed", geaendert);
+// WICHTIG: In der Detailzeile ist jede Faehigkeit selbst ein <tr>.
+// closest("tr") landet deshalb auf der Faehigkeitszeile, nicht auf der
+// Detailzeile - die Markierung ging dadurch nie an die Hauptzeile und der
+// Speichern-Knopf blieb grau (belegt 28.10.2026). Deshalb gezielt nach
+// tr.detail suchen.
+function detailVon(el) {
+  return el.closest("tr.detail");
+}
+
+// Hauptzeile zu einem Feld finden - egal ob es in der Hauptzeile oder in der
+// Detailzeile darunter liegt. Die Detailzeile ist das naechste Element nach
+// der Hauptzeile.
+function mainVon(el) {
+  const detail = detailVon(el);
+  if (detail) return detail.previousElementSibling;
+  return el.closest("tr.main");
+}
+
+// Eine Aenderung markieren. Die Markierung gehoert IMMER an die Hauptzeile,
+// sonst zaehlt der Speichern-Knopf sie nicht. Geprueft werden beide Zeilen:
+// bleibt in der Hauptzeile nichts offen, aber in der Detailzeile schon, muss
+// die Markierung stehen bleiben.
+function markiere(el) {
+  const detail = detailVon(el);
+  const main = mainVon(el);
+  const geaendert = el.value !== (el.dataset.v || "");
+  el.classList.toggle("changed", geaendert);
   if (main) {
-    main.classList.toggle("dirty", !!(
-      main.querySelector("input.changed")
-      || (detail.querySelectorAll("input.changed").length)
-    ));
+    const offen = main.querySelectorAll("input.changed").length
+      || (detail ? detail.querySelectorAll("input.changed").length : 0);
+    main.classList.toggle("dirty", !!offen);
   }
   updateDirty();
+}
+
+function touchCap(input) {
+  markiere(input);
 }
 
 function clearCap(button) {
   // Auf den automatisch ermittelten Wert zuruecksetzen. Geschrieben wird
   // erst beim Speichern.
-  const detail = button.closest("tr");
+  const detail = detailVon(button);
+  if (!detail) return;
   const feld = detail.querySelector("input[data-cap]");
   if (!feld) return;
   feld.value = feld.dataset.base || "";
   feld.classList.add("changed");
-  const main = detail.previousElementSibling;
-  if (main) main.classList.add("dirty");
-  updateDirty();
+  markiere(feld);
 }
 
 function sammle() {
