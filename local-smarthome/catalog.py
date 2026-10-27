@@ -96,7 +96,7 @@ def build():
     return payload
 
 
-def load(refresh=False):
+def load(refresh=False, include_deleted=False):
     if not refresh and os.path.exists(CACHE):
         try:
             with open(CACHE, encoding="utf-8") as handle:
@@ -109,7 +109,8 @@ def load(refresh=False):
                 # Vom Eigentuemer vergebene Namen ueberlagern die Rohdaten.
                 return {"builtAt": payload.get("builtAt"),
                         "base": payload.get("base"),
-                        "devices": overrides.apply(payload.get("devices") or [])}
+                        "devices": overrides.apply(payload.get("devices") or [],
+                                                   include_deleted)}
         except (OSError, ValueError):
             pass
     return build()

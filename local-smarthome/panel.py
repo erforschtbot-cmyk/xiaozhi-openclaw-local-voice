@@ -102,7 +102,7 @@ def collect():
     """
     local = {}
     try:
-        for dev in localmap.load().get("devices") or []:
+        for dev in localmap.load(include_deleted=True).get("devices") or []:
             caps = dev.get("caps") or {}
             target = None
             for cap in CAPS_ORDER:
@@ -110,6 +110,7 @@ def collect():
                     target = caps[cap]
                     break
             local[(dev.get("name") or "").casefold()] = {
+                "deleted": bool(dev.get("deleted")),
                 "name": dev.get("name"),
                 "baseName": dev.get("baseName") or dev.get("name"),
                 "caps": sorted(caps),
@@ -122,12 +123,13 @@ def collect():
         print(f"localmap nicht lesbar: {exc!r}", flush=True)
 
     devices = []
-    for dev in catalog.load().get("devices") or []:
+    for dev in catalog.load(include_deleted=True).get("devices") or []:
         name = dev.get("name") or ""
         key = name.casefold()
         writable = [c for c in (dev.get("writable") or []) if c]
         entry = {
             "id": dev.get("id"),
+            "deleted": bool(dev.get("deleted")),
             "name": name,
             "baseName": dev.get("baseName") or name,
             "caps": writable,
@@ -150,6 +152,7 @@ def collect():
     for hit in local.values():
         devices.append({
             "id": None,
+            "deleted": bool(hit.get("deleted")),
             "name": hit["name"],
             "baseName": hit["baseName"],
             "caps": hit["caps"],
@@ -195,7 +198,10 @@ def collect():
         # Dann gibt es keinen Zustand zu zeigen - das ist kein Fehler.
         dev["readable"] = bool(info is not None and info.get("val") is not None
                                or (info or {}).get("ts"))
-    devices.sort(key=lambda d: ((d.get("room") or "").casefold(), (d.get("name") or "").casefold()))
+    # Ausgeblendete ans Ende, damit sie die normale Liste nicht stoeren.
+    devices.sort(key=lambda d: (bool(d.get("deleted")),
+                                (d.get("room") or "").casefold(),
+                                (d.get("name") or "").casefold()))
     return devices
 
 
@@ -262,6 +268,10 @@ input.dpin.changed{border-color:var(--warn)}
 input.inline.changed{border-color:var(--warn);background:#221c10}
 tr.dirty td{background:#1d1a12}
 button#savebtn:disabled{opacity:.45;cursor:default}
+button.del{color:var(--bad);border-color:#5d2626}
+button.undo{color:var(--ok);border-color:#1f4d2b}
+tr.gone td{opacity:.45}
+tr.gone td input{text-decoration:line-through}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
 #msg.ok{border-color:#1f4d2b} #msg.bad{border-color:#5d2626}
@@ -325,7 +335,7 @@ function row(d) {
   const base = d.baseName && d.baseName !== d.name
     ? '<div class="base">vorher: ' + esc(d.baseName) + '</div>' : "";
   const room = d.room || "";
-  return '<tr data-k="' + esc(key) + '">'
+  return '<tr data-k="' + esc(key) + '" class="' + (d.deleted ? "gone" : "") + '">'
     + '<td><input class="inline" data-f="name" data-v="' + esc(d.name)
     + '" value="' + esc(d.name) + '" oninput="touch(this)">' + base + '</td>'
     + '<td><input class="inline" data-f="room" data-v="' + esc(room)
@@ -340,6 +350,10 @@ function row(d) {
     + '<td>' + (d.targetOverridden
         ? '<button onclick="clearTarget(this)" title="Vorgabe entfernen">×</button>'
         : '') + '</td>'
+    + '<td>' + (d.deleted
+        ? '<button class="undo" onclick="restoreDevice(this)" title="wieder einblenden">einblenden</button>'
+        : '<button class="del" onclick="deleteDevice(this)" title="ausblenden">löschen</button>')
+    + '</td>'
     + '</tr>';
 }
 
@@ -363,17 +377,19 @@ function render() {
     const list = groups.get(room);
     return '<div class="roomgroup"><div class="roomhead">' + esc(room)
       + ' <span class="n">' + list.length + '</span></div>'
-      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th><th></th></tr></thead><tbody>'
+      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th><th></th><th></th></tr></thead><tbody>'
       + list.map(row).join("") + '</tbody></table></div>';
   }).join("");
 
   const local = DATA.filter(d => d.route === "local").length;
   const broken = DATA.filter(d => d.broken && d.broken.length).length;
+  const weg = DATA.filter(d => d.deleted).length;
   document.getElementById("stats").innerHTML =
-    '<span><b>' + DATA.length + '</b> Geräte</span>'
+    '<span><b>' + (DATA.length - weg) + '</b> Geräte</span>'
     + '<span><b>' + local + '</b> lokal schaltbar</span>'
-    + '<span><b>' + (DATA.length - local) + '</b> nur über Alexa</span>'
-    + '<span><b>' + broken + '</b> mit defektem Ziel</span>';
+    + '<span><b>' + (DATA.length - weg - local) + '</b> nur über Alexa</span>'
+    + '<span><b>' + broken + '</b> mit defektem Ziel</span>'
+    + (weg ? '<span><b>' + weg + '</b> ausgeblendet</span>' : '');
 }
 
 async function load() {
@@ -471,6 +487,43 @@ function clearTarget(button) {
   updateDirty();
 }
 
+// Löschen heißt hier: aus der Liste nehmen. In ioBroker wird NICHTS
+// angetastet - das Gerät bleibt dort vollständig bestehen.
+async function deleteDevice(button) {
+  const tr = button.closest("tr");
+  const key = tr.dataset.k;
+  const nameFeld = tr.querySelector('input[data-f="name"]');
+  const name = nameFeld ? nameFeld.value : key;
+  if (!confirm("„" + name + "“ aus der Liste nehmen?\n\n" +
+               "Das Gerät wird danach nicht mehr geschaltet und nicht mehr " +
+               "erkannt. In ioBroker bleibt es unverändert bestehen und kann " +
+               "hier jederzeit wieder eingeblendet werden.")) {
+    return;
+  }
+  try {
+    await post("/api/delete", {id: key, deleted: true});
+    toast("„" + name + "“ aus der Liste genommen", "ok");
+    await load();
+  } catch (e) {
+    toast("Nicht entfernt: " + e.message, "bad");
+  }
+}
+
+async function restoreDevice(button) {
+  const tr = button.closest("tr");
+  const key = tr.dataset.k;
+  const nameFeld = tr.querySelector('input[data-f="name"]');
+  const name = nameFeld ? nameFeld.value : key;
+  if (!confirm("„" + name + "“ wieder einblenden?")) return;
+  try {
+    await post("/api/delete", {id: key, deleted: false});
+    toast("„" + name + "“ wieder da", "ok");
+    await load();
+  } catch (e) {
+    toast("Nicht eingeblendet: " + e.message, "bad");
+  }
+}
+
 async function testSentence() {
   const text = document.getElementById("sentence").value;
   const out = document.getElementById("result");
@@ -547,6 +600,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 saved = overrides.save_batch(changes)
                 self._json(200, {"ok": True, "saved": saved})
+                return
+            if path == "/api/delete":
+                overrides.set_deleted(body.get("id"), bool(body.get("deleted")))
+                self._json(200, {"ok": True})
                 return
             if path in ("/api/target", "/api/change-target"):
                 overrides.set_target(body.get("id"), body.get("datapoint"),

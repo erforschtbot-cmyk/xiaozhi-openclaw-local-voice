@@ -24,7 +24,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 OVERRIDES = os.path.join(HERE, "names_overrides.json")
 
-_EMPTY = {"names": {}, "rooms": {}, "targets": {}}
+_EMPTY = {"names": {}, "rooms": {}, "targets": {}, "deleted": []}
 
 
 def _read() -> dict:
@@ -38,6 +38,8 @@ def _read() -> dict:
     data.setdefault("names", {})
     data.setdefault("rooms", {})
     data.setdefault("targets", {})
+    if not isinstance(data.get("deleted"), list):
+        data["deleted"] = []
     return data
 
 
@@ -187,7 +189,35 @@ def save_batch(changes: list) -> int:
     return saved
 
 
-def apply(devices: list) -> list:
+def deleted_ids() -> list:
+    """Ausgeblendete Geraete (Kennung = Datenpunkt-id, sonst Sprechname)."""
+    return [str(x) for x in (_read().get("deleted") or []) if str(x).strip()]
+
+
+def set_deleted(ident: str, deleted: bool) -> dict:
+    """Geraet ausblenden oder zurueckholen.
+
+    Bewusst kein Loeschen in ioBroker: die Simple-API kennt keinen
+    delete-Befehl ("command delete unknown", geprueft 27.10.2026). Was hier
+    passiert, ist ein Ausblenden - das Geraet verschwindet aus Panel UND
+    Sprachweg, bleibt in ioBroker aber unangetastet.
+    """
+    data = _read()
+    key = str(ident or "").strip()
+    if not key:
+        raise ValueError("Kennung fehlt")
+    aktuell = [str(x) for x in (data.get("deleted") or [])]
+    if deleted:
+        if key not in aktuell:
+            aktuell.append(key)
+    else:
+        aktuell = [x for x in aktuell if x != key]
+    data["deleted"] = aktuell
+    _write(data)
+    return data
+
+
+def apply(devices: list, include_deleted: bool = False) -> list:
     """Overrides ueber eine Geraeteliste legen (in place, Liste zurueck).
 
     Zugeordnet wird ueber `id`; fehlt die, ueber den urspruenglichen Namen.
@@ -195,6 +225,8 @@ def apply(devices: list) -> list:
     data = _read()
     names = data["names"]
     rooms = data["rooms"]
+    weg = {str(x) for x in (data.get("deleted") or [])}
+    keep = []
     for dev in devices:
         if not isinstance(dev, dict):
             continue
@@ -206,4 +238,11 @@ def apply(devices: list) -> list:
             dev["name"] = names[ident]
         if ident in rooms:
             dev["room"] = rooms[ident]
-    return devices
+        if ident in weg:
+            dev["deleted"] = True
+            # Im Sprachweg muss das Geraet verschwinden, im Panel nicht:
+            # sonst laesst es sich nie wieder zurueckholen.
+            if not include_deleted:
+                continue
+        keep.append(dev)
+    return keep

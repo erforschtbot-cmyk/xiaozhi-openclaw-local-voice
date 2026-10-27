@@ -88,6 +88,28 @@ alexa2.0.Smart-Home-Devices.<id>.powerState   Alexa-Kanal
 Bevor du speicherst: Der Datenpunkt muss existieren und `write: true` haben,
 sonst schlägt das Schalten später fehl. Die Seite prüft das nicht.
 
+### Gerät aus der Liste nehmen
+
+Der Knopf „löschen" nimmt ein Gerät aus der Liste — mit Sicherheitsabfrage.
+Es wird danach **nicht mehr geschaltet und nicht mehr erkannt**, bleibt aber
+in ioBroker vollständig bestehen.
+
+```text
+löschen   → deleted-Liste in names_overrides.json, Zeile wird durchgestrichen
+          → Sprachweg filtert es heraus ("kein-geraet")
+          → Panel zeigt es weiter, am Ende der Liste, mit Knopf "einblenden"
+einblenden → Eintrag wird entfernt, Gerät ist wieder schaltbar
+```
+
+**In ioBroker wird nichts gelöscht.** Das ist keine Vorsicht, sondern die
+einzige Möglichkeit: Die Simple-API kennt keinen Löschbefehl — `/delete/…` und
+`/delObject/…` antworten beide mit `command delete unknown` (geprüft
+27.10.2026). Ein echtes Entfernen ginge nur über den ioBroker-Admin oder
+`iobroker object del`.
+
+Ausgeblendete Geräte erscheinen in der Statistik als „N ausgeblendet" und
+tragen eine durchgestrichene Zeile.
+
 ### Satz testen
 
 Der Knopf „Auflösen" schickt den Satz durch `control.handle(..., dry_run=True)`.
@@ -103,6 +125,8 @@ im Wohnzimmer zu hören.
   erscheint also nur, wenn er dort belegt ist.
 - Ein geänderter Datenpunkt wird nicht auf Existenz geprüft. Ein Tippfehler
   fällt erst beim Schalten auf.
+- „Löschen" heißt ausblenden. Das Gerät verschwindet aus Liste und Sprachweg,
+  bleibt in ioBroker aber unverändert.
 
 ## Erstaufbau und Prüfung
 
