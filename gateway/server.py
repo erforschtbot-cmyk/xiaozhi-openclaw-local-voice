@@ -362,15 +362,6 @@ class XiaozhiSession:
         # bis zum fertigen Transkript hochgehalten. Grundlage des Vergleichs,
         # welches Geraet den Nutzer wirklich gehoert hat.
         self.turn_peak = 0
-        # Zeitpunkt des letzten Mikrofonpakets mit Sprache. NICHT turn_peak:
-        # das ist ein Dauer-Maximum und wurde vom Wake-Wort gesetzt, danach
-        # steigt es nie mehr (belegt 22.10.2026, 21:45: Wake 12503, danach
-        # Sprache 1283/1090 -> Waechter sah "keine Worte" und schloss).
-        self.last_mic_activity_at = 0.0
-        # Wurde seit dem Wecken ueberhaupt Sprache erkannt? Entscheidet, ob die
-        # Stille-Regel greifen darf: ohne Sprache -> Standby, MIT Sprache ->
-        # warten, das Transkript braucht laenger als 5 s.
-        self.speech_seen_since_wake = False
         # Mikrofonpakete, die VOR dem Start des Sprachprozesses ankommen.
         # Ohne diesen Puffer gingen sie verloren: belegt 22.10.2026, zwischen
         # Wake (21:50:49) und bereitem Prozess (21:50:51) sind das rund 1,1 s.
@@ -414,13 +405,10 @@ class XiaozhiSession:
         self.followup_forwarded_packets = 0
         self.followup_peak = 0
         self.followup_audio_guard_until = 0.0
-        self.audio_guard_until = 0.0
         # Der Aktivierungston kommt 1-3 s nach `listen start`, nicht sofort.
         # Eine feste Sperre ab `listen start` deckt ihn deshalb nicht ab
         # (belegt 27.10.2026 18:47: peak=3180 erst 2 s nach dem Wecken).
         # Stattdessen: der ERSTE laute Block nach dem Wecken ist der Ton.
-        self.popup_armed = False
-        self.popup_drop_until = 0.0
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
@@ -1077,12 +1065,7 @@ class XiaozhiSession:
         self.audio_diag_blocks = 0
         self.audio_diag_peak = 0
         self.lead_silence = bytearray()
-        self.last_mic_activity_at = 0.0
-        self.speech_seen_since_wake = False
         self.mic_packets_total = 0
-        self.audio_guard_until = 0.0
-        self.popup_armed = False
-        self.popup_drop_until = 0.0
 
         env = os.environ.copy()
         env.update(
@@ -1160,16 +1143,14 @@ class XiaozhiSession:
             self.helper_guard = None
 
     def arm_helper_guard(self, process):
-        """Genau EINE Regel, identisch zum Nachhoerfenster.
+        """Nur noch Startueberwachung des Helfers.
 
-        Belegt am 22.10.2026: Nach dem Wake-Wort mit anschliessender Stille
-        blieb das Geraet dauerhaft gruen. Grund: die 5-Sekunden-Frist gab es
-        ausschliesslich im Nachhoerfenster NACH einer Antwort. Der erste
-        Zustand (Wake, dann nichts gesagt) hatte keine, seit ich die alten,
-        falschen Fristen entfernt hatte.
-
-        Jetzt gilt in beiden Faellen dasselbe: 5 Sekunden ohne ein erkanntes
-        Wort -> Bereitschaft. Kommt Sprache, wird die Frist verschoben.
+        Die frueher hier sitzende 5-Sekunden-Stille-Regel („Jarvis", dann
+        nichts gesagt -> Bereitschaft) wurde am 27.10.2026 entfernt: seit dem
+        Silero-VAD im STT-Dienst kommt Rauschen gar nicht mehr als Text an.
+        Blieb doch einmal ein Wort uebrig, ist eine Antwort harmlos — die Frist
+        kostete dagegen bei jedem Wecken 5 s und brach sogar laufende,
+        leise gesprochene Saetze ab.
         """
         self.cancel_helper_guard()
 
@@ -1192,37 +1173,6 @@ class XiaozhiSession:
             except asyncio.CancelledError:
                 return
 
-            loop = asyncio.get_running_loop()
-            idle_since = loop.time()
-            while True:
-                try:
-                    await asyncio.sleep(0.5)
-                except asyncio.CancelledError:
-                    return
-                if process is not self.process or process.returncode is not None:
-                    return
-                if self.input_stopped:
-                    return
-                # Ein erkanntes Wort beendet die Frist: der Turn laeuft.
-                if self.transcript_final_at > 0 or self.tts_started or self.pending_tool:
-                    return
-                # Sobald Sprache erkannt wurde, NICHT mehr auf die Uhr schauen.
-                # Das Transkript braucht laenger als die Stille-Frist: gemessen
-                # am 22.10.2026 kam Sprache um 22:17:49 (peak=1383), das
-                # Transkript aber nie, weil um 22:17:54 abgebrochen wurde.
-                if self.speech_seen_since_wake:
-                    return
-                if self.last_mic_activity_at > idle_since:
-                    idle_since = self.last_mic_activity_at
-                    continue
-                if loop.time() - idle_since >= self.WAKE_IDLE_SECONDS:
-                    print(
-                        f"{self.tag} No words for {self.WAKE_IDLE_SECONDS:.0f}s "
-                        "after wake; returning to standby",
-                        flush=True,
-                    )
-                    await self.return_to_standby("silence_after_wake")
-                    return
 
         self.helper_guard = asyncio.create_task(guard())
 
@@ -1391,12 +1341,9 @@ class XiaozhiSession:
     # akustische Ereignis: Ton 0,49 s + silenceMs 0,70 s = 1,14 s.
     # Eine Sperre dieser Laenge verwirft nur den Ton; echte Sprache beginnt
     # erst, nachdem der Nutzer ihn gehoert hat, und bleibt erhalten.
-    POPUP_GUARD_SECONDS = 0.55
 
     # Frist nach dem Wecken ohne erkanntes Wort. Bewusst NICHT
     # followup_seconds(): das ist das Nachhoerfenster NACH einer Antwort und
-    # soll laenger bleiben. Hier geht es nur um "Jarvis" ohne Befehl.
-    WAKE_IDLE_SECONDS = 5.0
 
     # Ab diesem Pegel gilt ein Provider-Block als Sprache. Gemessen: reine
     # Stille liegt bei Peak 0, normale Sprache bei 700..17000. Der Wert ist
@@ -2359,40 +2306,10 @@ class XiaozhiSession:
             # Aeusserungserkennung faellt sonst nicht auf.
             samples = memoryview(pcm).cast("h")
             peak = max((abs(sample) for sample in samples), default=0)
-            # Waehrend des Aktivierungstons NICHT als Sprache werten. Sonst
-            # setzt der Ton `speech_seen_since_wake` und der 5-Sekunden-Rueckweg
-            # steigt aus (belegt 27.10.2026 18:47: peak=3180 direkt nach dem
-            # Wecken, danach 13 s Zuhoeren ohne Befehl).
-            loop_now = asyncio.get_running_loop().time()
-            if getattr(self, "popup_armed", False) and peak >= self.MIC_SPEECH_PEAK:
-                # Erster lauter Block nach dem Wecken = Aktivierungston.
-                self.popup_armed = False
-                self.popup_drop_until = loop_now + self.POPUP_GUARD_SECONDS
-                print(
-                    f"{self.tag} Aktivierungston erkannt (peak={peak}); "
-                    f"{self.POPUP_GUARD_SECONDS * 1000:.0f} ms verworfen",
-                    flush=True,
-                )
-            in_popup_guard = (
-                loop_now < getattr(self, "audio_guard_until", 0.0)
-                or loop_now < getattr(self, "popup_drop_until", 0.0)
-            )
-            if in_popup_guard:
-                # Ton: nicht als Sprache zaehlen und nicht an die Erkennung
-                # geben. Sonst entwaffnet er den 5-Sekunden-Rueckweg.
-                self.audio_packets += 1
-                self.audio_peak = max(self.audio_peak, peak)
-                return
             if self.awaiting_command:
                 # Laeuft der laufende Befehl, wird der hoechste Pegel seit dem
                 # Wecken festgehalten. Das ist die Grundlage des Vergleichs.
                 self.turn_peak = max(self.turn_peak, peak)
-            # Getrennt davon: WANN zuletzt Sprache ankam. Gemessen am Geraet
-            # liegt Stille bei Peak 40-50, Sprache ab etwa 1000. Die Schwelle
-            # 300 liegt dazwischen und ist damit kein geratener Wert.
-            if peak >= self.MIC_SPEECH_PEAK:
-                self.last_mic_activity_at = asyncio.get_running_loop().time()
-                self.speech_seen_since_wake = True
             self.audio_packets += 1
             self.audio_peak = max(self.audio_peak, peak)
             if self.audio_packets % 25 == 0:
@@ -2429,9 +2346,6 @@ class XiaozhiSession:
             and self.process.stdin
             and not self.process.stdin.is_closing()
         ):
-            if asyncio.get_running_loop().time() < getattr(self, "audio_guard_until", 0.0):
-                # Aktivierungston: nicht an die Erkennung geben.
-                return
             if (
                 self.followup_open
                 and asyncio.get_running_loop().time()
@@ -2533,15 +2447,6 @@ class XiaozhiSession:
                     self.turn_peak = 0
                     self.awaiting_command = True
                     self.input_stopped = False
-                    # Der Aktivierungston laeuft jetzt; seine Laenge nicht
-                    # als Sprachbeginn werten (siehe POPUP_GUARD_SECONDS).
-                    self.audio_guard_until = (
-                        asyncio.get_running_loop().time() + self.POPUP_GUARD_SECONDS
-                    )
-                    # Ton kommt spaeter: auf den ersten lauten Block warten.
-                    # Im Nachhoerfenster ist der Ton schon durch.
-                    self.popup_armed = not self.followup_open
-                    self.popup_drop_until = 0.0
                     print(f"{self.tag} Listen start from device", flush=True)
                     await self.start_realtime()
                     # Waechter bei JEDEM Wecken neu bewaffnen. Bisher geschah
