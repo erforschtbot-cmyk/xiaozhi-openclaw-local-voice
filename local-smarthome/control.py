@@ -177,7 +177,11 @@ def execute(resolution, dry_run=False):
     # Vorgegebenes Ziel schlaegt den abgeleiteten Datenpunkt. Betrifft den
     # Alexa-Zweig (device_id + state); der lokale Zweig wird in
     # local_target() behandelt.
-    vorgabe = overrides.target_for(resolution.device_id, resolution.device)
+    # Faehigkeit mitgeben, damit eine Vorgabe fuer genau diesen Datenpunkt
+    # greift (etwa Farbe als hex_color statt JSON). state ist der Name der
+    # Faehigkeit im Alexa-Zweig: powerState, brightness, colorName, ...
+    _cap = _CAP_FOR_STATE.get(str(resolution.state or ""), resolution.state)
+    vorgabe = overrides.target_for(resolution.device_id, resolution.device, cap=_cap)
     dp = vorgabe["datapoint"] if vorgabe else f"{resolution.device_id}.{resolution.state}"
     value = resolution.value
 
@@ -230,7 +234,9 @@ def local_target(device_name, action, value=None, ident=None):
     # Vom Eigentuemer vorgegebenes Ziel hat Vorrang vor dem abgeleiteten.
     # Gedacht fuer defekte Aliasse und falsch erkannte Aktoren; ohne diese
     # Pruefung waere die Angabe im Panel reine Anzeige.
-    vorgabe = overrides.target_for(ident, device_name)
+    # Faehigkeit bestimmen: die Aktion sagt, WELCHER Datenpunkt gebraucht wird.
+    _cap = LOCAL_CAP_FOR.get(action) or ("setpoint" if action == "temperature" else None)
+    vorgabe = overrides.target_for(ident, device_name, cap=_cap)
     if vorgabe:
         ziel = vorgabe["datapoint"]
         cap = (vorgabe.get("cap") or "").strip()
@@ -275,6 +281,19 @@ def local_target(device_name, action, value=None, ident=None):
             return target, not bool(current)
         return target, value
     return None
+
+
+# Alexa-Faehigkeitsname -> unsere Kurzform. Noetig, damit eine Vorgabe fuer
+# "color" auch greift, wenn der Alexa-Zweig von "colorName" spricht.
+_CAP_FOR_STATE = {
+    "powerState": "onoff",
+    "active": "onoff",
+    "brightness": "brightness",
+    "percentage": "brightness",
+    "colorName": "color",
+    "colorTemperatureName": "colortemp",
+    "targetSetpoint": "setpoint",
+}
 
 
 # Uebersetzung lokale Faehigkeit -> Wortschatz des Resolvers

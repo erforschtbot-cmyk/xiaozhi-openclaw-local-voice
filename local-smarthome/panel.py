@@ -41,6 +41,19 @@ BASE = settings.base()
 CAPS_ORDER = ("onoff", "brightness", "color", "colortemp", "position",
               "temperature", "targetTemperature")
 
+# Alexa-Faehigkeitsname -> Kurzform der Oberflaeche. Die Namen unterscheiden
+# sich: alexa2 spricht von powerState/colorName, localmap von onoff/color.
+CAP_FROM_ALEXA = {
+    "powerState": "onoff",
+    "active": "onoff",
+    "brightness": "brightness",
+    "percentage": "brightness",
+    "colorName": "color",
+    "colorTemperatureName": "colortemp",
+    "targetSetpoint": "setpoint",
+    "temperature": "temperature",
+}
+
 
 def _http_json(url: str, payload=None, timeout: float = 8.0):
     data = None
@@ -118,6 +131,7 @@ def collect():
                 "name": dev.get("name"),
                 "baseName": dev.get("baseName") or dev.get("name"),
                 "caps": sorted(caps),
+                "capTargets": {k: v for k, v in caps.items()},
                 "target": target,
                 "route": "local",
                 "broken": dev.get("broken") or [],
@@ -131,12 +145,18 @@ def collect():
         name = dev.get("name") or ""
         key = name.casefold()
         writable = [c for c in (dev.get("writable") or []) if c]
+        # Faehigkeit -> Datenpunkt, in der Sprache der Oberflaeche.
+        katalog_caps = {}
+        for c in writable:
+            kurz = CAP_FROM_ALEXA.get(c, c)
+            katalog_caps.setdefault(kurz, f"{dev.get('id')}.{c}")
         entry = {
             "id": dev.get("id"),
             "deleted": bool(dev.get("deleted")),
             "name": name,
             "baseName": dev.get("baseName") or name,
             "caps": writable,
+            "capTargets": katalog_caps,
             "target": f"{dev.get('id')}.{writable[0]}" if dev.get("id") and writable else None,
             "route": "alexa2-cloud",
             "manufacturer": dev.get("manufacturer") or "",
@@ -151,6 +171,12 @@ def collect():
             if hit["target"]:
                 entry["target"] = hit["target"]
             entry["caps"] = sorted(set(entry["caps"]) | set(hit["caps"]))
+            # Lokale Ziele schlagen die Alexa-Kanaele: sie schalten ohne
+            # Amazon. Beide Quellen getrennt halten, damit die Klappzeile
+            # zeigt, woher ein Ziel stammt.
+            zusammen = dict(entry.get("capTargets") or {})
+            zusammen.update(hit.get("capTargets") or {})
+            entry["capTargets"] = zusammen
         devices.append(entry)
     # Reine Lokalgeraete, die im Alexa-Katalog fehlen.
     for hit in local.values():
@@ -160,6 +186,7 @@ def collect():
             "name": hit["name"],
             "baseName": hit["baseName"],
             "caps": hit["caps"],
+            "capTargets": hit.get("capTargets") or {},
             "target": hit["target"],
             "route": "local",
             "manufacturer": "",
@@ -183,11 +210,27 @@ def collect():
         # zurueck; ohne diesen Wert wuerde er es leeren.
         dev["autoTarget"] = dev.get("target")
         vorgabe = vorgegeben.get(ident)
-        if isinstance(vorgabe, dict) and vorgabe.get("datapoint"):
+        if isinstance(vorgabe, str) and vorgabe:
+            vorgabe = {"datapoint": vorgabe}
+        if not isinstance(vorgabe, dict):
+            vorgabe = {}
+
+        # Automatisch ermittelte Ziele je Faehigkeit merken - die Klappzeile
+        # zeigt sie als Platzhalter, damit man sieht, was ohne Vorgabe gilt.
+        dev["autoCaps"] = dict(dev.get("capTargets") or {})
+
+        # Einzelne Faehigkeiten (color, brightness, ...) ueberschreiben.
+        einzeln = vorgabe.get("caps") or {}
+        if isinstance(einzeln, dict) and einzeln:
+            zusammen = dict(dev.get("capTargets") or {})
+            for faehigkeit, ziel in einzeln.items():
+                if str(ziel or "").strip():
+                    zusammen[faehigkeit] = str(ziel).strip()
+            dev["capTargets"] = zusammen
+
+        # Allgemeine Vorgabe des Geraets (gilt fuer das Hauptziel).
+        if vorgabe.get("datapoint"):
             dev["target"] = vorgabe["datapoint"]
-            dev["targetOverridden"] = True
-        elif isinstance(vorgabe, str) and vorgabe:
-            dev["target"] = vorgabe
             dev["targetOverridden"] = True
         else:
             dev["targetOverridden"] = False
@@ -275,6 +318,14 @@ button#savebtn:disabled{opacity:.45;cursor:default}
 button.del{color:var(--bad);border-color:#5d2626}
 button.undo{color:var(--ok);border-color:#1f4d2b}
 tr.gone td{opacity:.45}
+button.fold{background:none;border:none;color:var(--dim);padding:0 4px 0 0;font-size:12px;cursor:pointer}
+button.fold:hover{color:var(--txt)}
+tr.detail td{background:#151a20;border-bottom:1px solid #222831;padding:6px 11px 10px 32px}
+table.caps{background:none;border:none;border-radius:0}
+table.caps th{font-size:11px;padding:3px 8px 3px 0;border-bottom:1px solid #222831;color:var(--dim)}
+table.caps td{padding:3px 8px 3px 0;border-bottom:none}
+tr.caprow td:first-child{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);white-space:nowrap}
+input.dpin.cap{min-width:0;width:100%;max-width:420px;background:#10151a}
 tr.gone td input{text-decoration:line-through}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
@@ -346,8 +397,15 @@ function row(d) {
   const base = d.baseName && d.baseName !== d.name
     ? '<div class="base">vorher: ' + esc(d.baseName) + '</div>' : "";
   const room = d.room || "";
-  return '<tr data-k="' + esc(key) + '" class="' + (d.deleted ? "gone" : "") + '">'
-    + '<td><input class="inline" data-f="name" data-v="' + esc(d.name)
+  const faehigkeiten = Object.keys(d.capTargets || {}).sort();
+  const pfeil = faehigkeiten.length > 1
+    ? '<button class="fold" onclick="toggleDetails(this)" title="alle Datenpunkte zeigen">▸</button> '
+    : "";
+
+  // Hauptzeile. Klick auf den Pfeil oeffnet die Detailzeile darunter.
+  let html = '<tr class="main" data-k="' + esc(key) + '"'
+    + (d.deleted ? ' data-gone="1"' : '') + '>'
+    + '<td>' + pfeil + '<input class="inline" data-f="name" data-v="' + esc(d.name)
     + '" value="' + esc(d.name) + '" oninput="touch(this)">' + base + '</td>'
     + '<td><input class="inline" data-f="room" data-v="' + esc(room)
     + '" value="' + esc(room) + '" placeholder="—" list="raumliste"'
@@ -367,6 +425,40 @@ function row(d) {
         : '<button class="del" onclick="deleteDevice(this)" title="ausblenden">löschen</button>')
     + '</td>'
     + '</tr>';
+
+  // Detailzeile: ein Feld je Faehigkeit. Nur sichtbar, wenn aufgeklappt.
+  if (faehigkeiten.length) {
+    const zeilen = faehigkeiten.map(cap => {
+      const wert = (d.capTargets || {})[cap] || "";
+      const auto = (d.autoCaps || {})[cap] || "";
+      const vorgabe = wert && auto && wert !== auto;
+      return '<tr class="caprow"><td>' + esc(cap) + '</td>'
+        + '<td colspan="2"><input class="dpin cap" data-cap="' + esc(cap)
+        + '" data-v="' + esc(wert) + '" data-base="' + esc(auto)
+        + '" value="' + esc(wert) + '" placeholder="Datenpunkt"'
+        + ' oninput="touchCap(this)" title="'
+        + (vorgabe ? "vom Eigentümer vorgegeben" : "automatisch ermittelt")
+        + '"></td>'
+        + '<td colspan="3">' + (vorgabe
+            ? '<button onclick="clearCap(this)" title="Vorgabe entfernen">×</button>'
+            : '') + '</td></tr>';
+    }).join("");
+    html += '<tr class="detail" data-k="' + esc(key) + '" hidden>'
+      + '<td colspan="7"><table class="caps"><thead><tr>'
+      + '<th>Fähigkeit</th><th colspan="2">Datenpunkt</th><th colspan="3"></th>'
+      + '</tr></thead><tbody>' + zeilen + '</tbody></table></td></tr>';
+  }
+  return html;
+}
+
+// Auf-/zuklappen. Der Pfeil dreht sich, die Detailzeile wird sichtbar.
+function toggleDetails(button) {
+  const tr = button.closest("tr");
+  const detail = tr.nextElementSibling;
+  if (!detail || !detail.classList.contains("detail")) return;
+  const offen = detail.hidden;
+  detail.hidden = !offen;
+  button.textContent = offen ? "▾" : "▸";
 }
 
 // Vorschlagsliste fuer die Raum-Spalte: bestehende Raeume aus rooms.json
@@ -488,11 +580,42 @@ function touch(input) {
   updateDirty();
 }
 
+// Aenderung in einem Faehigkeits-Feld (Detailzeile). Die Markierung gehoert
+// an die Hauptzeile darueber - sonst zaehlt der Speichern-Knopf sie nicht.
+function touchCap(input) {
+  const detail = input.closest("tr");
+  const main = detail && detail.previousElementSibling;
+  const geaendert = input.value !== (input.dataset.v || "");
+  input.classList.toggle("changed", geaendert);
+  if (main) {
+    main.classList.toggle("dirty", !!(
+      main.querySelector("input.changed")
+      || (detail.querySelectorAll("input.changed").length)
+    ));
+  }
+  updateDirty();
+}
+
+function clearCap(button) {
+  // Auf den automatisch ermittelten Wert zuruecksetzen. Geschrieben wird
+  // erst beim Speichern.
+  const detail = button.closest("tr");
+  const feld = detail.querySelector("input[data-cap]");
+  if (!feld) return;
+  feld.value = feld.dataset.base || "";
+  feld.classList.add("changed");
+  const main = detail.previousElementSibling;
+  if (main) main.classList.add("dirty");
+  updateDirty();
+}
+
 function sammle() {
   const out = [];
-  document.querySelectorAll("tr.dirty").forEach(tr => {
+  document.querySelectorAll("tr.main.dirty").forEach(tr => {
     const eintrag = {id: tr.dataset.k};
     let hat = false;
+
+    // Felder der Hauptzeile (Name, Raum, Hauptdatenpunkt)
     tr.querySelectorAll("input[data-f]").forEach(inp => {
       const feld = inp.dataset.f;
       const alt = inp.dataset.v || "";
@@ -501,6 +624,20 @@ function sammle() {
         hat = true;
       }
     });
+
+    // Felder der Detailzeile (je Faehigkeit ein Datenpunkt)
+    const detail = tr.nextElementSibling;
+    if (detail && detail.classList.contains("detail")) {
+      detail.querySelectorAll("input[data-cap]").forEach(inp => {
+        const alt = inp.dataset.v || "";
+        if (inp.value !== alt) {
+          eintrag.caps = eintrag.caps || {};
+          eintrag.caps[inp.dataset.cap] = inp.value;
+          hat = true;
+        }
+      });
+    }
+
     if (hat) out.push(eintrag);
   });
   return out;

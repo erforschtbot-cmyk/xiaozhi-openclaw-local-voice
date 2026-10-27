@@ -120,8 +120,45 @@ def set_target(ident: str, datapoint: str, cap: str = "") -> dict:
     return data
 
 
-def target_for(*idents):
+def set_cap_target(ident: str, cap: str, datapoint: str) -> dict:
+    """Datenpunkt fuer EINE Faehigkeit vorgeben (leer = Vorgabe entfernen)."""
+    data = _read()
+    key = str(ident or "").strip()
+    faehigkeit = str(cap or "").strip()
+    if not key or not faehigkeit:
+        raise ValueError("Kennung und Faehigkeit noetig")
+    entry = data["targets"].get(key)
+    if isinstance(entry, str):
+        entry = {"datapoint": entry}
+    if not isinstance(entry, dict):
+        entry = {}
+    einzeln = dict(entry.get("caps") or {})
+    dp = str(datapoint or "").strip()
+    if dp:
+        einzeln[faehigkeit] = dp
+    else:
+        einzeln.pop(faehigkeit, None)
+    if einzeln:
+        entry["caps"] = einzeln
+    else:
+        entry.pop("caps", None)
+    if entry:
+        data["targets"][key] = entry
+    else:
+        data["targets"].pop(key, None)
+    _write(data)
+    return data
+
+
+def target_for(*idents, cap=None):
     """Vorgegebenes Ziel als {"datapoint": ..., "cap": ...} oder None.
+
+    `cap` sucht zuerst eine Vorgabe fuer GENAU diese Faehigkeit (etwa "color"
+    oder "brightness"); fehlt sie, gilt die allgemeine Vorgabe des Geraets.
+    Damit laesst sich ein einzelner Datenpunkt korrigieren, ohne die anderen
+    mit zu verbiegen - belegt 28.10.2026: der Wohnzimmer-Deckenstrahler fuehrt
+    Farbe unter hex_color (role level.color.rgb, "#rrggbb"), waehrend
+    group_1.color ein JSON {r,g,b} erwartet.
 
     Nimmt mehrere Kennungen entgegen und probiert sie der Reihe nach. Noetig,
     weil eine Vorgabe je nach Herkunft unter der Datenpunkt-id ODER unter dem
@@ -135,10 +172,45 @@ def target_for(*idents):
             continue
         entry = targets.get(str(ident).strip())
         if isinstance(entry, str) and entry:
-            return {"datapoint": entry}
-        if isinstance(entry, dict) and entry.get("datapoint"):
+            entry = {"datapoint": entry}
+        if not isinstance(entry, dict):
+            continue
+        # 1) Vorgabe fuer genau diese Faehigkeit
+        if cap:
+            einzeln = (entry.get("caps") or {}).get(str(cap))
+            if einzeln:
+                return {"datapoint": einzeln, "cap": str(cap)}
+        # 2) allgemeine Vorgabe des Geraets
+        if entry.get("datapoint"):
             return entry
     return None
+
+
+def _merge_cap(data: dict, ident: str, cap: str, datapoint: str) -> dict:
+    """Eine Faehigkeits-Vorgabe in `data` eintragen (ohne Schreiben)."""
+    faehigkeit = str(cap or "").strip()
+    if not faehigkeit:
+        return data
+    entry = data["targets"].get(ident)
+    if isinstance(entry, str):
+        entry = {"datapoint": entry}
+    if not isinstance(entry, dict):
+        entry = {}
+    einzeln = dict(entry.get("caps") or {})
+    dp = str(datapoint or "").strip()
+    if dp:
+        einzeln[faehigkeit] = dp
+    else:
+        einzeln.pop(faehigkeit, None)
+    if einzeln:
+        entry["caps"] = einzeln
+    else:
+        entry.pop("caps", None)
+    if entry:
+        data["targets"][ident] = entry
+    else:
+        data["targets"].pop(ident, None)
+    return data
 
 
 def save_batch(changes: list) -> int:
@@ -172,6 +244,10 @@ def save_batch(changes: list) -> int:
                 data["rooms"][ident] = clean
             else:
                 data["rooms"].pop(ident, None)
+            saved += 1
+        if isinstance(item.get("caps"), dict):
+            for faehigkeit, wert in item["caps"].items():
+                data = _merge_cap(data, ident, faehigkeit, wert)
             saved += 1
         if "target" in item:
             dp = str(item.get("target") or "").strip()

@@ -235,9 +235,41 @@ def parse(text: str):
     return ergebnis
 
 
+def _ident_fuer(name):
+    """Datenpunkt-id zu einem Sprechnamen (oder None).
+
+    Wird gebraucht, weil Vorgaben aus dem Panel unter der id liegen, der
+    Sprachweg aber mit Namen arbeitet.
+    """
+    if not name:
+        return None
+    try:
+        import catalog
+    except Exception:
+        return None
+    for dev in catalog.load().get("devices") or []:
+        if (dev.get("name") or "") == name:
+            return dev.get("id")
+    return None
+
+
 def _datenpunkt_fuer(name, cap):
-    """Passenden Datenpunkt eines Geraets fuer eine Faehigkeit liefern."""
+    """Passenden Datenpunkt eines Geraets fuer eine Faehigkeit liefern.
+
+    Eine Vorgabe des Eigentuemers hat Vorrang - auch pro Faehigkeit. Belegt
+    28.10.2026: der Wohnzimmer-Deckenstrahler fuehrt Farbe unter hex_color
+    (role level.color.rgb, "#rrggbb"), waehrend group_1.color ein JSON
+    {r,g,b} erwartet. Ohne diese Pruefung schrieb die Farbstufe das falsche
+    Format auf den falschen Punkt.
+    """
+    import overrides
     _namen, caps = _geraete()
+    # Die Vorgabe steht je nach Herkunft unter der Datenpunkt-id ODER unter
+    # dem Sprechnamen. Beide probieren - sonst wird sie uebersehen, wenn das
+    # Panel sie unter der id gespeichert hat (belegt 28.10.2026).
+    vorgabe = overrides.target_for(name, _ident_fuer(name), cap=cap)
+    if vorgabe and vorgabe.get("datapoint"):
+        return vorgabe["datapoint"]
     return (caps.get(name) or {}).get(cap)
 
 
