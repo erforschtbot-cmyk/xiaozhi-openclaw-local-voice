@@ -18,9 +18,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPLY=0
 [ "${1:-}" = "--apply" ] && APPLY=1
 
-BK="$(ls -d "$DIR"/../alexa-direct-backup-vor-hassil-* 2>/dev/null | sort | tail -1)"
+# "|| true": ohne Treffer laesst `set -e` das Skript sonst stumm mit Code 2
+# abbrechen - genau im Fehlerfall bekaeme man keine Erklaerung.
+BK="$(ls -d "$DIR"/../alexa-direct-backup-vor-hassil-* 2>/dev/null | sort | tail -1 || true)"
 if [ -z "$BK" ] || [ ! -f "$BK/control.py" ]; then
-    echo "FEHLER: kein Backup gefunden (alexa-direct-backup-vor-hassil-*)"
+    echo "FEHLER: kein Backup gefunden."
+    echo "  gesucht in: $DIR/../alexa-direct-backup-vor-hassil-*"
+    echo "  Ein Backup entsteht mit: cp -a '$DIR' '$DIR/../alexa-direct-backup-vor-hassil-\$(date +%Y%m%d-%H%M%S)'"
     exit 1
 fi
 
