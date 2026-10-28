@@ -363,6 +363,13 @@ input.dpin.cap{min-width:0;width:100%;max-width:420px;background:#10151a}
 .grp .chk input{width:auto;min-width:0}
 .grp .chk small{color:var(--dim);font-size:11px}
 .grp .empty{color:var(--dim);font-size:12px;padding:4px 0}
+.grp .kopf{display:flex;gap:10px;align-items:center;cursor:pointer;user-select:none}
+.grp .kopf:hover .pfeil{color:var(--txt)}
+.grp .pfeil{color:var(--dim);font-size:12px;width:14px;display:inline-block}
+.grp .kopf .name{font-weight:600;font-size:14px}
+.grp .kopf .summe{color:var(--dim);font-size:12px;margin-left:auto}
+.grp .innen{margin-top:10px}
+.grp.zu .innen{display:none}
 tr.gone td input{text-decoration:line-through}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
@@ -664,15 +671,56 @@ function renderGruppen() {
         + '</span></label>';
     }).join("") || '<div class="empty">keine schaltbaren Geräte</div>';
 
-    return '<div class="grp">'
-      + '<h3>Name <input class="inline" value="' + esc(g.name || "")
-      + '" oninput="GRUPPEN[' + i + '].name=this.value;gruppenGeaendert()" style="min-width:200px">'
-      + '<button class="del" onclick="gruppeWeg(' + i + ')">löschen</button></h3>'
+    // Zustand: aufgeklappt oder zu. Wird beim Neurendern beibehalten, sonst
+    // springt die Gruppe bei jedem Klick wieder auf.
+    const offen = !ZUGeklappt.has(i);
+    const pfeil = offen ? "▾" : "▸";
+    const anzahl = (g.devices || []).length;
+    const assiZahl = (g.assistants || []).length;
+    const summe = anzahl + " Gerät" + (anzahl === 1 ? "" : "e")
+      + (assiZahl ? "" : " · kein Assistent");
+    const warnung = assiZahl ? "" : ' <span class="badge broken">wirkt nicht</span>';
+
+    return '<div class="grp' + (offen ? "" : " zu") + '">'
+      + '<div class="kopf" onclick="klappeGruppe(' + i + ', event)">'
+      + '<span class="pfeil">' + pfeil + '</span>'
+      + '<span class="name">' + esc(g.name || "(ohne Namen)") + '</span>'
+      + warnung
+      + '<span class="summe">' + esc(summe) + '</span>'
+      + '</div>'
+      + '<div class="innen">'
+      + '<div class="grpname">Name <input class="inline" value="' + esc(g.name || "")
+      + '" oninput="umbenennen(' + i + ', this.value)" style="min-width:200px">'
+      + '<button class="del" onclick="gruppeWeg(' + i + ')">löschen</button></div>'
       + '<div class="cols">'
       + '<div class="col"><div class="lbl">Sprachassistent (Pflicht)</div>' + assis + '</div>'
-      + '<div class="col"><div class="lbl">Geräte (' + (g.devices || []).length + ')</div>' + geraete + '</div>'
-      + '</div></div>';
+      + '<div class="col"><div class="lbl">Geräte (' + anzahl + ')</div>' + geraete + '</div>'
+      + '</div></div></div>';
   }).join("");
+}
+
+// Welche Gruppen sind zugeklappt (Index-Position). Standard: aufgeklappt,
+// solange es wenige sind; bei vielen wird automatisch zugeklappt, damit die
+// Seite übersichtlich bleibt.
+let ZUGeklappt = new Set();
+
+// Name tippen: Daten und Kopfzeile nachziehen, aber NICHT neu rendern -
+// sonst verliert das Eingabefeld bei jedem Zeichen den Fokus.
+function umbenennen(i, wert) {
+  if (GRUPPEN[i]) GRUPPEN[i].name = wert;
+  gruppenGeaendert();
+  const box = document.getElementById("groups");
+  if (!box) return;
+  const gruppe = box.querySelectorAll(".grp")[i];
+  const name = gruppe && gruppe.querySelector(".kopf .name");
+  if (name) name.textContent = wert || "(ohne Namen)";
+}
+
+function klappeGruppe(i, ev) {
+  // Klick auf ein Bedienelement im Kopf darf nicht klappen.
+  if (ev && ev.target && ev.target.closest("button, input, label")) return;
+  if (ZUGeklappt.has(i)) ZUGeklappt.delete(i); else ZUGeklappt.add(i);
+  renderGruppen();
 }
 
 function toggleAssistent(i, id, an) {
