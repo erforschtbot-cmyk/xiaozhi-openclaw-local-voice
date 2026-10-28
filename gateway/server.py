@@ -487,6 +487,11 @@ class XiaozhiSession:
         # `assistant_delta` (Agenten-Antwort) und `assistant_done` (immer).
         # Ohne diesen Merker wurde der Text doppelt gesprochen.
         self.tts_text_fed = False
+        # Auflege-Satz erkannt ("danke", "ok danke"): nach der Antwort in
+        # Bereitschaft statt Nachhoerfenster. Wunsch des Eigentuemers
+        # (28.10.2026). Gesetzt im assistant_done-Zweig, ausgewertet in
+        # open_followup_window.
+        self.hangup_after_answer = False
         self.tts_queue = None
         self.tts_worker_task = None
         self.tts_pending = 0
@@ -1772,6 +1777,19 @@ class XiaozhiSession:
 
     async def open_followup_window(self, audio_guard_seconds=0.0):
         """Return the still-open device session to listening for 10 seconds."""
+        # Auflege-Satz ("danke", "ok danke"): kein Nachhoerfenster, sondern
+        # sofort Bereitschaft. Hier statt an jeder Aufrufstelle, weil das
+        # Fenster aus mehreren Wegen geoeffnet wird (playback_drained,
+        # Fallback-Wecker, kein Sprachbeginn). Wunsch des Eigentuemers
+        # (28.10.2026).
+        if getattr(self, "hangup_after_answer", False):
+            self.hangup_after_answer = False
+            print(
+                f"{self.tag} Auflege-Satz: kein Nachhoerfenster, Bereitschaft",
+                flush=True,
+            )
+            await self.return_to_standby("hangup_phrase")
+            return
         self.cancel_interim_watchdog()
         await self.send_json({"type": "tts", "state": "stop"})
         self.tts_started = False
@@ -2241,6 +2259,15 @@ class XiaozhiSession:
                         # Echte Antwort: der Zwischenansage-Waechter darf sie
                         # unter keinen Umstaenden abschneiden.
                         self.cancel_interim_watchdog()
+                        if event.get("hangup"):
+                            # Auflege-Satz: die Runde endet nach dieser
+                            # Antwort. open_followup_window wertet das aus.
+                            self.hangup_after_answer = True
+                            print(
+                                f"{self.tag} Auflege-Satz: Bereitschaft nach "
+                                "der Antwort",
+                                flush=True,
+                            )
                         if self.photo_speaking:
                             # Eine Foto-Runde spricht ihre Antwort selbst. Das
                             # generische stream_end des Realtime-Modells wuerde
@@ -2502,6 +2529,11 @@ class XiaozhiSession:
                     self.turn_peak = 0
                     self.awaiting_command = True
                     self.input_stopped = False
+                    # Sicherheitsnetz: ein Auflege-Wunsch aus einer Runde, die
+                    # anders endete (Verbindungsabbruch, Abbruch durch den
+                    # Nutzer), darf NICHT in die naechste Runde lecken - sonst
+                    # legt das Geraet beim naechsten Befehl grundlos auf.
+                    self.hangup_after_answer = False
                     # Der Aktivierungston laeuft jetzt; seine Laenge nicht
                     # als Sprachbeginn werten (siehe POPUP_GUARD_SECONDS).
                     self.audio_guard_until = (

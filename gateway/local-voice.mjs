@@ -224,6 +224,32 @@ const PHOTO_RE = new RegExp(
   "iu",
 );
 
+// Auflege-Saetze: kurze Dankesformeln beenden den Dialog.
+// Belegt als Wunsch des Eigentuemers (28.10.2026): "Bei 'Danke', 'ok danke',
+// 'danke schoen' das es in Bereitschaft geht. Also kurz antwortet und dann
+// Bereitschaft."
+//
+// Bewusst eng gefasst: nur wenn der Satz AUSSCHLIESSLICH aus Dank besteht.
+// "Danke, schalte das Licht an" ist ein Befehl, kein Abschied.
+const HANGUP_RE = new RegExp(
+  String.raw`^(?:(?:ok|okay|ja|so|na|vielen|besten|recht vielen)[\s,]+)?` +
+    String.raw`(?:danke?|dank|dankesehr|merci)` +
+    String.raw`(?:[\s,]+(?:schoen|sehr|dir|ihnen|noch|vielmals))*` +
+    String.raw`[\s.!?]*$`,
+  "iu",
+);
+
+function isHangupPhrase(text) {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/[äÄ]/g, "ae").replace(/[öÖ]/g, "oe").replace(/[üÜ]/g, "ue")
+    .replace(/ß/g, "ss")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  return HANGUP_RE.test(normalized);
+}
+
 function isPhotoRequest(text) {
   const normalized = String(text || "").toLowerCase().replace(/%/g, " prozent ").replace(/\s+/g, " ").trim();
   return PHOTO_RE.test(normalized);
@@ -382,6 +408,24 @@ async function handleUtterance(pcm) {
     // 27.10.2026: neunfaches "Monitor" am selben Tag).
     if (!(await awaitTurnGate(emittedAt))) {
       log("Arbitrierung: anderes Geraet fuehrt den Dialog, keine Ausfuehrung");
+      return;
+    }
+
+    // Auflege-Satz: kurze Dankesformel beendet den Dialog.
+    // Bewusst VOR dem lokalen Weg und vor chat.send: es soll kein Agentenlauf
+    // entstehen, nur eine kurze Antwort und danach Bereitschaft. Der Server
+    // bekommt `hangup: true` und schliesst die Runde, statt das Nachhoer-
+    // fenster zu oeffnen (Wunsch des Eigentuemers, 28.10.2026).
+    if (isHangupPhrase(text)) {
+      const answer = "Gerne.";
+      emit("assistant_done", {
+        text: answer,
+        hangup: true,
+        audioFrameCount: 0,
+        audioByteCount: 0,
+        msSinceLastAudio: null,
+      });
+      log(`Auflege-Satz erkannt: ${text} -> Bereitschaft nach der Antwort`);
       return;
     }
 
