@@ -606,8 +606,13 @@ async function load() {
     DATA = data.devices || [];
     zeigeAdresse(data);
     render();
+    const raumZahl = (data.rooms || []).length;
+    const port = data.panel_port ? ":" + data.panel_port : "";
     document.getElementById("meta").textContent =
-      new Date().toLocaleTimeString("de-DE") + " · " + (data.rooms || []).length + " Räume";
+      new Date().toLocaleTimeString("de-DE")
+      + " · " + raumZahl + " Räume"
+      + " · Port " + (data.panel_port || "?")
+      + " (http://" + (data.panel_host || "…") + ")";
   } catch (e) {
     document.getElementById("meta").textContent = "Fehler beim Laden";
     toast("Laden fehlgeschlagen", "bad");
@@ -1053,6 +1058,10 @@ class Handler(BaseHTTPRequestHandler):
                     "rooms": room_list(devices),
                     "iobroker": adresse,
                     "quelle": settings.quelle(),
+                    # Eigener Port und Host: damit die Seite die Frage
+                    # "auf welchem Port laeuft sie?" selbst beantwortet.
+                    "panel_port": self.server.server_address[1],
+                    "panel_host": self.headers.get("Host") or "",
                 })
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": repr(exc)})

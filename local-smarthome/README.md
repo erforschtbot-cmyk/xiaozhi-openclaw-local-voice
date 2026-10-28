@@ -50,18 +50,171 @@ erzeugt und sind deshalb nicht versioniert. `bridges.json` und
 
 ## Geräteverwaltung im Browser (`panel.py`)
 
-Eine Oberfläche für das, was sonst nur in JSON-Dateien steht: alle Geräte sehen,
-Räume zuordnen, Sprechnamen vergeben, einen Satz testen. Gedacht als Gegenstück
-zur Alexa-App — nur dass die Wahrheit in ioBroker bleibt und die Namen als
-Overrides daneben liegen.
+Eine Oberfläche für das, was sonst nur in JSON-Dateien steht: Geräte sehen,
+Sprechnamen vergeben, Räume zuordnen, Datenpunkte korrigieren, Gruppen bilden,
+einen Satz testen. Gedanke: ein Gegenstück zur Alexa-App — mit dem Unterschied,
+dass die Wahrheit in ioBroker bleibt und die Oberfläche nur Notizen danebenlegt.
+
+### Aufrufen — welcher Port?
+
+Die Seite läuft auf **Port 8088**, erreichbar aus dem ganzen LAN:
+
+```text
+http://<LAN-IP-des-Hosts>:8088
+```
+
+Beispiel für den Referenzhost: `http://192.168.178.143:8088/`
+
+Den Port legst du selbst fest, in dieser Reihenfolge:
+
+| Rang | Quelle | Beispiel |
+|---|---|---|
+| 1 | Umgebungsvariable `PANEL_PORT` | `PANEL_PORT=9000` |
+| 2 | Standardwert im Code | `8088` |
+
+Ebenso `PANEL_HOST` (Standard `0.0.0.0` = alle Netzwerkkarten). Für „nur dieser
+Rechner" setz `PANEL_HOST=127.0.0.1`.
+
+**Wenn du den Port nicht mehr weißt** — vier Wege, ihn zu finden:
 
 ```bash
-python panel.py            # http://0.0.0.0:8088
+# 1) Der Dienst nennt den Port beim Start (zuverlässigster Weg)
+journalctl --user -u geraeteverwaltung.service -n 30 --no-pager | grep http
+#   Geraeteverwaltung auf http://0.0.0.0:8088  (ioBroker: http://192.168.178.24:8087)
+
+# 2) In der Unit nachsehen
+grep PANEL_PORT ~/.config/systemd/user/geraeteverwaltung.service
+
+# 3) Läuft der Dienst überhaupt?
+systemctl --user status geraeteverwaltung.service
+
+# 4) Offene Ports mit Prozess – der Name ist "python", nicht "panel"
+ss -ltnp | grep python
+#   LISTEN 0 5 0.0.0.0:8088 0.0.0.0:*  users:(("python",pid=2005822,fd=3))
+```
+
+**Hinweis:** `ss -ltnp | grep panel` findet nichts — der Prozess heißt `python`.
+Suche nach dem Port oder nach `python`.
+
+**Am einfachsten:** Die Seite zeigt ihren eigenen Port oben rechts in der
+Kopfzeile, zusammen mit der Adresse, über die du sie gerade aufgerufen hast:
+
+```text
+02:31:12 · 6 Räume · Port 8088 (http://192.168.178.143:8088)
+```
+
+So siehst du sofort, ob du über `localhost` oder über die LAN-IP drin bist —
+und welcher Port tatsächlich bedient wird, auch wenn du ihn per
+`PANEL_PORT` geändert hast.
+
+Der Startbefehl zeigt den Port ebenfalls direkt an:
+
+```bash
+python panel.py            # Geraeteverwaltung auf http://0.0.0.0:8088
 PANEL_PORT=9000 python panel.py
 ```
 
 Dauerhaft: `systemd/geraeteverwaltung.service.in` (Platzhalter `@ALEXA_DIR@`,
-`@BRIDGE_VENV@`, `@IOBROKER_URL@`, `@PANEL_PORT@`).
+`@BRIDGE_VENV@`, `@IOBROKER_URL@`, `@PANEL_PORT@`). Die auf dem Referenzhost
+aktive Fassung steht in `systemd/geraeteverwaltung.service.reference`.
+
+### Wie es technisch funktioniert
+
+Kein Framework, keine zusätzliche Abhängigkeit:
+
+```text
+Browser  ──HTTP──►  panel.py  (http.server aus der Standardbibliothek)
+                       │
+                       ├─ liest:  localmap.json, catalog.json, rooms.json
+                       │          names_overrides.json, groups.json, settings.json
+                       ├─ fragt:  ioBroker Simple API (getBulk) für Live-Werte
+                       └─ ruft:   control.handle(...) für den Satz-Test
+```
+
+Warum `http.server`: Der Host hat keine Web-Bibliothek (kein Flask, FastAPI,
+aiohttp). Statt etwas nachzuinstallieren, das nur für eine Verwaltungsseite
+gebraucht wird, nutzt `panel.py` die Standardbibliothek. Ein Thread je Anfrage
+(`ThreadingHTTPServer`), damit ein langsamer ioBroker-Aufruf die Seite nicht
+blockiert.
+
+**Der Datenfluss beim Laden:**
+
+```text
+GET /api/devices
+  1. localmap.load()     43 Geräte mit belegtem LOKALEM Ziel
+  2. catalog.load()     124 Geräte aus dem Alexa-Katalog
+  3. zusammenführen      lokale Ziele haben Vorrang (schalten ohne Amazon)
+  4. Overrides anwenden  Namen, Räume, Datenpunkt-Vorgaben
+  5. getBulk             einen einzigen Aufruf für alle Zustände (80er-Blöcke)
+  6. sortieren           nach Raum, dann Name; Ausgeblendete ans Ende
+```
+
+Ein Aufruf statt 126 — das ist der Grund, warum die Seite in Millisekunden
+lädt statt Sekunden.
+
+**Die API-Endpunkte:**
+
+| Methode | Pfad | Aufgabe |
+|---|---|---|
+| GET | `/` | die Seite selbst (HTML + CSS + JS in einem Dokument) |
+| GET | `/api/devices` | alle Geräte, Räume, ioBroker-Adresse und deren Herkunft |
+| GET | `/api/groups` | Gruppen, Sprachgeräte, wählbare Geräte |
+| POST | `/api/rename` | Sprechname setzen (Einzelfall) |
+| POST | `/api/room` | Raumzuordnung setzen (Einzelfall) |
+| POST | `/api/change-target` | Datenpunkt-Vorgabe setzen (Alias: `/api/target`) |
+| POST | `/api/save-batch` | **mehrere** Änderungen in einem Schreibvorgang |
+| POST | `/api/delete` | Gerät ausblenden oder wieder einblenden |
+| POST | `/api/groups` | Gruppenliste ersetzen |
+| POST | `/api/settings` | ioBroker-Adresse setzen |
+| POST | `/api/test` | Satz auflösen (`dry_run`, schaltet nichts) |
+
+Die Oberfläche nutzt `save-batch` — deshalb ein Speichern-Knopf für alle
+Änderungen statt eines Schreibvorgangs pro Feld.
+
+### Speichern: erst auf Knopfdruck
+
+Nichts wird beim Tippen geschrieben. Jedes Feld merkt sich seinen Ausgangswert
+(`data-v`); weicht der Inhalt ab, wird das Feld gelb umrandet und die Zeile
+hinterlegt. Der Speichern-Knopf zeigt die Zahl offener Zeilen und bleibt grau,
+solange nichts geändert wurde. Ein Klick schickt **alle** Änderungen und lädt
+die Liste neu.
+
+Das ist bewusst so: ein abgebrochener Speichervorgang hinterlässt keinen halben
+Stand, und du kannst mehrere Geräte in einem Zug ändern.
+
+### Geräte aufklappen — ein Datenpunkt je Fähigkeit
+
+Ein Gerät hat oft mehr als einen Datenpunkt. „Licht Arbeitszimmer" führt vier:
+
+```text
+onoff       zigbee.0.group_1.state        Ein/Aus
+brightness  zigbee.0.group_1.brightness   Dimmen
+color       zigbee.0.group_1.color        Farbe (JSON)
+colortemp   zigbee.0.group_1.colortemp    Weißton (Kelvin)
+```
+
+Der Pfeil vor dem Sprechnamen klappt eine Detailzeile auf: eine Zeile je
+Fähigkeit, jede mit eigenem Feld. Nur dort kannst du etwa den Farb-Punkt
+korrigieren, ohne Ein/Aus zu verbiegen.
+
+Die Rolle des Ziels entscheidet über das Format — und das ist keine Kleinigkeit:
+
+| Rolle | Beispiel | erwartet |
+|---|---|---|
+| `level.color.rgb` | `zigbee.0.<id>.hex_color` | `#rrggbb` |
+| `level.color` | `zigbee.0.group_1.color` | `{"r":..,"g":..,"b":..}` |
+| `level.color.temperature` | `colortemp` | Kelvin (2200 … 7000) |
+| `level.dimmer` | `brightness` | 0 … 100 |
+
+Falsch geschrieben nimmt der Adapter den Wert trotzdem an — die Lampe reagiert
+aber nicht. Genau das war der Fehler vom 28.10.2026: JSON auf `hex_color`.
+
+### Gruppen
+
+Siehe den Abschnitt [Gruppen](#gruppen-ein-gerät-schaltet-viele). Kurz: Eine
+Gruppe gehört einem **Sprachgerät**, nicht einem Raumnamen. Standardmäßig sind
+die Gruppen zugeklappt; der Zustand liegt im Browser (`localStorage`) und
+überlebt ein Neuladen.
 
 ### Was die Oberfläche zeigt
 
@@ -146,6 +299,46 @@ Der Knopf „Auflösen" schickt den Satz durch `control.handle(..., dry_run=True
 Es wird **nichts geschaltet** — die Antwort zeigt Gerät, Aktion, Weg und
 Datenpunkt. Das ist der schnellste Weg, eine Mehrdeutigkeit zu finden, ohne sie
 im Wohnzimmer zu hören.
+
+### Wenn die Seite leer bleibt
+
+Häufigster Fehler in diesem Projekt — er trat am 27. und 28.10.2026 zweimal auf.
+Symptom: Kopfzeile, Filter und Knöpfe sind da, aber keine Geräteliste. Kein
+Fehler in der Konsole des Servers, nur im Browser.
+
+Ursache: Im Python-String steht ein einzelnes `\n`. Python macht daraus beim
+Ausliefern einen **echten Zeilenumbruch mitten im JavaScript-String**, das
+Skript ist zerrissen, `render()` läuft nie.
+
+Prüfen statt raten:
+
+```bash
+python3 scripts/check-panel-js.py
+```
+
+Das Skript nimmt `panel.PAGE`, zieht den `<script>`-Block heraus und lässt
+`node --check` darauf los — also genau den Text, den der Browser bekommt, nicht
+die Quelldatei. Genau diese Verwechslung hatte den Fehler zweimal übersehen.
+
+```text
+Seite: 28655 Zeichen, JavaScript: 21815 Zeichen
+  ausgelieferte JavaScript-Syntax: gültig
+
+In Ordnung.
+```
+
+(Die Zahlen wachsen mit jeder Änderung an der Seite — vergleiche sie nicht,
+sondern achte auf „gültig" und „In Ordnung".)
+
+Bei kaputter Datei endet es mit Exit 1 und nennt die Stelle:
+
+```text
+  FEHLER: ausgelieferte JavaScript-Syntax ist kaputt
+```
+
+Nach jeder Änderung an `panel.py` laufen lassen — vor dem Neustart.
+
+Zweiter häufiger Grund: Der Browser hält die alte Fassung. **Strg+F5**.
 
 ### Grenzen
 
