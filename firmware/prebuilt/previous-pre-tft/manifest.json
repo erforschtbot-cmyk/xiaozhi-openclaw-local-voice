@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "status": "succeeded",
+  "job_id": null,
+  "board_dir": "waveshare/esp32-s3-touch-lcd-4b",
+  "board_type": "esp32-s3-touch-lcd-4b",
+  "board_name": "esp32-s3-touch-lcd-4b",
+  "language": "de-DE",
+  "wake_word": "wn9_jarvis_tts",
+  "build_options": {},
+  "firmware_version": "2.5.0",
+  "firmware_source_revision": "4632dc51f0a5ad26e08542e131e6e48da41e4ff3-openclaw",
+  "idf_version": "ESP-IDF v6.1",
+  "runtime_architecture": "x86_64",
+  "runtime_cpu_count": 8,
+  "started_at": "2026-09-28T13:05:24.173717+00:00",
+  "artifacts": [
+    {
+      "kind": "ota",
+      "file": "xiaozhi.bin",
+      "size": 2905488,
+      "sha256": "6ce37f28bb1f6ea8d8834b50feedcfd9dc6327f9d52ee4ac3cdeb0e0b742e41e"
+    },
+    {
+      "kind": "full",
+      "file": "merged-binary.bin",
+      "size": 11374535,
+      "sha256": "410a300f95e56baa62e58731badc97ad70be3e69c46da5bc205154dac1273c3c"
+    }
+  ],
+  "finished_at": "2026-09-28T13:11:48.949108+00:00",
+  "exit_code": 0
+}

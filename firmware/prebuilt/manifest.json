@@ -13,21 +13,21 @@
   "idf_version": "ESP-IDF v6.1",
   "runtime_architecture": "x86_64",
   "runtime_cpu_count": 8,
-  "started_at": "2026-09-28T13:05:24.173717+00:00",
+  "started_at": "2026-10-28T15:44:52.787496+00:00",
   "artifacts": [
     {
       "kind": "ota",
       "file": "xiaozhi.bin",
-      "size": 2905488,
-      "sha256": "6ce37f28bb1f6ea8d8834b50feedcfd9dc6327f9d52ee4ac3cdeb0e0b742e41e"
+      "size": 2909840,
+      "sha256": "e4861929513208707a6b8c7db6272db6f3fea222dcc3bff67eeca848a6f70742"
     },
     {
       "kind": "full",
       "file": "merged-binary.bin",
       "size": 11374535,
-      "sha256": "410a300f95e56baa62e58731badc97ad70be3e69c46da5bc205154dac1273c3c"
+      "sha256": "15fe86d9328a62146f0eb4a97f16aa11500caddd7b4eedb362bef1296e454b26"
     }
   ],
-  "finished_at": "2026-09-28T13:11:48.949108+00:00",
+  "finished_at": "2026-10-28T15:51:09.721339+00:00",
   "exit_code": 0
 }

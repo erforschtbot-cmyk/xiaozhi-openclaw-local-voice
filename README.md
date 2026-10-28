@@ -271,8 +271,8 @@ Aus dem Boot-Log und dem App-Deskriptor des Geräts gelesen:
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | **Sep 28 2026 13:08:52** |
-| ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
+| Compile time | **Oct 28 2026 15:47:53** |
+| ELF-SHA256 | `f52c01a3dd4bee8f53b29e2c74220c99bdc59bde85b6c9c76b4663532257df75` |
 | ESP-IDF | `v6.1` |
 | Board | `esp32-s3-touch-lcd-4b` |
 | Sprache | `de-DE` |

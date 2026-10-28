@@ -371,6 +371,10 @@ class XiaozhiSession:
         # Letzter von der Firmware gemeldeter Zustand (listening/speaking/idle).
         # Standby darf NUR aus "listening" heraus passieren.
         self.device_state = "idle"
+        # Nach `tts start` braucht die Firmware messbar mehrere Sekunden, bis
+        # sie wirklich im Sprechzustand ist. Vor dieser Bestätigung gesendete
+        # PCM-Rahmen werden verworfen (belegt: nur das Satzende war hörbar).
+        self.speaking_ready_event = asyncio.Event()
         self.drained_watchdog = None
         self.speaking_guard = None
         self.interim_watchdog = None
@@ -415,6 +419,11 @@ class XiaozhiSession:
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
+        # Vom Geraet selbst gemeldete MCP-Werkzeuge. Eine aktive
+        # Sprachsitzung bedeutet nicht automatisch, dass das Board ein TFT
+        # besitzt. Der HTTP-Anzeigepfad darf deshalb nur Sitzungen anbieten,
+        # die self.screen.show tatsaechlich veroeffentlichen.
+        self.mcp_tools = set()
         # Diagnosezaehler fuer den Mikrofonpegel (siehe feed_opus).
         self.audio_packets = 0
         self.audio_peak = 0
@@ -587,12 +596,30 @@ class XiaozhiSession:
             )
             if "error" in response:
                 raise RuntimeError(response["error"])
+            cursor = None
+            while True:
+                list_params = {"cursor": cursor} if cursor else {}
+                tools_response = await self.send_mcp_request(
+                    "tools/list", list_params, timeout=5.0
+                )
+                if "error" in tools_response:
+                    raise RuntimeError(tools_response["error"])
+                result = tools_response.get("result", {})
+                tools = result.get("tools", [])
+                self.mcp_tools.update(
+                    tool.get("name") for tool in tools
+                    if isinstance(tool, dict)
+                    and isinstance(tool.get("name"), str)
+                )
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    break
             self.mcp_ready.set()
             print(
                 f"{self.tag} Device MCP initialized (vision -> {self.photo_endpoint()}"
                 + (f", hmirror={orientation['hmirror']}, vflip={orientation['vflip']}"
                    if orientation is not None else "")
-                + ")",
+                + f", tools={len(self.mcp_tools)})",
                 flush=True,
             )
         except Exception as exc:
@@ -621,6 +648,9 @@ class XiaozhiSession:
         if result.get("isError"):
             raise RuntimeError(result)
         return result
+
+    def supports_device_tool(self, name):
+        return name in self.mcp_tools
 
     @staticmethod
     def _normalize_alexa_command(command):
@@ -1397,10 +1427,21 @@ class XiaozhiSession:
                 f"diag_peak={self.audio_diag_peak}",
                 flush=True,
             )
+            self.speaking_ready_event.clear()
             await self.send_json({"type": "tts", "state": "start"})
             self.tts_started = True
             self.tts_started_at = loop_now
             self.arm_speaking_guard()
+            try:
+                await asyncio.wait_for(self.speaking_ready_event.wait(), timeout=6.0)
+                print(f"{self.tag} Device speaking confirmed; sending PCM", flush=True)
+            except asyncio.TimeoutError:
+                # Aeltere Firmware meldet den Zustand nicht. Nicht dauerhaft
+                # blockieren; der vorhandene Vorlauf bleibt als Rueckfall.
+                print(
+                    f"{self.tag} Device speaking confirmation timed out; sending PCM",
+                    flush=True,
+                )
         packet = self.encoder.encode(pcm, 1440)
         async with self.send_lock:
             await self.websocket.send(packet)
@@ -2594,6 +2635,8 @@ class XiaozhiSession:
                         f"{self.tag} Device state: {self.device_state}",
                         flush=True,
                     )
+                    if self.device_state == "speaking":
+                        self.speaking_ready_event.set()
                     # In the follow-up window, "speaking" means the device
                     # has accepted a new utterance and is waiting for its
                     # result. Do not let the original idle timer close the
@@ -2894,6 +2937,115 @@ async def main():
     stop = asyncio.get_running_loop().create_future()
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stop.set_result, None)
+    async def handle_screen(action, url, want_device):
+        if action == "status":
+            live = [
+                session for session in ACTIVE_SESSIONS.values()
+                if session.supports_device_tool("self.screen.show")
+            ]
+            return 200, {
+                "can_show": bool(live),
+                "devices": [getattr(s, "device_id", None) for s in live],
+                "hint": (
+                    "Geraet hoert/spricht gerade - Anzeige moeglich"
+                    if live
+                    else "kein Geraet in einer aktiven Sitzung (Standby)"
+                ),
+            }
+
+        """Schiebt eine Anzeige auf das Display des Geraets.
+
+        Der Host hat das Bild bereits gerendert und liefert es ueber HTTP aus;
+        hier wird nur die URL an das Geraet gereicht. Die Session wird ueber
+        die Device-Id gesucht, damit der Aufruf auch dann greift, wenn das
+        Geraet gerade nicht spricht.
+        """
+        if action == "hide":
+            targets = [ACTIVE_SESSIONS.get((want_device or "").upper())]
+            targets = [
+                target for target in targets
+                if target is not None
+                and target.supports_device_tool("self.screen.hide")
+            ]
+            if not targets:
+                targets = [
+                    session for session in ACTIVE_SESSIONS.values()
+                    if session.supports_device_tool("self.screen.hide")
+                ]
+            done = 0
+            for session in targets:
+                try:
+                    await session.call_device_tool("self.screen.hide", {}, timeout=8.0)
+                    done += 1
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Screen hide failed on {session.tag}: {exc!r}", flush=True)
+            return (200 if done else 503), {"hidden": done, "devices": len(targets)}
+
+        if not url:
+            return 400, {"error": "url fehlt"}
+        if not url.startswith(("http://", "https://")):
+            return 400, {"error": "url muss mit http:// oder https:// beginnen"}
+
+        session = ACTIVE_SESSIONS.get((want_device or "").upper()) if want_device else None
+        if session is not None and not session.supports_device_tool("self.screen.show"):
+            return 409, {"error": "Geraet hat kein ansteuerbares Display"}
+        if session is None:
+            live = [
+                candidate for candidate in ACTIVE_SESSIONS.values()
+                if candidate.supports_device_tool("self.screen.show")
+            ]
+            if len(live) == 1:
+                session = live[0]
+            elif not live:
+                return 503, {"error": "kein Geraet mit Display verbunden"}
+            else:
+                return 409, {
+                    "error": "mehrere Geraete verbunden, device= angeben",
+                    "devices": [s.device_id for s in live],
+                }
+
+        # Adresse auf den Weg umschreiben, ueber den das Geraet wirklich
+        # verbunden ist. Der Host hat mehrere Adressen (LAN 192.168.178.x,
+        # WLAN 192.168.68.x); eine falsche davon laesst das Geraet in seinen
+        # HTTP-Timeout laufen. Gleiche Logik wie photo_endpoint().
+        local_host = None
+        try:
+            local = getattr(session.websocket, "local_address", None)
+            if local and local[0] and local[0] not in ("0.0.0.0", "::"):
+                local_host = local[0]
+        except Exception:
+            local_host = None
+        if local_host:
+            parsed = urllib.parse.urlsplit(url)
+            rewritten = urllib.parse.urlunsplit(
+                (parsed.scheme, f"{local_host}:{parsed.port or 80}",
+                 parsed.path, parsed.query, parsed.fragment)
+            )
+            if rewritten != url:
+                print(f"Screen URL umgeschrieben: {url} -> {rewritten}", flush=True)
+            url = rewritten
+
+        args = {"url": url}
+        # RGB565-Rohdaten tragen ihre Masse im Dateinamen. Die Firmware kann
+        # sie inzwischen selbst ableiten; mitsenden bleibt trotzdem sinnvoll
+        # und haelt den Vertrag fuer andere Displays eindeutig.
+        if url.endswith(".raw"):
+            name = url.rsplit("/", 1)[-1][:-4]
+            if "x" in name:
+                try:
+                    w_str, h_str = name.rsplit("-", 1)[-1].split("x")
+                    args["width"] = int(w_str)
+                    args["height"] = int(h_str)
+                except ValueError:
+                    pass
+        try:
+            await session.call_device_tool("self.screen.show", args, timeout=20.0)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Screen show failed on {session.tag}: {exc!r}", flush=True)
+            return 502, {"error": f"Geraet hat das Bild nicht angenommen: {exc!r}"}
+        print(f"{session.tag} Screen shown: {url}", flush=True)
+        return 200, {"shown": True, "device": getattr(session, "device_id", None), "url": url}
+
     async def handle_photo(body, boundary, device_id, peer):
         """Nimmt das JPEG an und startet die Auswertung im Hintergrund.
 
@@ -2966,6 +3118,35 @@ async def main():
                     boundary = line.split("boundary=", 1)[1].strip().strip('"')
                 elif low.startswith("device-id:"):
                     device_id = line.split(":", 1)[1].strip()
+
+            # --- Anzeige aufs Geraet schieben --------------------------
+            # Der Host rendert ein PNG und legt es hier ab; dieser Aufruf
+            # schiebt nur noch die URL aufs Display. Damit laesst sich jede
+            # neue Anzeige als Datei auf dem Host bauen, ohne die Firmware
+            # anzufassen.
+            if path.startswith("/screen"):
+                if chunked:
+                    await _read_chunked(reader)
+                elif content_length:
+                    await reader.readexactly(content_length)
+                query = urllib.parse.urlparse(path).query
+                params = urllib.parse.parse_qs(query)
+                url = (params.get("url") or [""])[0]
+                want_device = (params.get("device") or [""])[0]
+                action = (params.get("action") or ["show"])[0]
+                status, answer = await handle_screen(action, url, want_device)
+                payload = json.dumps(answer, ensure_ascii=False).encode("utf-8")
+                reason = {200: "OK", 400: "Bad Request", 409: "Conflict",
+                          502: "Bad Gateway", 503: "Service Unavailable"}.get(
+                              status, "Error")
+                writer.write(
+                    f"HTTP/1.1 {status} {reason}\r\n"
+                    "Content-Type: application/json; charset=utf-8\r\n"
+                    f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+                    + payload
+                )
+                await writer.drain()
+                return
 
             # --- Foto-Upload des Geraets -------------------------------
             if path.startswith("/photo"):

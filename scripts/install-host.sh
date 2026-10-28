@@ -64,7 +64,9 @@ done
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$install_dir" "$HOME/.config/systemd/user"
 local_smarthome_dir="${XDG_DATA_HOME:-$HOME/.local/share}/alexa-direct"
-mkdir -p "$local_smarthome_dir"
+screen_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jarvis-screen"
+display_skill_dir="$HOME/.openclaw/workspace-voice/skills/display-cards"
+mkdir -p "$local_smarthome_dir" "$screen_dir/templates" "$display_skill_dir"
 
 # --- Laufzeitcode: ALLE Module, nicht nur das Einstiegsprogramm ------------
 # Warum vollstaendig: server.py importiert room_command hart. Der Gateway-Patch
@@ -102,10 +104,24 @@ for entry in "${runtime_files[@]}"; do
   install -m "$mode" "$repo_dir/gateway/$src" "$install_dir/$src"
 done
 
+# --- TFT-Anzeigen: Renderer, Bildsuche, Wetterkarte und Voice-Skill --------
+# out/ wird absichtlich nicht kopiert: dort liegen nur Laufzeitbilder und
+# RGB565-Dateien. Der Installer bringt ausschliesslich reproduzierbare Quellen.
+for source_file in README.md show.py render.py serve.py palette.py image-search.py requirements.txt; do
+  mode=0644
+  case "$source_file" in show.py|render.py|serve.py|image-search.py) mode=0755 ;; esac
+  install -m "$mode" "$repo_dir/screen/$source_file" "$screen_dir/$source_file"
+done
+for template_file in "$repo_dir"/screen/templates/*.py; do
+  install -m 0644 "$template_file" "$screen_dir/templates/$(basename "$template_file")"
+done
+install -m 0644 "$repo_dir/openclaw/skills/display-cards/SKILL.md" \
+  "$display_skill_dir/SKILL.md"
+
 # Lokaler Smart-Home-Schnellweg. Python-Quellen werden aktualisiert; die aus
 # ioBroker erzeugten Kataloge bleiben unversioniert. Gepflegte Zuordnungen
 # werden beim ersten Lauf angelegt und bei spaeteren Installationen erhalten.
-for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py groups.py; do
+for source_file in catalog.py control.py fuzzy.py localmap.py lookup.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py groups.py panel.py overrides.py; do
   install -m 0644 "$repo_dir/local-smarthome/$source_file" "$local_smarthome_dir/$source_file"
 done
 install -m 0644 "$repo_dir/local-smarthome/test_resolver.py" "$local_smarthome_dir/test_resolver.py"
@@ -160,6 +176,10 @@ install -m 0644 "$repo_dir/systemd/jarvis-alexa-catalog.timer" "$HOME/.config/sy
 python3 -m venv "$install_dir/.venv"
 "$install_dir/.venv/bin/python" -m pip install --upgrade pip >/dev/null
 "$install_dir/.venv/bin/python" -m pip install -r "$install_dir/requirements.txt"
+
+python3 -m venv "$screen_dir/.venv"
+"$screen_dir/.venv/bin/python" -m pip install --upgrade pip >/dev/null
+"$screen_dir/.venv/bin/python" -m pip install -r "$screen_dir/requirements.txt"
 
 if (( local_voice )); then
   # Piper in dasselbe Venv installieren, in dem die Bridge laeuft. So findet
@@ -223,9 +243,38 @@ if [[ -z "$npm_root" || ! -d "$npm_root/openclaw/dist" ]]; then
 fi
 session_key="agent:voice:xiaozhi-realtime-v6"
 consult_session_key="agent:voice:xiaozhi-consult-v6"
+# ioBroker-Adresse und Port der Geraeteverwaltung sind Betreiberangaben.
+iobroker_url="${IOBROKER_SIMPLE_API:-http://127.0.0.1:8087}"
+panel_port="${PANEL_PORT:-8088}"
+alexa_dir="$local_smarthome_dir"
 
 unit_target="$HOME/.config/systemd/user/jarvis-realtime-bridge.service"
 render_unit "$unit_target" "$local_stt" "$local_voice"
+python3 - "$repo_dir/systemd/jarvis-screen.service.in" \
+  "$HOME/.config/systemd/user/jarvis-screen.service" "$screen_dir" <<'PY'
+from pathlib import Path
+import sys
+source, target, screen_dir = sys.argv[1:]
+Path(target).write_text(Path(source).read_text().replace("@SCREEN_DIR@", screen_dir))
+PY
+
+# Geraeteverwaltung (Port 8088): braucht panel.py und overrides.py im
+# Resolver-Verzeichnis sowie das Bridge-venv als Interpreter. Ohne diese
+# Unit fehlt die im Browser erreichbare Oberflaeche.
+python3 - "$repo_dir/systemd/geraeteverwaltung.service.in" \
+  "$HOME/.config/systemd/user/geraeteverwaltung.service" \
+  "$alexa_dir" "$install_dir/.venv" "$iobroker_url" "$panel_port" <<'PANEL_PY'
+from pathlib import Path
+import sys
+source, target, alexa_dir, bridge_venv, iobroker_url, panel_port = sys.argv[1:]
+Path(target).write_text(
+    Path(source).read_text()
+    .replace("@ALEXA_DIR@", alexa_dir)
+    .replace("@BRIDGE_VENV@", bridge_venv)
+    .replace("@IOBROKER_URL@", iobroker_url)
+    .replace("@PANEL_PORT@", panel_port)
+)
+PANEL_PY
 
 # Umschalter lokal <-> realtime: beide Profile mitliefern, damit ein Wechsel
 # spaeter ohne Neuinstallation moeglich ist.
@@ -258,12 +307,22 @@ for required in room-map.json disable-smart-home-fastpath voice-mode camera-orie
     missing=1
   fi
 done
-for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py groups.py bridges.json rooms_overrides.json NOTICE.md; do
+for required in catalog.py control.py fuzzy.py localmap.py resolver.py rooms.py smarthome_cli.py hassil_router.py settings.py groups.py panel.py overrides.py bridges.json rooms_overrides.json NOTICE.md; do
   if [[ ! -e "$local_smarthome_dir/$required" ]]; then
     echo "MISSING: $local_smarthome_dir/$required" >&2
     missing=1
   fi
 done
+for required in README.md show.py render.py serve.py palette.py image-search.py requirements.txt templates/wetter.py templates/karte.py .venv/bin/python; do
+  if [[ ! -e "$screen_dir/$required" ]]; then
+    echo "MISSING: $screen_dir/$required" >&2
+    missing=1
+  fi
+done
+if [[ ! -e "$display_skill_dir/SKILL.md" ]]; then
+  echo "MISSING: $display_skill_dir/SKILL.md" >&2
+  missing=1
+fi
 if [[ ! -d "$local_smarthome_dir/hassil-data" ]]; then
   echo "MISSING: $local_smarthome_dir/hassil-data (Satzvorlagen der zweiten Stufe)" >&2
   missing=1
@@ -292,15 +351,20 @@ fi
 # --- Start ----------------------------------------------------------------
 if (( restart )); then
   systemctl --user daemon-reload
-  systemctl --user enable --now jarvis-realtime-bridge.service
+  systemctl --user enable --now jarvis-realtime-bridge.service jarvis-screen.service
   if ! systemctl --user is-active --quiet jarvis-realtime-bridge.service; then
     echo "Dienst startet nicht. Log: journalctl --user -u jarvis-realtime-bridge -n 50" >&2
+    exit 1
+  fi
+  if ! systemctl --user is-active --quiet jarvis-screen.service; then
+    echo "Anzeigen-Dienst startet nicht. Log: journalctl --user -u jarvis-screen -n 50" >&2
     exit 1
   fi
 fi
 
 echo
 echo "Installed: jarvis-realtime-bridge.service  ($install_dir)"
+echo "Installed: jarvis-screen.service           ($screen_dir)"
 if (( local_stt )); then
   echo "  recognition: lokal  -> $stt_uri  (Dienst muss laufen, siehe docs/10-CANARY-FAVORIT.md)"
 else

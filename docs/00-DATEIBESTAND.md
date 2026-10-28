@@ -1,6 +1,6 @@
 # 0. Dateibestand — Nullstart ohne Vorwissen
 
-Stand: **2026-10-27**, Referenzhost `cachyos-x8664`.
+Stand: **2026-10-28**, Referenzhost `cachyos-x8664`.
 
 Diese Datei trennt Pflichtdateien, automatisch erzeugte Daten und externe
 Voraussetzungen. Sie ist die Inventarliste für einen Agenten, der nur den
@@ -28,6 +28,11 @@ Der lokale Resolver liegt unter:
 `gateway/local-voice.mjs` leitet den Pfad aus `HOME`/`XDG_DATA_HOME` ab;
 `JARVIS_LOCAL_SMARTHOME_DIR` kann ihn explizit überschreiben.
 
+Die TFT-Anzeige liegt unter `~/.local/share/jarvis-screen`; ihre
+reproduzierbaren Quellen stehen im Repo unter `screen/`. Der dazugehörige
+Agent-Skill wird nach `~/.openclaw/workspace-voice/skills/display-cards/`
+installiert.
+
 ## Pflichtdateien am Bridge-Ort
 
 | Datei | Rolle / Importeur |
@@ -51,6 +56,21 @@ Der lokale Resolver liegt unter:
 
 `scripts/install-host.sh` kopiert diese Menge und prüft sie. Bestehende
 `room-map.json` und `camera-orientation.json` werden nicht überschrieben.
+
+## Pflichtdateien der TFT-Anzeige
+
+| Datei | Rolle / Importeur |
+|---|---|
+| `show.py` | Alltagsbefehl: rendern/konvertieren und `/screen` aufrufen |
+| `render.py`, `palette.py` | Pillow-Renderer und gemeinsames Design |
+| `templates/wetter.py`, `templates/karte.py` | Wetter- und Textkarte |
+| `image-search.py` | Brave-Bildsuche, Quellenfilter, Konvertierung |
+| `serve.py` | HTTP-Auslieferung von `.raw` auf Port 8770 |
+| `requirements.txt`, `.venv/` | gepinnte Pillow-Laufzeit |
+| `openclaw/skills/display-cards/SKILL.md` | Anleitung für den Voice-Agenten |
+
+Die Firmwareseite liegt in `firmware/patches/jarvis-screen-show.patch`; der
+Patch wird von `scripts/build-firmware.sh` nach dem 4B-Basispatch angewandt.
 
 ## Pflichtdateien des lokalen Smart-Home-Resolvers
 
@@ -79,6 +99,7 @@ werden aus ioBroker erzeugt und gehören nicht ins Repository.
 | `alexa-direct/catalog.json` | `catalog.py` | Sekunden; wird neu aus ioBroker gebaut |
 | `alexa-direct/localmap.json` | `localmap.py` | Sekunden; wird neu gebaut |
 | `alexa-direct/rooms.json` | `rooms.py` | keine TTL; wird neu gebaut |
+| `jarvis-screen/out/*` | Renderer/Bildsuche | letzte Vorschau und RGB565-Datei; wird bei jedem Auftrag neu erzeugt |
 
 ## Voraussetzungen außerhalb des Repositories
 
@@ -93,6 +114,8 @@ werden aus ioBroker erzeugt und gehören nicht ins Repository.
 | ioBroker Simple API | Referenz `http://192.168.178.24:8087`, per `IOBROKER_SIMPLE_API` änderbar |
 | Firmware-Hardware | Waveshare Smart-86-Box/Touch-LCD-4B oder Audio-Board |
 | USB-/Seriellrechte | nötig nur zum Flashen |
+| Brave Search API | optional für Suchbilder; Key nur lokal unter `secrets.json -> brave.apiKey` |
+| Internet/Wetterquelle | `wttr.in/Buchholz%20%28Aller%29?format=j1`; Karten funktionieren auch mit anderweitig gelieferten Daten |
 
 Zertifikate, Tokens, Provider-Credentials, WLAN/NVS, Logs und Fotos werden
 bewusst nicht veröffentlicht.
@@ -133,14 +156,17 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 7. `scripts/check-new-host.py`, `scripts/verify-host.sh` und
    `docs/04-TESTPLAN.md` vollständig abarbeiten.
 
-## Verifizierungsstand 27.10.2026
+## Verifizierungsstand 28.10.2026
 
 - OpenClaw 2026.10.7: beide gepatchten `dist`-Dateien exakt zu den
   Manifest-`after`-Hashes.
 - Gateway-Routertests: 149/149 grün (fünf Suiten, gemessen 27.10.2026).
 - Lokaler Resolver: 34/34 Offline-Fälle grün.
-- 4B-Basispatch und Helligkeitspatch: auf frischem Upstream-Checkout
-  `4632dc51…` sauber anwendbar; Ergebnis enthält `RestoreBrightness()`.
+- 4B-Basis-, Helligkeits- und TFT-Patch: vollständiger Container-Build mit
+  `espressif/idf:v6.1` erfolgreich; laufende App über 2.909.840 Byte
+  zurückgelesen und bytegleich zum veröffentlichten App-Anker.
+- Wetterkarte und Suchbild: Owner-Abnahme am Gerät („funzt super. und schnell“);
+  Pushformat RGB565 480×480, 460.800 Byte.
 - Bestehender Bridge-End-to-End-Test mit lokaler Piper-Ausgabe: grün.
 - Nicht grün sind zwei ältere Testhüllen: `test_conversation_timing.py`
   referenziert die entfernte Methode `note_followup_audio`;

@@ -43,6 +43,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | Lokaler Smart-Home-Resolver | eindeutige Befehle ohne Agentenlauf | `local-smarthome/`, ioBroker Simple API |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
+| TFT-Karten/Bilder | Wetter, Textkarte und Bildsuche als RGB565 | `screen/`, `openclaw/skills/display-cards/`, `docs/15-ANZEIGEN.md` |
 | Agent-Werkzeug-Plugin | Alexa-Aufrufe des Agenten | `plugins/iobroker-alexa/`, TypeScript, JS, Tests und Lockdatei |
 | Smart-Home-Steuerung | erlaubte Einzelbefehle an ioBroker/Alexa | `smart-home-router.mjs`, `room-command.mjs`, Katalogskript und Timer |
 
@@ -89,7 +90,9 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
     Katalog erzeugen und Timer aus `systemd/jarvis-alexa-catalog.*` installieren;
     der Cloud-Installer liefert die Units jetzt mit, aktiviert sie jedoch erst
     nach eigener Konfiguration über `systemctl --user enable --now jarvis-alexa-catalog.timer`.
-11. `docs/04-TESTPLAN.md` real durchführen: Boot, WLAN, Wakeword, lange Äußerung,
+11. Beim 4B zusätzlich `docs/15-ANZEIGEN.md` prüfen: Wetter für den korrekten
+    Ort, Suchbild, Rückkehr zum Gesicht bei Bereitschaft und ein Gerät ohne TFT.
+12. `docs/04-TESTPLAN.md` real durchführen: Boot, WLAN, Wakeword, lange Äußerung,
     hörbare Antwort, Rückkehr zum Zuhören, Transkript, Werkzeug, zwei Räume.
     Syntax, Prüfsummen oder offene Ports ersetzen diesen Test nicht.
 
@@ -124,7 +127,7 @@ Partitionstabelle und Assets/Wakeword-Daten fehlen dann weiterhin.
 
 | Gerät | Bereits eingerichtet | Wirklich leer |
 |---|---|---|
-| 4B | geprüftes App-Image `firmware/prebuilt/xiaozhi.bin` | vollständiges boardpassendes Image, z. B. `firmware/prebuilt/merged-binary.bin`; Hostadresse/NVS beachten |
+| 4B | geprüftes App-Image `firmware/prebuilt/xiaozhi.bin` (inkl. TFT-Anzeige) | `firmware/prebuilt/merged-binary.bin`; erfolgreich gebaut, nicht auf dem eingerichteten Referenzgerät vollgeflasht; Hostadresse/NVS beachten |
 | Audio-Board | `firmware/prebuilt/audio-board/xiaozhi.bin` | **kein Audio-Board-Vollimage im Repo**; mit dessen Buildskript `build/firmware/merged-binary.bin` erzeugen |
 
 Build-Aufrufe (jeweils eigener frischer Repo-Clone, da alte Skripte denselben

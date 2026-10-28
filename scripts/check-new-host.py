@@ -108,9 +108,26 @@ required = [
 for filename in required:
     check((bridge / filename).is_file(), "Bridge-Datei: " + filename)
 
+screen = home / ".local/share/jarvis-screen"
+for filename in ["show.py", "render.py", "serve.py", "palette.py",
+                 "image-search.py", "templates/wetter.py", "templates/karte.py"]:
+    check((screen / filename).is_file(), "Anzeige: " + filename)
+
+display_skill = home / ".openclaw/workspace-voice/skills/display-cards/SKILL.md"
+check(display_skill.is_file(), "Agent-Skill: display-cards")
+
+if (screen / ".venv/bin/python").exists():
+    result = subprocess.run(
+        [str(screen / ".venv/bin/python"), "-c", "import PIL"],
+        capture_output=True)
+    check(result.returncode == 0, "Anzeige: Pillow importierbar")
+else:
+    check(False, "Anzeige: eigenes venv")
+
 for filename in [
     "catalog.py", "control.py", "fuzzy.py", "localmap.py", "resolver.py",
-    "rooms.py", "smarthome_cli.py", "bridges.json", "rooms_overrides.json",
+    "rooms.py", "smarthome_cli.py", "panel.py", "overrides.py",
+    "bridges.json", "rooms_overrides.json",
 ]:
     check((local_smarthome / filename).is_file(), "Lokaler Resolver: " + filename)
 
@@ -131,6 +148,7 @@ if shutil.which("systemctl"):
     for service in [
         "openclaw-gateway.service",
         "jarvis-realtime-bridge.service",
+        "jarvis-screen.service",
         "wyoming-canary1b.service",
         "geraeteverwaltung.service",
     ]:

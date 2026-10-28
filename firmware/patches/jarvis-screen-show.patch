@@ -1,0 +1,293 @@
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -1117,6 +1117,7 @@ void Application::HandleStateChangedEvent() {
+             // queues STATE_CHANGED after Alert(), and the idle handler would
+             // otherwise wipe the status, emotion, and chat message.
+             if (last_error_message_.empty()) {
++                display->HideFullscreenImage();
+                 display->SetStatus(Lang::Strings::STANDBY);
+                 display->ClearChatMessages();  // Clear messages first
+                 display->SetEmotion(
+diff --git a/main/display/display.h b/main/display/display.h
+index e7fa6fa..37684ee 100644
+--- a/main/display/display.h
++++ b/main/display/display.h
+@@ -75,6 +75,13 @@ public:
+     }
+     virtual void LoadAssets() {}
+     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image);
++    // Vollflaechige, dauerhafte Anzeige eines Bildes (bleibt bis zum naechsten
++    // Bild oder bis HideFullscreenImage stehen). Basis: nicht unterstuetzt.
++    virtual bool ShowFullscreenImage(std::unique_ptr<LvglImage> image) {
++        (void)image;
++        return false;
++    }
++    virtual void HideFullscreenImage() {}
+     virtual bool SetTextFont(std::shared_ptr<LvglFont> text_font) {
+         (void)text_font;
+         return false;
+diff --git a/main/display/lcd_display.cc b/main/display/lcd_display.cc
+index c84581c..1292bd4 100644
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -1138,6 +1138,71 @@ void LcdDisplay::ClearChatMessages() {
+ }
+ #endif
+ 
++bool LcdDisplay::ShowFullscreenImage(std::unique_ptr<LvglImage> image) {
++    if (image == nullptr) {
++        return false;
++    }
++    DisplayLockGuard lock(this);
++    if (!setup_ui_called_ || preview_image_ == nullptr) {
++        ESP_LOGW(TAG, "ShowFullscreenImage() called before SetupUI()");
++        return false;
++    }
++
++    auto img_dsc = image->image_dsc();
++    if (img_dsc == nullptr || img_dsc->header.w <= 0 || img_dsc->header.h <= 0) {
++        ESP_LOGE(TAG, "ShowFullscreenImage(): Bild ohne gueltige Masse");
++        return false;
++    }
++
++    // Kein Automatik-Ausblenden wie bei der Vorschau: die Karte bleibt stehen,
++    // bis sie ersetzt oder ausgeblendet wird.
++    if (preview_timer_ != nullptr) {
++        esp_timer_stop(preview_timer_);
++    }
++    if (gif_controller_) {
++        gif_controller_->Stop();
++    }
++    lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
++
++    // Bewusst derselbe Weg wie bei der funktionierenden Vorschau: vorhandenes
++    // Bildobjekt, nur groesser und ohne Ausblend-Timer. Ein eigener Layer mit
++    // deckendem Hintergrund hat auf diesem Panel nur Schwarz gezeigt.
++    preview_image_cached_ = std::move(image);
++    auto dsc = preview_image_cached_->image_dsc();
++    lv_obj_set_size(preview_image_, width_, height_);
++    lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
++    lv_image_set_src(preview_image_, dsc);
++    // Einpassen statt verzerren (bei 1:1-Vorlagen ist der Faktor 256).
++    lv_coord_t zoom_w = (lv_coord_t)((int32_t)width_ * 256 / dsc->header.w);
++    lv_coord_t zoom_h = (lv_coord_t)((int32_t)height_ * 256 / dsc->header.h);
++    lv_image_set_scale(preview_image_, zoom_w < zoom_h ? zoom_w : zoom_h);
++    lv_obj_remove_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_foreground(preview_image_);
++    return true;
++}
++
++void LcdDisplay::HideFullscreenImage() {
++    DisplayLockGuard lock(this);
++    if (preview_image_ == nullptr) {
++        return;
++    }
++    if (preview_timer_ != nullptr) {
++        esp_timer_stop(preview_timer_);
++    }
++    // Alte Groesse wiederherstellen, sonst belegt das Bildobjekt weiter die
++    // ganze Flaeche und verdraengt das Gesicht.
++    lv_obj_set_size(preview_image_, width_ / 2, height_ / 2);
++    lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
++    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
++    preview_image_cached_.reset();
++    if (emoji_box_ != nullptr) {
++        lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
++    }
++    if (gif_controller_) {
++        gif_controller_->Start();
++    }
++}
++
+ void LcdDisplay::SetEmotion(const char* emotion) {
+     if (!setup_ui_called_) {
+         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",
+diff --git a/main/display/lcd_display.h b/main/display/lcd_display.h
+index 9f963e9..9882175 100644
+--- a/main/display/lcd_display.h
++++ b/main/display/lcd_display.h
+@@ -48,6 +48,8 @@ public:
+     virtual void SetChatMessage(const char* role, const char* content) override;
+     virtual void ClearChatMessages() override;
+     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
++    virtual bool ShowFullscreenImage(std::unique_ptr<LvglImage> image) override;
++    virtual void HideFullscreenImage() override;
+     virtual void SetupUI() override;
+     // Add theme switching function
+     virtual void SetTheme(Theme* theme) override;
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index a81b189..1d54b91 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
+@@ -330,6 +330,170 @@ void McpServer::AddUserOnlyTools() {
+                 return true;
+             });
+ #endif  // CONFIG_LV_USE_SNAPSHOT
++
++        // Vollbild-Anzeige fuer den Agenten: laedt ein PNG/JPEG und laesst es
++        // stehen, bis das naechste Bild kommt oder self.screen.hide gerufen
++        // wird. Anders als preview_image ist dieses Werkzeug fuer den Agenten
++        // sichtbar: damit lassen sich Anzeigen per Sprache ausloesen.
++        AddTool("self.screen.show",
++                "Show a full-screen image on the display. The image stays visible until the next "
++                "one is shown or self.screen.hide is called. Only use an HTTP(S) URL to a PNG or "
++                "JPEG that you have just produced; the display is square unless "
++                "self.screen.get_info says otherwise. Keep the image at the display resolution.",
++                PropertyList({Property("url", kPropertyTypeString),
++                              Property("width", kPropertyTypeInteger, 0, 0, 4096),
++                              Property("height", kPropertyTypeInteger, 0, 0, 4096)}),
++                [display](const PropertyList& properties) -> ToolResult {
++                    auto url = properties["url"].value<std::string>();
++                    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
++
++                    if (auto opened = http->Open("GET", url); !opened) {
++                        return std::unexpected("Failed to open URL: " + url + " (" +
++                                               opened.error().ToString() + ")");
++                    }
++                    auto status_code = http->GetStatusCode();
++                    if (!status_code) {
++                        return std::unexpected(status_code.error().ToString());
++                    }
++                    if (*status_code != 200) {
++                        http->Close();
++                        return std::unexpected("Unexpected status code: " +
++                                               std::to_string(*status_code));
++                    }
++
++                    size_t content_length = http->GetBodyLength();
++                    if (content_length == 0) {
++                        http->Close();
++                        return std::unexpected("Empty body from: " + url);
++                    }
++                    using BufferPtr = std::unique_ptr<char, decltype(&heap_caps_free)>;
++                    // Ein 480x480-Bild sind 460800 Byte. Der interne RAM ist
++                    // dafuer zu klein (dort bleiben ~128 KB); der PSRAM hat
++                    // 8 MB. Genau so alloziert auch die Kameravorschau, die
++                    // auf diesem Board nachweislich zeichnet.
++                    BufferPtr data(
++                        static_cast<char*>(heap_caps_malloc(
++                            content_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
++                        heap_caps_free);
++                    if (data == nullptr) {
++                        http->Close();
++                        return std::unexpected("Failed to allocate memory for image (" +
++                                               std::to_string(content_length) + " bytes): " + url);
++                    }
++                    size_t total_read = 0;
++                    while (total_read < content_length) {
++                        auto ret =
++                            http->Read(data.get() + total_read, content_length - total_read);
++                        if (!ret) {
++                            http->Close();
++                            return std::unexpected("Failed to download image: " + url);
++                        }
++                        if (*ret == 0) {
++                            break;
++                        }
++                        total_read += *ret;
++                    }
++                    http->Close();
++
++                    // Rohdaten-Bild (RGB565): Pixel liegen schon fertig vor,
++                    // kein Dekodieren beim Zeichnen. Genau dieser Weg ist auf
++                    // diesem Board erprobt (Kameravorschau), waehrend das
++                    // Dekodieren eines komprimierten PNG im Zeichenpfad hier
++                    // nichts auf den Schirm brachte.
++                    auto width_arg = properties["width"].value<int>();
++                    auto height_arg = properties["height"].value<int>();
++                    const bool raw_url = url.size() >= 4 && url.ends_with(".raw");
++
++                    // MCP-Masse sind nur ein Komfortweg. In echten Sprach-Turns
++                    // gingen sie trotz korrekter Bridge-Argumente bereits verloren;
++                    // eine .raw-Datei darf dann keinesfalls in den PNG/JPEG-Decoder
++                    // fallen. Daher die Masse zusaetzlich aus -<W>x<H>.raw lesen.
++                    if (raw_url && (width_arg <= 0 || height_arg <= 0)) {
++                        const size_t suffix = url.size() - 4;
++                        const size_t slash = url.rfind('/', suffix);
++                        const size_t dash = url.rfind('-', suffix);
++                        const size_t x = dash == std::string::npos ? std::string::npos
++                                                                   : url.find('x', dash + 1);
++                        auto parse_dimension = [&url](size_t begin, size_t end, int& value) {
++                            if (begin >= end) {
++                                return false;
++                            }
++                            int parsed = 0;
++                            for (size_t i = begin; i < end; ++i) {
++                                if (url[i] < '0' || url[i] > '9') {
++                                    return false;
++                                }
++                                parsed = parsed * 10 + (url[i] - '0');
++                                if (parsed > 4096) {
++                                    return false;
++                                }
++                            }
++                            value = parsed;
++                            return value > 0;
++                        };
++                        if (dash != std::string::npos &&
++                            (slash == std::string::npos || dash > slash) &&
++                            x != std::string::npos && x < suffix) {
++                            int parsed_width = 0;
++                            int parsed_height = 0;
++                            if (parse_dimension(dash + 1, x, parsed_width) &&
++                                parse_dimension(x + 1, suffix, parsed_height)) {
++                                width_arg = parsed_width;
++                                height_arg = parsed_height;
++                            }
++                        }
++                    }
++
++                    // Eindeutiger Rueckfall fuer ein Bild in nativer Displaygroesse.
++                    if (raw_url && (width_arg <= 0 || height_arg <= 0)) {
++                        const int display_width = display->width();
++                        const int display_height = display->height();
++                        const size_t native_size =
++                            (size_t)display_width * (size_t)display_height * 2;
++                        if (total_read == native_size) {
++                            width_arg = display_width;
++                            height_arg = display_height;
++                        }
++                    }
++
++                    if (raw_url) {
++                        if (width_arg <= 0 || height_arg <= 0) {
++                            return std::unexpected(
++                                "Raw image dimensions missing in URL and arguments: " + url);
++                        }
++                        size_t expected = (size_t)width_arg * (size_t)height_arg * 2;
++                        if (total_read != expected) {
++                            return std::unexpected("Raw image size mismatch: " +
++                                                   std::to_string(total_read) + " != " +
++                                                   std::to_string(expected));
++                        }
++                        ESP_LOGI(TAG, "Show raw image: %dx%d, %u bytes", width_arg,
++                                 height_arg, (unsigned)total_read);
++                        auto image = std::make_unique<LvglAllocatedImage>(
++                            data.release(), expected, width_arg, height_arg, width_arg * 2,
++                            LV_COLOR_FORMAT_RGB565);
++                        if (!display->ShowFullscreenImage(std::move(image))) {
++                            return std::unexpected("Display refused the image");
++                        }
++                        return true;
++                    }
++
++                    auto image = std::make_unique<LvglAllocatedImage>(data.release(), total_read);
++                    if (!image->IsValid()) {
++                        return std::unexpected("Downloaded image is invalid or unsupported: " +
++                                               url);
++                    }
++                    if (!display->ShowFullscreenImage(std::move(image))) {
++                        return std::unexpected("Display refused the image");
++                    }
++                    return true;
++                });
++
++        AddTool("self.screen.hide", "Hide the full-screen image and return to the normal face.",
++                PropertyList(), [display](const PropertyList& properties) -> ReturnValue {
++                    display->HideFullscreenImage();
++                    return true;
++                });
+     }
+ #endif  // HAVE_LVGL
+ 

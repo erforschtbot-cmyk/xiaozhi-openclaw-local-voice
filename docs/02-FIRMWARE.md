@@ -84,12 +84,29 @@ in NVS gespeicherten Helligkeitswert wieder her. Ohne ihn überschreibt der
 Upstream-Konstruktor jeden gespeicherten Wert mit 100 %. Eine per MCP auf 5 %
 gesetzte Helligkeit bleibt damit auch nach einem Neustart erhalten.
 
+Der Patch `firmware/patches/jarvis-screen-show.patch` ergänzt die
+Bildschirmanzeige um zwei Werkzeuge:
+
+- `self.screen.show` — lädt bevorzugt **RGB565-Rohdaten** (`-<W>x<H>.raw`) per
+  HTTP in den PSRAM und zeigt sie vollflächig; PNG/JPEG bleibt nur Rückfall und
+  ist auf dem 4B-RGB-Panel nicht der verlässliche Anzeigepfad. Das Bild bleibt
+  bis das nächste Bild kommt, `self.screen.hide` gerufen wird oder das Gerät
+  wieder in den Bereitschaftszustand wechselt; dann erscheint der Smiley;
+- `self.screen.hide` — zurück zum Gesicht.
+
+Beide sind bewusst **keine** `user_only`-Werkzeuge: nur so kann der Agent sie
+auf Zuruf aufrufen. Upstream kennt nur `self.screen.preview_image` — 5 Sekunden,
+70 % × 50 % der Fläche, und für den Agenten unsichtbar. Der Host-Teil (Vorlagen,
+HTTP-Auslieferung, `show.py`) liegt unter `~/.local/share/jarvis-screen/` und
+ist in [`docs/15-ANZEIGEN.md`](15-ANZEIGEN.md) beschrieben.
+
 ```bash
 ./scripts/build-firmware.sh --public-host 192.168.178.143
 ```
 
-Der Build klont exakt die Pins aus `VERSIONS.md`, wendet beide Patchdateien an,
-verwendet ESP-IDF 6.1 im Docker-Container und legt die Artefakte unter `build/` ab.
+Der Build klont exakt die Pins aus `VERSIONS.md`, wendet die 4B-Basis-,
+Helligkeits- und Anzeige-Patches an, verwendet ESP-IDF 6.1 im Docker-Container und
+legt die Artefakte unter `build/` ab.
 
 Die Firmware-Patches enthalten:
 

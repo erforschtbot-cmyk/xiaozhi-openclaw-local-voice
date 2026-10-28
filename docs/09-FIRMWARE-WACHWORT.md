@@ -150,9 +150,9 @@ Image und bricht bei einer falschen Kombination ab, bevor es schreibt.
 # Läuft die neue Firmware? (Compile-Zeit und ELF-Hash vergleichen)
 sudo python3 scripts/read-device-info.py --port /dev/ttyACM0
 
-# Erwartet (Stand 2026-09-28):
-#   compile    : 13:08:52 Sep 28 2026
-#   elf-sha256 : c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd
+# Erwartet (Stand 2026-10-28):
+#   compile    : 15:47:53 Oct 28 2026
+#   elf-sha256 : f52c01a3dd4bee8f53b29e2c74220c99bdc59bde85b6c9c76b4663532257df75
 ```
 
 Nach dem Flashen verbindet sich das Gerät neu. Im Bridge-Log darf das

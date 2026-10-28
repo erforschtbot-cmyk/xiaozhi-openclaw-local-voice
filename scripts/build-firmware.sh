@@ -33,6 +33,8 @@ git -C "$source_dir" apply --check "$repo_dir/firmware/patches/xiaozhi-esp32-ope
 git -C "$source_dir" apply "$repo_dir/firmware/patches/xiaozhi-esp32-openclaw.patch"
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-4b-restore-brightness.patch"
 git -C "$source_dir" apply "$repo_dir/firmware/patches/jarvis-4b-restore-brightness.patch"
+git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-screen-show.patch"
+git -C "$source_dir" apply "$repo_dir/firmware/patches/jarvis-screen-show.patch"
 
 git clone https://github.com/78/uart-uhci.git "$source_dir/local_components/uart-uhci"
 git -C "$source_dir/local_components/uart-uhci" checkout 6ea5f576af84640209aa6b98e27be92b8ce418c5

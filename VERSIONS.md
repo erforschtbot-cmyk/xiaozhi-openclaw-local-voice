@@ -1,10 +1,9 @@
 # Verbindliche Versionen
 
-Diese Werte beschreiben den **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
-Die Firmware enthaelt gegenueber dem Vorgaengerprojekt **eine** Aenderung:
-Das Wachwort-Audio wird nicht mehr an den Server geschickt
-(`CONFIG_SEND_WAKE_WORD_DATA=n`, siehe `docs/09-FIRMWARE-WACHWORT.md`).
-Erkennung und Stimme laufen lokal auf dem Host.
+Diese Werte beschreiben den **Ist-Stand vom 2026-10-28** auf dem Referenzhost.
+Die 4B-Firmware enthält zusätzlich zur lokalen Sprachkette die dauerhafte
+TFT-Kartenanzeige (`self.screen.show/hide`, RGB565 im PSRAM) und räumt sie beim
+Übergang zu **Bereitschaft** wieder zugunsten des Gesichts auf.
 
 | Komponente | Version / Pin |
 |---|---|
@@ -93,15 +92,20 @@ kostet den Wortanfang.
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | `Sep 28 2026 13:08:52` (de-DE, Wachwort-Audio abgeschaltet) |
-| ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
+| Compile time | `Oct 28 2026 15:47:53` (de-DE, Wachwort-Audio abgeschaltet) |
+| ELF-SHA256 | `f52c01a3dd4bee8f53b29e2c74220c99bdc59bde85b6c9c76b4663532257df75` |
 | ESP-IDF | `v6.1` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
-| App-Partition | `0x20000`, 4.128.768 Bytes; belegt 2.905.488 (29 % frei) |
+| App-Partition | `0x20000`, 4.128.768 Bytes; belegt 2.909.840 Byte |
+| App-SHA256 | `e4861929513208707a6b8c7db6272db6f3fea222dcc3bff67eeca848a6f70742` |
+| Vollimage-SHA256 | `15fe86d9328a62146f0eb4a97f16aa11500caddd7b4eedb362bef1296e454b26` |
 
-Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo und wurde am
-2026-09-28 auf das Gerät geflasht; die Prüfsumme nach dem Schreiben wurde
-zurückgelesen und stimmte.
+Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo. Die laufende
+App wurde am 28.10.2026 bei `0x20000` über alle 2.909.840 Byte zurückgelesen;
+Rücklesedatei und Anker waren bytegleich und hatten denselben SHA256. Das
+Vollimage wurde erfolgreich gebaut, aber nicht auf das eingerichtete Gerät
+geschrieben (es würde NVS/WLAN überschreiben). Der vorherige September-Stand
+liegt unter `firmware/prebuilt/previous-pre-tft/`.
 
 ## Zweites Gerät: Audio-Board
 
