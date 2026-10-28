@@ -671,9 +671,9 @@ function renderGruppen() {
         + '</span></label>';
     }).join("") || '<div class="empty">keine schaltbaren Geräte</div>';
 
-    // Zustand: aufgeklappt oder zu. Wird beim Neurendern beibehalten, sonst
-    // springt die Gruppe bei jedem Klick wieder auf.
-    const offen = !ZUGeklappt.has(i);
+    // Zustand: standardmäßig ZUGEKLAPPT. Nur was der Nutzer geöffnet hat,
+    // steht in AUFgeklappt - und das überlebt ein Neuladen der Seite.
+    const offen = AUFgeklappt.has(schluessel(g, i));
     const pfeil = offen ? "▾" : "▸";
     const anzahl = (g.devices || []).length;
     const assiZahl = (g.assistants || []).length;
@@ -699,10 +699,36 @@ function renderGruppen() {
   }).join("");
 }
 
-// Welche Gruppen sind zugeklappt (Index-Position). Standard: aufgeklappt,
-// solange es wenige sind; bei vielen wird automatisch zugeklappt, damit die
-// Seite übersichtlich bleibt.
-let ZUGeklappt = new Set();
+// Welche Gruppen sind AUFgeklappt. Standard: keine - alles zu.
+//
+// Gespeichert wird der NAME, nicht die Position: beim Löschen einer Gruppe
+// verschieben sich die Indizes, und dann wären falsche Gruppen offen.
+// Ablage im localStorage, damit ein Neuladen der Seite den Zustand behält
+// (belegt 28.10.2026: nach Zuklappen und Neuladen war wieder alles offen).
+let AUFgeklappt = new Set();
+const KLAPP_SCHLUESSEL = "geraeteverwaltung.offen";
+
+function schluessel(g, i) {
+  const name = (g && g.name ? String(g.name) : "").trim();
+  return name || ("#index" + i);
+}
+
+function klappZustandLaden() {
+  try {
+    const roh = localStorage.getItem(KLAPP_SCHLUESSEL);
+    AUFgeklappt = new Set(roh ? JSON.parse(roh) : []);
+  } catch (e) {
+    AUFgeklappt = new Set();
+  }
+}
+
+function klappZustandMerken() {
+  try {
+    localStorage.setItem(KLAPP_SCHLUESSEL, JSON.stringify([...AUFgeklappt]));
+  } catch (e) {
+    // Privater Modus oder voller Speicher: dann gilt eben nur für diese Seite.
+  }
+}
 
 // Name tippen: Daten und Kopfzeile nachziehen, aber NICHT neu rendern -
 // sonst verliert das Eingabefeld bei jedem Zeichen den Fokus.
@@ -719,7 +745,9 @@ function umbenennen(i, wert) {
 function klappeGruppe(i, ev) {
   // Klick auf ein Bedienelement im Kopf darf nicht klappen.
   if (ev && ev.target && ev.target.closest("button, input, label")) return;
-  if (ZUGeklappt.has(i)) ZUGeklappt.delete(i); else ZUGeklappt.add(i);
+  const key = schluessel(GRUPPEN[i], i);
+  if (AUFgeklappt.has(key)) AUFgeklappt.delete(key); else AUFgeklappt.add(key);
+  klappZustandMerken();
   renderGruppen();
 }
 
@@ -971,6 +999,7 @@ async function testSentence() {
 }
 
 document.getElementById("filter").addEventListener("input", render);
+klappZustandLaden();
 load();
 ladeGruppen();
 </script></body></html>
