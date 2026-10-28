@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,83 @@ def _norm_raum(text):
     for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
         t = t.replace(a, b)
     return "".join(ch for ch in t if ch.isalnum())
+
+
+# Weisswoerter und ihre Farbtemperatur in KELVIN.
+#
+# Werte vom Eigentuemer bestaetigt (28.10.2026):
+#   weiss 4000, warmes weiss 2200, warmweiss 2700,
+#   Tageslicht 5500, Kaltweiss 7000, kaltes weiss 7000
+#
+# Zwei Dinge sind hier wichtig und waren vorher falsch:
+#
+# 1) "warmes weiss" (2200) ist NICHT "warmweiss" (2700). Beides auf denselben
+#    Wert abzubilden war falsch. Deshalb eigene Tabelle statt Synonyme.
+#
+# 2) Die colortemp-Datenpunkte erwarten KELVIN, nicht Mired. Belegt an den
+#    vorbestehenden Werten: a4c13834b389ea43 stand auf 2200, group_1 auf 7000.
+#    Als Mired waeren das 455 K bzw. 143 K - physikalisch unmoeglich. Meine
+#    Umrechnung 1000000/kelvin war also falsch und ist entfernt.
+#
+# Reihenfolge: laengste Muster zuerst, damit "warmes weiss" nicht von
+# "warmweiss" geschluckt wird.
+_WEISS_KELVIN = (
+    # Nur diese sechs Begriffe sind freigegeben (Eigentuemer, 28.10.2026).
+    # Jeweils beide Schreibweisen, weil die Spracherkennung mal "ß" und mal
+    # "ss" liefert - das ist derselbe Name, keine zweite Variante.
+    #   weiss 4000, warmes weiss 2200, warmweiss 2700,
+    #   Tageslicht 5500, Kaltweiss 7000, kaltes weiss 7000
+    #
+    # Reihenfolge: laengste Muster zuerst, damit "warmes weiss" nicht von
+    # "warmweiss" geschluckt wird.
+    ("warmes weiß", 2200),
+    ("warmes weiss", 2200),
+    ("warmweiß", 2700),
+    ("warmweiss", 2700),
+    ("tageslicht", 5500),
+    ("kaltes weiß", 7000),
+    ("kaltes weiss", 7000),
+    ("kaltweiß", 7000),
+    ("kaltweiss", 7000),
+    ("weiß", 4000),
+    ("weiss", 4000),
+)
+
+# Fuellwoerter, die nach dem Weisswort uebrig bleiben koennen.
+_WEISS_FUELLER = ("warmes", "warme", "kaltes", "kalte",
+                  "weiß", "weiss", "licht", "tages")
+
+
+def weiss_kelvin(text: str):
+    """Farbtemperatur aus dem Satz lesen - unabhaengig von HassIL.
+
+    Gibt Kelvin zurueck oder None. Textbasiert, weil die Vorlagen diese
+    Woerter nur teilweise kennen ("kaltlicht" fehlt ganz) und "warmes weiss"
+    faelschlich als Etage auslegen.
+    """
+    klein = " ".join(str(text or "").lower().split())
+    for muster, kelvin in _WEISS_KELVIN:
+        # Wortgrenzen beachten: sonst steckt "weiß" auch in "neutralweiß"
+        # und "kaltlicht" wuerde ueber "licht" getroffen. Nur eigenstaendige
+        # Woerter zaehlen (belegt 28.10.2026).
+        if re.search(r"(?<!\w)" + re.escape(muster) + r"(?!\w)", klein):
+            return kelvin
+    return None
+
+
+def weiss_rest(text: str) -> str:
+    """Was vom Satz uebrig bleibt, wenn man die Weisswoerter entfernt.
+
+    Fuer "Lampe Schlafzimmer warmes weiss" bleibt "Lampe Schlafzimmer" -
+    daraus laesst sich das Geraet finden, obwohl HassIL den Rest als Etage
+    ausgelegt hat.
+    """
+    klein = " ".join(str(text or "").lower().split())
+    for muster, _ in _WEISS_KELVIN:
+        klein = klein.replace(muster, " ")
+    for wort in _WEISS_FUELLER:
+        klein = klein.replace(wort, " ")
+    return " ".join(klein.split())
 
 
 _lock = threading.Lock()
@@ -211,7 +289,6 @@ def parse(text: str):
     text = " ".join(str(text or "").split())
     if not text:
         return None
-
     intents = _hole()
     namen, _caps = _geraete()
     raeume = _raeume()
@@ -222,17 +299,119 @@ def parse(text: str):
     intents.slot_lists["area"] = TextSlotList.from_strings(
         [r["room"] for r in raeume], name="area")
 
+    # Weisston ZUERST bestimmen - er rettet Faelle, die HassIL gar nicht
+    # kennt. Belegt 28.10.2026: "Lampe Schlafzimmer kaltlicht" ergab None,
+    # weil das Wort in keiner Vorlage steht. Ohne diese Vorabpruefung lief
+    # der Befehl ins Leere, obwohl der Weisswert eindeutig ist.
+    kelvin = weiss_kelvin(text)
+
     try:
         treffer = recognize_best(text, intents)
     except Exception:
-        return None
+        treffer = None
+
     if treffer is None:
-        return None
+        if not kelvin:
+            return None
+        # Nur der Weisston ist bekannt: ein Ersatz-Ergebnis bauen. Das Geraet
+        # oder den Raum findet spaeter als_schaltbefehl() ueber weiss_rest().
+        ergebnis = {"intent": "HassLightSet", "kelvin": kelvin}
+        rest = weiss_rest(text)
+        if rest:
+            ergebnis["_rest"] = rest
+        return ergebnis
 
     ergebnis = {"intent": treffer.intent.name}
     for key, wert in (treffer.entities or {}).items():
         ergebnis[key] = wert.value if hasattr(wert, "value") else wert
+
+    if kelvin:
+        ergebnis["kelvin"] = kelvin
     return ergebnis
+
+
+# Zwischenspeicher fuer die Rolle eines Datenpunkts. Die Rolle sagt, welches
+# Format erwartet wird - und genau daran scheiterte "weiß": hex_color
+# (level.color.rgb) will "#rrggbb", group_1.color (level.color) will
+# {"r":..,"g":..,"b":..}. Falsch geschrieben nimmt der Adapter den Wert
+# trotzdem an, die Lampe reagiert aber nicht (belegt 28.10.2026).
+_ROLLEN = {}
+
+
+def _rolle(datapoint: str):
+    """Rolle eines Datenpunkts aus ioBroker (gecacht)."""
+    if not datapoint:
+        return None
+    if datapoint in _ROLLEN:
+        return _ROLLEN[datapoint]
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    import settings
+    rolle = None
+    try:
+        url = f"{settings.base()}/get/{urllib.parse.quote(datapoint, safe='')}/"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            daten = _json.loads(response.read().decode())
+        rolle = ((daten or {}).get("common") or {}).get("role")
+    except Exception:
+        rolle = None
+    _ROLLEN[datapoint] = rolle
+    return rolle
+
+
+def farbe_als_wert(datapoint: str, rgb) -> str:
+    """Farbe im Format schreiben, das der Ziel-Datenpunkt erwartet.
+
+    level.color.rgb  -> "#rrggbb"   (Einzelgeraete, hex_color)
+    level.color      -> {"r":..}    (Zigbee-Gruppen)
+    """
+    import json as _json
+    r, g, b = rgb
+    rolle = (_rolle(datapoint) or "").lower()
+    if "rgb" in rolle:
+        return f"#{r:02x}{g:02x}{b:02x}"
+    return _json.dumps({"r": r, "g": g, "b": b}, separators=(",", ":"))
+
+
+def weiss_als_temperatur(erkannt: dict):
+    """Weisston aus einem erkannten Satz lesen - Kelvin oder None.
+
+    Die Werte kommen aus der Tabelle _WEISS_KELVIN und wurden vom
+    Eigentuemer bestaetigt (28.10.2026):
+      weiss 4000, warmes weiss 2200, warmweiss 2700,
+      Tageslicht 5500, Kaltweiss 7000, kaltes weiss 7000
+
+    "warmes weiss" und "warmweiss" sind dabei VERSCHIEDEN - frueher wurden
+    beide auf 2700 abgebildet, das war falsch.
+
+    Die colortemp-Datenpunkte fuehren KELVIN, nicht Mired. Belegt an den
+    vorbestehenden Werten 2200 (a4c13834b389ea43) und 7000 (group_1);
+    als Mired waeren das 455 K bzw. 143 K, also unmoeglich.
+    """
+    if not isinstance(erkannt, dict):
+        return None
+    # parse() legt den erkannten Weisston bereits als "kelvin" ab - das ist
+    # der verlaessliche Weg, weil dort der ganze Satz bekannt ist.
+    if erkannt.get("kelvin"):
+        try:
+            return int(erkannt["kelvin"])
+        except (TypeError, ValueError):
+            return None
+    # Rueckfall: aus dem floor schliessen (aeltere Aufrufer).
+    farbe = str(erkannt.get("color") or "").lower()
+    if farbe != "white":
+        return None
+    floor = str(erkannt.get("floor") or "").lower()
+    if "kerze" in floor:
+        return 1900
+    if "warm" in floor:
+        return 2200
+    if "kalt" in floor:
+        return 7000
+    if "tages" in floor or "tag" in floor:
+        return 5500
+    return 4000
 
 
 def _ident_fuer(name):
@@ -355,11 +534,87 @@ def als_schaltbefehl(ergebnis):
     raum = ergebnis.get("area")
 
     # "floor" ist bei uns bedeutungslos: es gibt keine Etagen. Trifft HassIL
-    # darauf, hat es den Namen nicht verstanden, sondern Reste als Etage
+    # darauf, hat es meist den Namen nicht verstanden, sondern Reste als Etage
     # gedeutet. Belegt 27.10.2026: "monitorlich an" -> name="Monitor",
     # floor="lich"; geschaltet wurde der Monitor statt des Monitorlichts.
-    if ergebnis.get("floor"):
+    #
+    # AUSNAHME Weiss: "warmes weiss" / "kaltes weiss" legt HassIL ebenfalls
+    # als floor aus ("warmes"), obwohl es fachlich eine Farbtemperatur ist.
+    # Pauschal zu verwerfen liess "Lampe Schlafzimmer warmes weiss" ins Leere
+    # laufen (belegt 28.10.2026). Diese Fuellwoerter sind daher erlaubt.
+    _floor = str(ergebnis.get("floor") or "").strip().lower()
+    if _floor and weiss_als_temperatur(ergebnis) is None:
         return None
+
+    # Bei "Lampe Schlafzimmer warmes weiss" steckt der Geraete- UND Raurname
+    # im floor ("Schlafzimmer warmes"), nicht in name/area. Ohne Nachschlagen
+    # findet die Zielsuche nichts und der Befehl laeuft ins Leere
+    # (belegt 28.10.2026). Deshalb aus dem floor ergaenzen, was fehlt.
+    # Geraet oder Raum aus dem Resttext bestimmen. Zwei Quellen:
+    #   _rest  - von parse() gesetzt, wenn HassIL den Satz nicht kannte
+    #            ("Lampe Schlafzimmer kaltlicht": kaltlicht fehlt in den
+    #            Vorlagen, der Rest ist "lampe schlafzimmer")
+    #   floor  - wenn HassIL den Rest als Etage ausgelegt hat
+    #            ("Lampe Schlafzimmer warmes weiss" -> floor "Schlafzimmer
+    #            warmes")
+    # Beides wird gleich behandelt: Fuellwoerter raus, dann Name oder Raum
+    # suchen. Ohne diesen Schritt laufen genau diese Saetze ins Leere
+    # (belegt 28.10.2026).
+    # Welche Faehigkeit wird gebraucht? Damit die Kandidatensuche nicht das
+    # kuerzeste Geraet nimmt, das zufaellig passt: "schlafzimmer" trifft
+    # "Klima Schlafzimmer" (nur onoff), "Lampe Schlafzimmer" (alles) und
+    # "Schlafzimmer Ambilight" (nur onoff). Ohne Filter gewann das kuerzeste -
+    # "Klima Schlafzimmer" - und der Farbbefehl lief ins Leere (belegt
+    # 28.10.2026).
+    if ergebnis.get("kelvin") or "temperature" in ergebnis:
+        _noetig = "colortemp"
+    elif "brightness" in ergebnis:
+        _noetig = "brightness"
+    elif "color" in ergebnis:
+        _noetig = "color"
+    elif intent in ("HassTurnOn", "HassTurnOff"):
+        _noetig = "onoff"
+    else:
+        _noetig = None
+
+    _restkandidat = str(ergebnis.get("_rest") or "").strip().lower()
+    if not _restkandidat and _floor:
+        _restkandidat = _floor
+    if _restkandidat and not name:
+        _rest = _restkandidat
+        for _wort in ("warmes", "warme", "warm", "kaltes", "kalte", "kalt",
+                      "neutrales", "neutrale", "neutral", "tageslicht",
+                      "tages", "kerzenlicht", "kerze", "licht", "weiss",
+                      "weiß"):
+            _rest = _rest.replace(_wort, " ")
+        _rest = " ".join(_rest.split())
+        if _rest:
+            _namen, _caps = _geraete()
+            # 1) exakter Geraetename
+            _treffer = [n for n in _caps if _norm_raum(n) == _norm_raum(_rest)]
+            if _treffer:
+                name = _treffer[0]
+            else:
+                # 2) Name enthaelt den Rest (oder umgekehrt), z.B.
+                #    Rest "schlafzimmer" -> Gerät "Lampe Schlafzimmer".
+                #    Kuerzester Treffer gewinnt, damit nicht mehrere
+                #    aehnliche Geraete in Frage kommen.
+                _rest_n = _norm_raum(_rest)
+                _alle = [n for n in _caps if _rest_n and _rest_n in _norm_raum(n)]
+                # Erst die Geraete, die die gebrauchte Faehigkeit haben.
+                if _noetig:
+                    _passend = [n for n in _alle if _noetig in (_caps[n] or {})]
+                    if _passend:
+                        _alle = _passend
+                _kandidaten = sorted(_alle, key=len)
+                if _kandidaten:
+                    name = _kandidaten[0]
+                else:
+                    # 3) Raum
+                    _raumtreffer = [r["room"] for r in _raeume()
+                                    if _norm_raum(r["room"]) == _rest_n]
+                    if _raumtreffer:
+                        raum = raum or _raumtreffer[0]
 
     # Name UND Raum genannt: dann muss ein Geraet zu beidem passen.
     # Belegt 27.10.2026: "heizung badezimmer an" -> name="Heizung",
@@ -405,27 +660,42 @@ def als_schaltbefehl(ergebnis):
                 return None
             return dp, max(0.0, min(100.0, wert))
         if "color" in ergebnis:
+            # "weiss" ist eine Farbtemperatur, keine Farbe. Kelvin direkt -
+            # die Datenpunkte fuehren Kelvin, nicht Mired (belegt 28.10.2026
+            # an den vorbestehenden Werten 2200 und 7000).
+            kelvin = weiss_als_temperatur(ergebnis)
+            if kelvin:
+                dp = ziel("colortemp")
+                if dp:
+                    return dp, int(kelvin)
             dp = ziel("color")
             if not dp:
                 return None
             rgb = COLORS.get(str(ergebnis["color"]).lower())
             if not rgb:
                 return None
-            import json as _json
-            return dp, _json.dumps(
-                {"r": rgb[0], "g": rgb[1], "b": rgb[2]}, separators=(",", ":"))
-        if "temperature" in ergebnis:
+            return dp, farbe_als_wert(dp, rgb)
+        if "temperature" in ergebnis or ergebnis.get("kelvin"):
             dp = ziel("colortemp")
             if not dp:
                 return None
+            # Unser Wert hat Vorrang vor der Tabelle der Vorlagen: die kennt
+            # Tageslicht 6500 und Kaltweiss 4000, der Eigentuemer hat aber
+            # 5500 und 7000 bestaetigt (28.10.2026). Belegt: ohne diese
+            # Reihenfolge schrieb "Tageslicht" 6500 statt 5500.
+            if ergebnis.get("kelvin"):
+                try:
+                    return dp, int(ergebnis["kelvin"])
+                except (TypeError, ValueError):
+                    return None
             try:
                 kelvin = float(ergebnis["temperature"])
             except (TypeError, ValueError):
                 return None
             if not 1000 <= kelvin <= 10000:
                 return None
-            # zigbee fuehrt Mired, gesprochen wird Kelvin: 2700 K = 370 mired.
-            return dp, int(round(1000000.0 / kelvin))
+            # Kelvin direkt schreiben: die colortemp-Punkte fuehren Kelvin.
+            return dp, int(kelvin)
     return None
 
 

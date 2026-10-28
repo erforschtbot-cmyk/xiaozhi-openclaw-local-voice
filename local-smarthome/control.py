@@ -453,36 +453,55 @@ def group_batch(text, assistant=None):
         except (ImportError, RuntimeError):
             erkannt = {}
 
+        # Der Wert wird PRO GERAET gebildet, nicht einmal fuer die ganze
+        # Gruppe: Farbziele unterscheiden sich im Format. hex_color
+        # (level.color.rgb) will "#rrggbb", group_1.color (level.color) will
+        # {"r":..,"g":..,"b":..}. Ein gemeinsamer Wert waere fuer eines der
+        # beiden falsch - der Adapter nimmt ihn an, die Lampe reagiert nicht
+        # (belegt 28.10.2026).
         if "brightness" in erkannt:
-            faehigkeit = "brightness"
             try:
-                wert = float(int(round(float(erkannt["brightness"]))))
+                hell = float(int(round(float(erkannt["brightness"]))))
             except (TypeError, ValueError):
                 return None
-            wert = max(0.0, min(100.0, wert))
+            hell = max(0.0, min(100.0, hell))
+            for _name, caps in ziele:
+                dp = caps.get("brightness")
+                if dp:
+                    aufgaben.append((dp, hell))
+
+        elif hassil_router.weiss_als_temperatur(erkannt):
+            # "weiss", "warmes weiss": gehoert auf colortemp, nicht auf die
+            # Farbwahl. Kelvin DIREKT - die Datenpunkte fuehren Kelvin
+            # (belegt 28.10.2026 an den vorbestehenden Werten 2200 und 7000).
+            kelvin = hassil_router.weiss_als_temperatur(erkannt)
+            for _name, caps in ziele:
+                dp = caps.get("colortemp")
+                if dp:
+                    aufgaben.append((dp, int(kelvin)))
+
         elif "color" in erkannt:
-            faehigkeit = "color"
             rgb = hassil_router.COLORS.get(str(erkannt["color"]).lower())
             if not rgb:
                 return None
-            import json as _json
-            wert = _json.dumps({"r": rgb[0], "g": rgb[1], "b": rgb[2]},
-                               separators=(",", ":"))
+            for _name, caps in ziele:
+                dp = caps.get("color")
+                if dp:
+                    aufgaben.append((dp, hassil_router.farbe_als_wert(dp, rgb)))
+
         elif "temperature" in erkannt:
-            faehigkeit = "colortemp"
             try:
                 kelvin = float(erkannt["temperature"])
             except (TypeError, ValueError):
                 return None
             if not 1000 <= kelvin <= 10000:
                 return None
-            wert = int(round(1000000.0 / kelvin))
+            for _name, caps in ziele:
+                dp = caps.get("colortemp")
+                if dp:
+                    aufgaben.append((dp, int(kelvin)))
         else:
             return None
-        for _name, caps in ziele:
-            dp = caps.get(faehigkeit)
-            if dp:
-                aufgaben.append((dp, wert))
 
     if not aufgaben:
         return None
