@@ -20,9 +20,14 @@ def main() -> int:
     # SMARTHOME_DRY_RUN=1 loest nur auf und schreibt nichts. Fuer Tests am
     # Sprachpfad, ohne ein Geraet im Haus zu schalten.
     dry = os.environ.get("SMARTHOME_DRY_RUN") == "1"
+    # Device-ID des Sprachgeraets, das das Wachwort gehoert hat. Nur damit
+    # laesst sich eine Gruppe zuordnen ("Licht an" im Wohnzimmer). Der Server
+    # setzt die Variable (server.py, OPENCLAW_VOICE_DEVICE_ID).
+    assistant = os.environ.get("OPENCLAW_VOICE_DEVICE_ID") or None
     try:
         import control
-        result = control.handle(text, prefer_local=True, dry_run=dry)
+        result = control.handle(text, prefer_local=True, dry_run=dry,
+                                assistant=assistant)
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"ok": False, "reason": f"fehler:{type(exc).__name__}"}))
         return 1

@@ -30,6 +30,7 @@ if HERE not in sys.path:
 import catalog
 import control
 import localmap
+import groups
 import overrides
 import resolver
 
@@ -109,6 +110,32 @@ def datapoint_rooms() -> dict:
     except Exception:
         pass
     return mapping
+
+
+def assistant_liste():
+    """Sprachgeraete aus room-map.json: Device-ID, Raum, ob schon vergeben.
+
+    Die Device-ID ist der Schluessel, ueber den der Sprachweg die Gruppe
+    findet - nicht der Raumname. Der Raum dient nur der Uebersicht.
+    """
+    pfad = os.path.join(
+        "/home/openclaw/.local/share/jarvis-realtime-bridge", "room-map.json")
+    try:
+        with open(pfad, encoding="utf-8") as handle:
+            daten = (json.load(handle) or {}).get("rooms") or {}
+    except (OSError, ValueError):
+        return []
+    vergeben = {}
+    try:
+        for g in groups.liste():
+            for a in g["assistants"]:
+                vergeben[a] = g["name"]
+    except Exception:
+        pass
+    return [
+        {"id": did, "room": raum, "group": vergeben.get(did)}
+        for did, raum in sorted(daten.items(), key=lambda x: x[1])
+    ]
 
 
 def collect():
@@ -326,6 +353,16 @@ table.caps th{font-size:11px;padding:3px 8px 3px 0;border-bottom:1px solid #2228
 table.caps td{padding:3px 8px 3px 0;border-bottom:none}
 tr.caprow td:first-child{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);white-space:nowrap}
 input.dpin.cap{min-width:0;width:100%;max-width:420px;background:#10151a}
+.grp{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:12px}
+.grp h3{margin:0 0 10px;font-size:14px;display:flex;gap:10px;align-items:center}
+.grp h3 input{font-weight:600}
+.grp .cols{display:flex;gap:16px;flex-wrap:wrap}
+.grp .col{flex:1;min-width:240px}
+.grp .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.grp .chk{display:flex;gap:7px;align-items:center;font-size:13px;padding:2px 0}
+.grp .chk input{width:auto;min-width:0}
+.grp .chk small{color:var(--dim);font-size:11px}
+.grp .empty{color:var(--dim);font-size:12px;padding:4px 0}
 tr.gone td input{text-decoration:line-through}
 .grid{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:9px;display:none;z-index:9}
@@ -348,6 +385,18 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:9px;paddin
 </header>
 <main>
   <div class="stats" id="stats"></div>
+
+  <div class="roomgroup">
+    <div class="roomhead">Gruppen
+      <span class="badge">Sprachassistent schaltet alle Geräte der Gruppe</span>
+    </div>
+    <div id="groups"></div>
+    <div class="grid" style="margin-top:10px">
+      <button class="primary" onclick="neueGruppe()">+ Gruppe anlegen</button>
+      <button id="gsave" onclick="speichereGruppen()">Gruppen speichern</button>
+      <span id="gdirty" style="color:var(--warn);font-size:12px"></span>
+    </div>
+  </div>
 
   <div class="roomgroup">
     <div class="roomhead">Satz testen <span class="badge">schaltet nichts</span></div>
@@ -558,6 +607,122 @@ async function load() {
   }
 }
 
+// ---------------------------------------------------------------- Gruppen
+// Eine Gruppe gehoert einem SPRACHGERAET, nicht einem Raumnamen. Der Name
+// der Gruppe ist nur eine Bezeichnung - geschaltet wird, weil das Geraet mit
+// dieser Device-ID das Wachwort gehoert hat.
+let GRUPPEN = [];
+let ASSISTENTEN = [];
+let GERAETENAMEN = [];
+
+function gruppenGeaendert() {
+  const el = document.getElementById("gdirty");
+  if (el) el.textContent = "ungespeichert";
+}
+
+function neueGruppe() {
+  GRUPPEN.push({name: "Neue Gruppe", assistants: [], devices: []});
+  renderGruppen();
+  gruppenGeaendert();
+}
+
+function gruppeWeg(index) {
+  const g = GRUPPEN[index];
+  if (!g) return;
+  if (!confirm("Gruppe „" + (g.name || "") + "“ löschen?\n\n" +
+               "Die Geräte selbst bleiben unberührt, nur die Gruppe verschwindet.")) return;
+  GRUPPEN.splice(index, 1);
+  renderGruppen();
+  gruppenGeaendert();
+}
+
+function renderGruppen() {
+  const box = document.getElementById("groups");
+  if (!box) return;
+  if (!GRUPPEN.length) {
+    box.innerHTML = '<div class="empty">Noch keine Gruppe. „+ Gruppe anlegen" startet eine.</div>';
+    return;
+  }
+  box.innerHTML = GRUPPEN.map((g, i) => {
+    const assis = ASSISTENTEN.map(a => {
+      const an = (g.assistants || []).includes(a.id);
+      const belegt = a.group && a.group !== g.name;
+      return '<label class="chk"><input type="checkbox"' + (an ? " checked" : "")
+        + ' onchange="toggleAssistent(' + i + ', ' + JSON.stringify(a.id).replace(/"/g, "&quot;") + ', this.checked)">'
+        + '<span>' + esc(a.room || a.id) + (belegt ? ' <small>(auch in „' + esc(a.group) + '“)</small>' : '')
+        + '</span></label>';
+    }).join("") || '<div class="empty">keine Sprachgeräte gefunden</div>';
+
+    const geraete = GERAETENAMEN.map(n => {
+      const an = (g.devices || []).includes(n);
+      return '<label class="chk"><input type="checkbox"' + (an ? " checked" : "")
+        + ' onchange="toggleGeraet(' + i + ', this.value, this.checked)" value="' + esc(n) + '">'
+        + '<span>' + esc(n) + '</span></label>';
+    }).join("") || '<div class="empty">keine schaltbaren Geräte</div>';
+
+    return '<div class="grp">'
+      + '<h3>Name <input class="inline" value="' + esc(g.name || "")
+      + '" oninput="GRUPPEN[' + i + '].name=this.value;gruppenGeaendert()" style="min-width:200px">'
+      + '<button class="del" onclick="gruppeWeg(' + i + ')">löschen</button></h3>'
+      + '<div class="cols">'
+      + '<div class="col"><div class="lbl">Sprachassistent (Pflicht)</div>' + assis + '</div>'
+      + '<div class="col"><div class="lbl">Geräte (' + (g.devices || []).length + ')</div>' + geraete + '</div>'
+      + '</div></div>';
+  }).join("");
+}
+
+function toggleAssistent(i, id, an) {
+  const g = GRUPPEN[i];
+  if (!g) return;
+  g.assistants = g.assistants || [];
+  if (an) { if (!g.assistants.includes(id)) g.assistants.push(id); }
+  else { g.assistants = g.assistants.filter(x => x !== id); }
+  gruppenGeaendert();
+}
+
+function toggleGeraet(i, name, an) {
+  const g = GRUPPEN[i];
+  if (!g) return;
+  g.devices = g.devices || [];
+  if (an) { if (!g.devices.includes(name)) g.devices.push(name); }
+  else { g.devices = g.devices.filter(x => x !== name); }
+  gruppenGeaendert();
+}
+
+async function ladeGruppen() {
+  try {
+    const res = await fetch("/api/groups");
+    const data = await res.json();
+    GRUPPEN = data.groups || [];
+    ASSISTENTEN = data.assistants || [];
+    GERAETENAMEN = data.devices || [];
+    renderGruppen();
+    const el = document.getElementById("gdirty");
+    if (el) el.textContent = "";
+  } catch (e) {
+    toast("Gruppen nicht ladbar: " + e.message, "bad");
+  }
+}
+
+async function speichereGruppen() {
+  const ohneAssistent = GRUPPEN.filter(g => !(g.assistants || []).length);
+  if (ohneAssistent.length) {
+    if (!confirm("Diese Gruppen haben keinen Sprachassistenten und wirken nicht:\n\n"
+      + ohneAssistent.map(g => "• " + (g.name || "(ohne Namen)")).join("\n")
+      + "\n\nTrotzdem speichern?")) return;
+  }
+  try {
+    const data = await post("/api/groups", {groups: GRUPPEN});
+    GRUPPEN = data.groups || GRUPPEN;
+    renderGruppen();
+    const el = document.getElementById("gdirty");
+    if (el) el.textContent = "";
+    toast("Gruppen gespeichert", "ok");
+  } catch (e) {
+    toast("Nicht gespeichert: " + e.message, "bad");
+  }
+}
+
 async function post(url, body) {
   const res = await fetch(url, {
     method: "POST",
@@ -755,6 +920,7 @@ async function testSentence() {
 
 document.getElementById("filter").addEventListener("input", render);
 load();
+ladeGruppen();
 </script></body></html>
 """
 
@@ -780,6 +946,19 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path in ("/", "/index.html"):
             self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+            return
+        if path == "/api/groups":
+            try:
+                self._json(200, {
+                    "groups": groups.liste(),
+                    "assistants": assistant_liste(),
+                    "devices": sorted(
+                        d["name"] for d in localmap.load().get("devices") or []
+                        if d.get("caps") and d.get("name")
+                    ),
+                })
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"ok": False, "error": repr(exc)})
             return
         if path == "/api/devices":
             try:
@@ -822,6 +1001,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 saved = overrides.save_batch(changes)
                 self._json(200, {"ok": True, "saved": saved})
+                return
+            if path == "/api/groups":
+                gespeichert = groups.speichern(body.get("groups") or [])
+                self._json(200, {"ok": True, "groups": gespeichert})
                 return
             if path == "/api/settings":
                 try:

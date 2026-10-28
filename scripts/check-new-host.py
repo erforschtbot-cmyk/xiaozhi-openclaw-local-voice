@@ -140,7 +140,7 @@ if shutil.which("systemctl"):
         check(result.returncode == 0, "Dienst aktiv: " + service)
 
 for filename in ["panel.py", "overrides.py", "resolver.py", "control.py",
-                 "hassil_router.py", "settings.py", "NOTICE.md"]:
+                 "hassil_router.py", "settings.py", "groups.py", "NOTICE.md"]:
     check((local_smarthome / filename).is_file(),
           "Geraeteverwaltung/Resolver: " + filename)
 check((local_smarthome / "hassil-data" / "sentences" / "_common.yaml").is_file(),

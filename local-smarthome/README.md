@@ -158,6 +158,57 @@ im Wohnzimmer zu hören.
 - „Löschen" heißt ausblenden. Das Gerät verschwindet aus Liste und Sprachweg,
   bleibt in ioBroker aber unverändert.
 
+## Gruppen: ein Gerät schaltet viele
+
+Auf dem Gerät im Wohnzimmer soll **„Licht an"** genügen — ohne Raumnamen. Dafür
+gibt es Gruppen.
+
+Eine Gruppe hat drei Felder:
+
+| Feld | Bedeutung |
+|---|---|
+| Name | **nur eine Bezeichnung** — ohne Wirkung aufs Schalten |
+| Sprachassistent | Device-ID des Geräts, das das Wachwort hört (**Pflicht**) |
+| Geräte | was geschaltet wird, sobald dieser Assistent „Licht …" hört |
+
+**Entscheidend ist der Assistent, nicht der Gruppenname.** Der Sprachweg
+bekommt die Device-ID vom Server (`OPENCLAW_VOICE_DEVICE_ID`, aus
+`room-map.json` des Bridges) und schlägt darüber die Gruppe nach.
+
+### Was greift
+
+```text
+"Licht an"         auf dem Wohnzimmer-Gerät  → Gruppe: alle Geräte der Gruppe
+"Licht blau"       auf dem Wohnzimmer-Gerät  → Gruppe: Farbe auf allen
+"Licht auf 50 %"   auf dem Wohnzimmer-Gerät  → Gruppe: Helligkeit auf allen
+"Licht an"         auf einem Gerät ohne Gruppe → wie bisher (kein-geraet)
+"Licht Arbeitszimmer an"  → Gerät, nicht Gruppe
+"Wohnzimmer an"           → room_batch, nicht Gruppe
+```
+
+Die Reihenfolge ist wichtig: `group_batch` greift **nur**, wenn im Satz weder
+ein Gerätename noch ein Raum steht. Beides wird gegen zwei Quellen geprüft —
+den eigenen Resolver (43 Geräte) und HassIL (118) —, weil jede für sich
+unvollständig ist.
+
+### Anlegen
+
+Im Panel unter **Gruppen** → „+ Gruppe anlegen": Namen vergeben, Assistenten
+anhaken (Pflicht), Geräte anhaken, „Gruppen speichern".
+
+Gespeichert wird in `groups.json` — eigentümerspezifisch, nicht versioniert.
+
+Ohne angehakten Assistenten wirkt eine Gruppe **nicht**; das Panel fragt beim
+Speichern nach.
+
+### Grenzen
+
+- Ein Assistent gehört sinnvoll zu **einer** Gruppe. Trifft er auf mehrere,
+  gewinnt die erste in der Liste.
+- Nur Geräte mit **lokalem** Ziel (`localmap`) sind auswählbar. Reine
+  Alexa-Kanäle lassen sich nicht gruppieren, weil sie über Amazon liefen.
+- „heller"/„dunkler" funktioniert auch hier nicht — relativ ohne Istwert.
+
 ## Erkennung: HassIL zuerst
 
 **HassIL** ist der Intent-Parser von Home Assistant, mit fertigen deutschen

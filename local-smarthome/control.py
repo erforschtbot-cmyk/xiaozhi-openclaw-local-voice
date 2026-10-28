@@ -18,6 +18,8 @@ import urllib.request
 
 import catalog
 import fuzzy
+import groups
+import hassil_router
 import localmap
 import overrides
 import resolver
@@ -380,8 +382,147 @@ def room_batch(text):
             "group": entry.get("group")}
 
 
-def handle(text, dry_run=False, prefer_local=False):
+def group_batch(text, assistant=None):
+    """Befehl ohne Gerät und ohne Raum: die Gruppe des Sprachgeräts schalten.
+
+    Wozu: Auf dem Gerät im Wohnzimmer soll "Licht an" genügen. Der Gruppenname
+    hat dabei KEINE Bedeutung fürs Schalten - entscheidend ist, WELCHES
+    Sprachgerät das Wachwort gehört hat (Device-ID aus room-map.json).
+
+    Greift nur, wenn im Satz weder ein Gerätename noch ein Raum steht:
+      "Licht an"          -> Gruppe
+      "Licht Arbeitszimmer an" -> normales Gerät (früher abgefangen)
+      "Wohnzimmer an"     -> room_batch (früher abgefangen)
+
+    Rueckgabe wie room_batch oder None.
+    """
+    if not assistant:
+        return None
+
+    gruppe = groups.fuer_assistent(assistant)
+    if not gruppe:
+        return None
+
+    # Gerätename im Satz? Dann ist das Gerät gemeint, nicht die Gruppe.
+    # Zwei Quellen prüfen, weil beide unvollständig sind: der eigene Resolver
+    # kennt nur die localmap (43 Geräte), HassIL auch den Katalog (118).
+    # Belegt 28.10.2026: "Monitorlicht an" landete in der Gruppe, weil
+    # local_devices() den Namen nicht führt.
+    try:
+        devices = local_devices()
+        treffer = resolver.match_devices(text, devices) if devices else []
+        if treffer and treffer[0].score >= 100:
+            return None
+    except Exception:
+        pass
+    try:
+        erkannt_name = hassil_router.parse(text) or {}
+        if erkannt_name.get("name") or erkannt_name.get("area"):
+            return None
+    except (ImportError, RuntimeError):
+        # hassil fehlt oder seine Vorlagen sind unbrauchbar - dann entscheidet
+        # spaeter der eigene Weg. Ein Namensfehler (fehlender Import) faellt
+        # dagegen bewusst auf, statt still zu wirken (belegt 28.10.2026).
+        pass
+
+    # Kein Raum im Satz? "Wohnzimmer an" gehört room_batch.
+    if resolver.room_in(text):
+        return None
+
+    ziele = groups.geraete_der_gruppe(gruppe)
+    if not ziele:
+        return None
+
+    # Aktion bestimmen: an/aus, Prozent, Farbe, Farbtemperatur.
+    aufgaben = []          # (datapoint, value)
+    intent = resolver.parse_action(text)
+    if intent.action in ("on", "off"):
+        wert = intent.action == "on"
+        for _name, caps in ziele:
+            dp = caps.get("onoff")
+            if dp:
+                aufgaben.append((dp, wert))
+    else:
+        # Farbe, Helligkeit, Farbtemperatur: das Erkannte direkt verwenden.
+        # NICHT über als_schaltbefehl() gehen - das braucht einen Geräte- oder
+        # Raumnamen, um ein Ziel zu finden, und liefert ohne beides None.
+        # Belegt 28.10.2026: "Licht auf 50 prozent" scheiterte in der Gruppe
+        # genau daran.
+        try:
+            erkannt = hassil_router.parse(text) or {}
+        except (ImportError, RuntimeError):
+            erkannt = {}
+
+        if "brightness" in erkannt:
+            faehigkeit = "brightness"
+            try:
+                wert = float(int(round(float(erkannt["brightness"]))))
+            except (TypeError, ValueError):
+                return None
+            wert = max(0.0, min(100.0, wert))
+        elif "color" in erkannt:
+            faehigkeit = "color"
+            rgb = hassil_router.COLORS.get(str(erkannt["color"]).lower())
+            if not rgb:
+                return None
+            import json as _json
+            wert = _json.dumps({"r": rgb[0], "g": rgb[1], "b": rgb[2]},
+                               separators=(",", ":"))
+        elif "temperature" in erkannt:
+            faehigkeit = "colortemp"
+            try:
+                kelvin = float(erkannt["temperature"])
+            except (TypeError, ValueError):
+                return None
+            if not 1000 <= kelvin <= 10000:
+                return None
+            wert = int(round(1000000.0 / kelvin))
+        else:
+            return None
+        for _name, caps in ziele:
+            dp = caps.get(faehigkeit)
+            if dp:
+                aufgaben.append((dp, wert))
+
+    if not aufgaben:
+        return None
+
+    return {"group_name": gruppe["name"], "assignments": aufgaben,
+            "device": gruppe["name"], "room": None,
+            "action": intent.action or "set",
+            "targets": len(aufgaben)}
+
+
+def handle(text, dry_run=False, prefer_local=False, assistant=None):
+    """Satz auswerten und (ausser bei dry_run) schalten.
+
+    `assistant` ist die Device-ID des Sprachgeräts, das das Wachwort gehört
+    hat (aus OPENCLAW_VOICE_DEVICE_ID). Nur damit lässt sich eine Gruppe
+    zuordnen - der Gruppenname selbst hat keine Bedeutung fürs Schalten.
+    """
     if prefer_local:
+        # Gruppe zuerst: sie greift nur, wenn weder Gerät noch Raum im Satz
+        # steht. "Licht an" auf dem Wohnzimmer-Gerät schaltet dessen Gruppe.
+        gbatch = group_batch(text, assistant)
+        if gbatch:
+            result = {"ok": True, "route": "local", "utterance": text,
+                      "room": None, "device": gbatch["device"],
+                      "group_name": gbatch["group_name"],
+                      "action": gbatch["action"],
+                      "targets": gbatch["targets"]}
+            if dry_run:
+                result["datapoints"] = [dp for dp, _ in gbatch["assignments"]]
+                result["values"] = [v for _, v in gbatch["assignments"]]
+                return result
+            written, failed = [], []
+            for dp, wert in gbatch["assignments"]:
+                ok, status, elapsed, detail = write_state(dp, wert)
+                eintrag = {"datapoint": dp, "value": wert, "http": status}
+                (written if ok else failed).append(eintrag)
+            result["written"] = written
+            result["failed"] = failed
+            result["ok"] = bool(written) and not failed
+            return result
         batch = room_batch(text)
         if batch:
             result = {"ok": True, "route": "local", "utterance": text,
