@@ -201,12 +201,34 @@ Gespeichert wird in `groups.json` — eigentümerspezifisch, nicht versioniert.
 Ohne angehakten Assistenten wirkt eine Gruppe **nicht**; das Panel fragt beim
 Speichern nach.
 
+### Alle Geräte sind wählbar — mit Unterschied
+
+In der Gruppenauswahl stehen **alle** schaltbaren Geräte: 43 mit lokalem Ziel
+(`zigbee.0.*`, `wled.0.*`, `sonoff.0.*`, `0_userdata.0.*`) und 70 mit reinem
+Alexa-Kanal (`alexa2.0.Smart-Home-Devices.*`). Cloud-Geräte tragen in der
+Auswahl die Marke **Cloud**.
+
+Der Unterschied liegt nicht beim Schreiben, sondern danach:
+
+| | lokal (`zigbee.0.*` …) | Cloud (`alexa2.*`) |
+|---|---|---|
+| Befehl geschrieben | lokal nach ioBroker | lokal nach ioBroker |
+| Ausführung | direkt am Funkmodul | alexa2 → Amazon → Gerät |
+| Rückkanal | ja, Wert wird zurückgelesen | nein (`readable: false`) |
+| Bestätigung | belastbar | nur „Befehl angenommen" |
+| Dauer | ~20 ms | spürbar länger |
+
+Kurz: Ein Alexa-Kanal wird **lokal angesprochen**, aber über die Cloud
+ausgeführt. Deshalb ist die Bestätigung schwächer — die Gruppe meldet dann
+„geschaltet", ohne den Zustand prüfen zu können.
+
+Lokale Ziele haben Vorrang, wenn ein Gerät in beiden Quellen steht.
+
 ### Grenzen
 
 - Ein Assistent gehört sinnvoll zu **einer** Gruppe. Trifft er auf mehrere,
   gewinnt die erste in der Liste.
-- Nur Geräte mit **lokalem** Ziel (`localmap`) sind auswählbar. Reine
-  Alexa-Kanäle lassen sich nicht gruppieren, weil sie über Amazon liefen.
+- Bei Cloud-Geräten bleibt die Bestätigung schwach (siehe oben).
 - „heller"/„dunkler" funktioniert auch hier nicht — relativ ohne Istwert.
 
 ## Erkennung: HassIL zuerst

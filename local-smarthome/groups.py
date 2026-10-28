@@ -133,19 +133,70 @@ def namen_der_assistenten() -> list:
     return sorted(namen)
 
 
-def geraete_der_gruppe(gruppe) -> list:
-    """Geräte einer Gruppe als (Sprechname, caps)-Paare aus dem lokalen Abgleich.
+# Alexa-Faehigkeitsname -> Kurzform, wie in localmap.
+_CAP_FROM_ALEXA = {
+    "powerState": "onoff",
+    "active": "onoff",
+    "brightness": "brightness",
+    "percentage": "brightness",
+    "colorName": "color",
+    "colorTemperatureName": "colortemp",
+    "targetSetpoint": "setpoint",
+}
 
-    Nur Geräte, die tatsächlich schaltbar sind - ein Tippfehler in der
-    Oberfläche darf keinen Fehler beim Sprechen verursachen.
+
+def alle_geraete() -> dict:
+    """Alle schaltbaren Geräte: Sprechname -> caps.
+
+    Zwei Quellen, absichtlich beide:
+      localmap  - 43 Geräte mit belegtem LOKALEM Ziel (zigbee, wled, sonoff)
+      catalog   - 124 Geräte; die übrigen haben nur einen alexa2-Kanal
+
+    Alexa-Kanäle gehen über Amazon (alexa2-Adapter -> Alexa-Cloud -> Gerät).
+    Der Befehl wird zwar lokal nach ioBroker geschrieben, die Ausführung
+    braucht aber die Cloud, und es gibt keinen Rückkanal (readable: false).
+    Auf Wunsch des Eigentuemers (28.10.2026) sind sie trotzdem wählbar - mit
+    dem Wissen, dass die Bestätigung schwächer ist und es länger dauert.
+
+    Lokale Ziele haben Vorrang: sie schalten ohne Amazon und lesen zurück.
     """
-    if not isinstance(gruppe, dict):
-        return []
+    import catalog
     import localmap
+
     bekannt = {}
     for dev in localmap.load().get("devices") or []:
         if dev.get("caps") and dev.get("name"):
-            bekannt[dev["name"]] = dev["caps"]
+            bekannt[dev["name"]] = dict(dev["caps"])
+
+    for dev in catalog.load().get("devices") or []:
+        name = dev.get("name") or ""
+        if not name or name in bekannt:
+            continue
+        abbildung = {}
+        for c in (dev.get("writable") or []):
+            kurz = _CAP_FROM_ALEXA.get(c)
+            if kurz and kurz not in abbildung:
+                abbildung[kurz] = f"{dev.get('id')}.{c}"
+        if abbildung:
+            bekannt[name] = abbildung
+    return bekannt
+
+
+def ist_lokal(caps: dict) -> bool:
+    """Schaltet dieses Gerät ohne Amazon?"""
+    import localmap
+    return any(localmap._is_local(dp) for dp in (caps or {}).values())
+
+
+def geraete_der_gruppe(gruppe) -> list:
+    """Geräte einer Gruppe als (Sprechname, caps)-Paare.
+
+    Enthält lokale UND Alexa-Geräte. Ein Tippfehler in der Oberfläche darf
+    keinen Fehler beim Sprechen verursachen - unbekannte Namen fallen raus.
+    """
+    if not isinstance(gruppe, dict):
+        return []
+    bekannt = alle_geraete()
     out = []
     for name in gruppe.get("devices") or []:
         caps = bekannt.get(name)

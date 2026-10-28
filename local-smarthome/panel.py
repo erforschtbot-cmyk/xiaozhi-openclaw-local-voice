@@ -629,7 +629,7 @@ function neueGruppe() {
 function gruppeWeg(index) {
   const g = GRUPPEN[index];
   if (!g) return;
-  if (!confirm("Gruppe „" + (g.name || "") + "“ löschen?\n\n" +
+  if (!confirm("Gruppe „" + (g.name || "") + "“ löschen?\\n\\n" +
                "Die Geräte selbst bleiben unberührt, nur die Gruppe verschwindet.")) return;
   GRUPPEN.splice(index, 1);
   renderGruppen();
@@ -653,11 +653,15 @@ function renderGruppen() {
         + '</span></label>';
     }).join("") || '<div class="empty">keine Sprachgeräte gefunden</div>';
 
-    const geraete = GERAETENAMEN.map(n => {
+    const geraete = GERAETENAMEN.map(eintrag => {
+      const n = eintrag.name || eintrag;
+      const lokal = eintrag.local !== false;
       const an = (g.devices || []).includes(n);
       return '<label class="chk"><input type="checkbox"' + (an ? " checked" : "")
         + ' onchange="toggleGeraet(' + i + ', this.value, this.checked)" value="' + esc(n) + '">'
-        + '<span>' + esc(n) + '</span></label>';
+        + '<span>' + esc(n)
+        + (lokal ? '' : ' <small title="geht über Amazon, kein Rückkanal">Cloud</small>')
+        + '</span></label>';
     }).join("") || '<div class="empty">keine schaltbaren Geräte</div>';
 
     return '<div class="grp">'
@@ -707,9 +711,9 @@ async function ladeGruppen() {
 async function speichereGruppen() {
   const ohneAssistent = GRUPPEN.filter(g => !(g.assistants || []).length);
   if (ohneAssistent.length) {
-    if (!confirm("Diese Gruppen haben keinen Sprachassistenten und wirken nicht:\n\n"
-      + ohneAssistent.map(g => "• " + (g.name || "(ohne Namen)")).join("\n")
-      + "\n\nTrotzdem speichern?")) return;
+    if (!confirm("Diese Gruppen haben keinen Sprachassistenten und wirken nicht:\\n\\n"
+      + ohneAssistent.map(g => "• " + (g.name || "(ohne Namen)")).join("\\n")
+      + "\\n\\nTrotzdem speichern?")) return;
   }
   try {
     const data = await post("/api/groups", {groups: GRUPPEN});
@@ -952,10 +956,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {
                     "groups": groups.liste(),
                     "assistants": assistant_liste(),
-                    "devices": sorted(
-                        d["name"] for d in localmap.load().get("devices") or []
-                        if d.get("caps") and d.get("name")
-                    ),
+                    # Alle schaltbaren Geräte, auch die mit reinem
+                    # alexa2-Kanal. "local" sagt, ob ohne Amazon geschaltet
+                    # wird - das Panel kennzeichnet den Unterschied.
+                    "devices": [
+                        {"name": name, "local": groups.ist_lokal(caps)}
+                        for name, caps in sorted(groups.alle_geraete().items())
+                    ],
                 })
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": repr(exc)})
