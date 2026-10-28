@@ -1,0 +1,14 @@
+{
+  "_id": "alias.0.Schlafzimmer.Lampe_Schlafzimmer.ON",
+  "type": "state",
+  "native": {},
+  "common": {
+    "alias": { "id": "zigbee.0.a4c138ae1ecf2c06.state" },
+    "name": "ON",
+    "role": "switch.light",
+    "write": true,
+    "type": "boolean",
+    "read": true
+  },
+  "acl": { "object": 1636, "state": 1636, "owner": "system.user.admin", "ownerGroup": "system.group.administrator" }
+}

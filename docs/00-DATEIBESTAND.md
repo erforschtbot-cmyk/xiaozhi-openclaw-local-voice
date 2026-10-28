@@ -149,6 +149,22 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 - Kein vollständiger 4B-Neubau und kein Leerhost-/Leerflash-Hardwaretest in
   diesem Audit. Der Buildweg ist vorhanden, aber diese Prüfstufe bleibt offen.
 
+## Ergänzende Dokumente im Quellbaum
+
+Diese Dateien lagen bisher nur im Live-Verzeichnis `~/.local/share/alexa-direct/`
+und sind jetzt versioniert:
+
+| Datei | Inhalt |
+|---|---|
+| `local-smarthome/SCRIPTE.md` | alle 78 ioBroker-JavaScript-/Blockly-Skripte, was sie verknüpfen |
+| `local-smarthome/UNSTIMMIGKEITEN.md` | Alias-Analyse, offene Lücken, bewusst unvollständig |
+| `local-smarthome/ALEXA-NLU-ANALYSE.md` | Untersuchung vom 26.10.2026: warum `powerState` über Amazons Cloud läuft (`alexa-remote2`, `PUT /api/phoenix/state`) |
+| `local-smarthome/alias-beispiele/` | sechs echte `alias.0`-Objekte als Vorlage für eigene Anlagen |
+
+`ALEXA-NLU-ANALYSE.md` ist die frühere Fassung von `local-smarthome/README.md`
+unter anderem Titel. Beide bleiben: die README beschreibt die Bedienung, die
+Analyse die Herleitung und Messwerte.
+
 ## Bewusst nicht im Repository
 
 - `.venv/`, `node_modules/`, `__pycache__/`

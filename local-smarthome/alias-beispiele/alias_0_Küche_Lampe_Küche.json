@@ -1,0 +1,1 @@
+{"_id":"alias.0.Küche.Lampe_Küche","common":{"name":{"de":"Lampe Küche"},"role":"rgbSingle","smartName":false},"native":{},"type":"channel","acl":{"object":1636,"owner":"system.user.admin","ownerGroup":"system.group.administrator"},"from":"system.adapter.admin.0","user":"system.user.admin","ts":1691291482213}
