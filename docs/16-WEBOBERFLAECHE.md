@@ -173,6 +173,13 @@ zuständig. Wenn im Bridge-Log „Lokaler Smart-Home-Weg nicht nutzbar“ steht,
 fehlt die Python-Seite des Resolvers – nicht diese Seite. Diagnose:
 [`17-SCHNELLWEG-DIAGNOSE.md`](17-SCHNELLWEG-DIAGNOSE.md).
 
+## Andere Hosts
+
+Pfade, Port und ioBroker-Adresse sind über `jarvis.env` konfigurierbar; die
+Seite muss nicht auf demselben Host wie das Gateway laufen, solange die
+Datenwurzel erreichbar ist. Details und Grenzen:
+[`18-ANDERE-HOSTS.md`](18-ANDERE-HOSTS.md).
+
 ## Bezug zu den anderen Kapiteln
 
 - Installation und Reihenfolge: [`01-HOST-INSTALLATION.md`](01-HOST-INSTALLATION.md)

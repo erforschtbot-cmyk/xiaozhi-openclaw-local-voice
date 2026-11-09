@@ -94,6 +94,12 @@ Der Installer:
     Erzeugung, Port/Host, ioBroker-Adresse, Sicherheitsgrenzen und
     Fehlersuche stehen in [`16-WEBOBERFLAECHE.md`](16-WEBOBERFLAECHE.md).
 
+Der Installer schreibt außerdem `<Installationsordner>/jarvis.env` mit den
+Pfaden, der ioBroker-Adresse und der Gateway-URL. Ist der ioBroker nicht
+erreichbar, bricht er **nicht** ab: er nennt am Ende die konkrete Frage an den
+Betreiber. Andere Hosts, Container und getrennte Gateways:
+[`18-ANDERE-HOSTS.md`](18-ANDERE-HOSTS.md).
+
 **Prüfpunkt:** Am Ende muss `import OK: server.py inkl. room_command, opuslib,
 websockets` erscheinen und der Dienst `active` sein. Kommt stattdessen
 `MISSING:` oder `Importkette FEHLGESCHLAGEN`, ist der Nachbau an dieser Stelle

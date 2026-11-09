@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import { classify, CATALOG, normalize } from './smart-home-router.mjs';
 import { applyRoom } from './room-command.mjs';
-
-const ENDPOINT = 'http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand';
+import { alexaEndpoint } from './jarvis-paths.mjs';
 
 // Extract only the requested action. The independently observed, finalized
 // transcript remains authoritative; prompt-provided history is never trusted.
@@ -22,7 +21,7 @@ export function createScopedRouter({
   loadCatalog = () => JSON.parse(fs.readFileSync(CATALOG, 'utf8')),
   now = Date.now, log = console.info,
   send = async (command, signal) => {
-    const response = await fetch(`${ENDPOINT}?value=${encodeURIComponent(command)}`, {
+    const response = await fetch(`${alexaEndpoint()}?value=${encodeURIComponent(command)}`, {
       signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(3000)]), redirect: 'error'
     });
     await response.body?.cancel();

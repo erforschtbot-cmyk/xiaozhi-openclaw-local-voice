@@ -10,6 +10,7 @@ OpenClaw-Installation ueber OPENCLAW_NPM_ROOT oder `npm root -g`, damit ein
 Host mit anderem Benutzernamen nicht faelschlich als kaputt gilt.
 """
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,8 +25,15 @@ def check(ok, label):
 
 
 home = Path.home()
-bridge = home / ".local/share/jarvis-realtime-bridge"
-local_smarthome = home / ".local/share/alexa-direct"
+# Konfigurierbare Wurzel: dieselben Variablen wie Bridge und Installer.
+bridge = Path(
+    os.environ.get("JARVIS_DATA_ROOT")
+    or (home / ".local/share/jarvis-realtime-bridge")
+)
+local_smarthome = Path(
+    os.environ.get("JARVIS_SMARTHOME_DIR")
+    or (home / ".local/share/alexa-direct")
+)
 
 print(f"Benutzer: {home}")
 print(f"Bridge:   {bridge}")
@@ -107,6 +115,7 @@ required = [
 ]
 for filename in required:
     check((bridge / filename).is_file(), "Bridge-Datei: " + filename)
+check((bridge / "jarvis.env").is_file(), "Zentrale Konfiguration: jarvis.env")
 
 screen = home / ".local/share/jarvis-screen"
 for filename in ["show.py", "render.py", "serve.py", "palette.py",

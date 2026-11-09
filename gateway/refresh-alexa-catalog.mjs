@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import { buildCatalog, CATALOG } from './smart-home-router.mjs';
+import { ioBrokerBase } from './jarvis-paths.mjs';
 
-const base = 'http://192.168.178.24:8087';
+const base = ioBrokerBase();
 async function read(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(6000), redirect: 'error' });
   if (!response.ok) throw new Error(`catalog HTTP ${response.status}`);

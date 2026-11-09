@@ -12,8 +12,14 @@
 // aus der Device-Id (MAC) schreibt.
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-export const ACTIVE_ROOM = '/home/openclaw/.local/share/jarvis-realtime-bridge/active-room.json';
+const DATA_ROOT =
+  process.env.JARVIS_DATA_ROOT ||
+  path.join(os.homedir(), '.local/share/jarvis-realtime-bridge');
+export const ACTIVE_ROOM =
+  process.env.JARVIS_ACTIVE_ROOM || path.join(DATA_ROOT, 'active-room.json');
 const ACTIVE_ROOM_TTL_MS = 300_000;
 
 const TARGETS = new Set(['licht', 'lichter', 'steckdose', 'steckdosen']);

@@ -7,8 +7,9 @@ ist in der Oberflaeche eintragbar.
 
 Reihenfolge (die erste Quelle gewinnt):
   1. settings.json          - was in der Oberflaeche eingetragen wurde
-  2. IOBROKER_SIMPLE_API    - Umgebungsvariable, fuer headless Installationen
-  3. REFERENZ               - Wert aus dem urspruenglichen Aufbau
+  2. JARVIS_IOBROKER_URL    - zentrale Jarvis-Konfiguration (Container)
+  3. IOBROKER_SIMPLE_API    - Umgebungsvariable, fuer headless Installationen
+  4. REFERENZ               - Wert aus dem urspruenglichen Aufbau
 
 Die Datei wird bei jeder Aenderung neu gelesen (mtime-Pruefung), damit eine
 Korrektur in der Oberflaeche sofort wirkt - ohne Dienst-Neustart.
@@ -52,6 +53,15 @@ def ist_gueltig(url: str) -> bool:
     return text.startswith(("http://", "https://")) and len(text) > len("http://")
 
 
+def _env_url() -> str:
+    """Adresse aus der Umgebung: JARVIS_IOBROKER_URL hat Vorrang."""
+    for name in ("JARVIS_IOBROKER_URL", "IOBROKER_SIMPLE_API"):
+        value = _saeubern(os.environ.get(name) or "")
+        if ist_gueltig(value):
+            return value
+    return ""
+
+
 def base() -> str:
     """Wirksame ioBroker-Adresse (ohne Schraegstrich am Ende)."""
     try:
@@ -65,8 +75,8 @@ def base() -> str:
     if ist_gueltig(aus_datei):
         wert = aus_datei
     else:
-        aus_env = _saeubern(os.environ.get("IOBROKER_SIMPLE_API") or "")
-        wert = aus_env if ist_gueltig(aus_env) else REFERENZ
+        aus_env = _env_url()
+        wert = aus_env if aus_env else REFERENZ
 
     _cache["mtime"] = mtime
     _cache["wert"] = wert
@@ -78,8 +88,10 @@ def quelle() -> str:
     aus_datei = _saeubern(_lesen().get(MERKER) or "")
     if ist_gueltig(aus_datei):
         return "eigene Einstellung"
-    aus_env = _saeubern(os.environ.get("IOBROKER_SIMPLE_API") or "")
-    if ist_gueltig(aus_env):
+    aus_env = _env_url()
+    if aus_env:
+        if _saeubern(os.environ.get("JARVIS_IOBROKER_URL") or ""):
+            return "Umgebungsvariable JARVIS_IOBROKER_URL"
         return "Umgebungsvariable"
     return "Referenzwert (ungeprüft)"
 

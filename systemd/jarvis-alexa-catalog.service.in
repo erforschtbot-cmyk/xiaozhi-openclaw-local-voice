@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh Jarvis safe Alexa device catalog (read-only)
+
+[Service]
+Type=oneshot
+# Pfade und ioBroker-Adresse kommen aus jarvis.env; der Installer rendert
+# dieses Unit auf den tatsächlichen Installationsort.
+EnvironmentFile=-@BRIDGE_DIR@/jarvis.env
+ExecStart=/usr/bin/node @BRIDGE_DIR@/refresh-alexa-catalog.mjs
+TimeoutStartSec=120
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@BRIDGE_DIR@

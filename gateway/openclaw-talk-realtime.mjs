@@ -274,7 +274,7 @@ let stdoutWriteTail = Promise.resolve();
 const pendingRuns = new Map();
 
 const client = new GatewayClient({
-  url: "wss://127.0.0.1:18789",
+  url: process.env.OPENCLAW_GATEWAY_URL || "wss://127.0.0.1:18789",
   token: gatewayToken(),
   clientName: "cli",
   clientDisplayName: "Home Assistant Realtime Voice Bridge",

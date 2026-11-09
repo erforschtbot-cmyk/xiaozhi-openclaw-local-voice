@@ -8,6 +8,9 @@ Type=simple
 # Pfad setzt der Installer; ein falscher Wert laesst den Helfer beim Start
 # scheitern ("Cannot find module ... plugin-sdk/gateway-runtime.js").
 Environment=OPENCLAW_NPM_ROOT=@NPM_ROOT@
+# Zentrale, vom Installer gepflegte Pfade und Endpunkte (JARVIS_DATA_ROOT,
+# JARVIS_SMARTHOME_DIR, JARVIS_IOBROKER_URL, OPENCLAW_GATEWAY_URL).
+EnvironmentFile=-@INSTALL_DIR@/jarvis.env
 WorkingDirectory=@INSTALL_DIR@
 ExecStart=@INSTALL_DIR@/.venv/bin/python @INSTALL_DIR@/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host @PUBLIC_HOST@ --model gpt-live-1-codex --voice cove --session-key @SESSION_KEY@ --consult-session-key @CONSULT_SESSION_KEY@ --stt-local --stt-uri @STT_URI@ --stt-language de --tts-local --tts-voice @TTS_VOICE@ --tts-voice-dir @TTS_VOICE_DIR@ --tts-split @TTS_SPLIT@ --gateway-ca %h/.openclaw/ssl/gateway.crt
 Restart=on-failure
@@ -19,7 +22,7 @@ ProtectHome=read-only
 # Die Stimmen liegen unter ~/.local/share/piper-voices. Das Verzeichnis liegt
 # innerhalb von ProtectHome=read-only und ist damit lesbar. Der
 # Installationsordner bleibt der einzige Schreibpfad.
-ReadWritePaths=%h/.openclaw %h/.local/share/jarvis-realtime-bridge
+ReadWritePaths=%h/.openclaw @INSTALL_DIR@
 
 [Install]
 WantedBy=default.target

@@ -43,6 +43,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | Lokaler Smart-Home-Resolver | eindeutige Befehle ohne Agentenlauf | `local-smarthome/`, ioBroker Simple API |
 | Geräteverwaltung im Browser | Namen, Räume, Gruppen, Satz-Test unter `:8088` | `local-smarthome/panel.py`, `systemd/geraeteverwaltung.service.in`, `docs/16-WEBOBERFLAECHE.md` |
 | Diagnose lokaler Schaltweg | „nicht nutzbar“ vs. 8088/8770, Dry-Run, Logzeilen | `docs/17-SCHNELLWEG-DIAGNOSE.md` |
+| Andere Hosts / Container | konfigurierbare Pfade, Gateway-URL, ioBroker-Endpunkt | `docs/18-ANDERE-HOSTS.md` |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
 | TFT-Karten/Bilder | Wetter, Textkarte und Bildsuche als RGB565 | `screen/`, `openclaw/skills/display-cards/`, `docs/15-ANZEIGEN.md` |

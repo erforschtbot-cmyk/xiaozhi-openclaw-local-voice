@@ -98,6 +98,16 @@ Betreiberangaben (`PANEL_PORT`, `IOBROKER_SIMPLE_API` bzw. `settings.json`).
 Aufbau, IP-Konvention, Sicherheitsgrenzen und Fehlersuche:
 [`16-WEBOBERFLAECHE.md`](16-WEBOBERFLAECHE.md).
 
+## Zentrale Konfiguration
+
+`<Installationsordner>/jarvis.env` wird vom Installer angelegt. Es enthält
+`JARVIS_DATA_ROOT`, `JARVIS_SMARTHOME_DIR`, `JARVIS_IOBROKER_URL` und
+`OPENCLAW_GATEWAY_URL`; optionale Schlüssel wie `JARVIS_ALEXA_ENDPOINT` und
+`JARVIS_ECHO_DEVICE_ID` werden übernommen. Bekannte Schlüssel werden bei einem
+erneuten Lauf aktualisiert, eigene Zeilen bleiben erhalten. Die Bridge liest
+die Datei über `EnvironmentFile`, die Module zusätzlich direkt aus der
+Umgebung. Details: [`18-ANDERE-HOSTS.md`](18-ANDERE-HOSTS.md).
+
 ## Automatisch erzeugte Daten
 
 | Datei | Erzeuger | Zeitbasis / Verhalten bei Fehlen |

@@ -33,7 +33,13 @@ except ImportError:  # pragma: no cover
     find_default_voice = None  # type: ignore[assignment]
 
 
-TURN_GATE_DIR = "/home/openclaw/.local/share/jarvis-realtime-bridge/turn-gates"
+# Datenwurzel der Bridge. Standard ist der Referenzort; JARVIS_DATA_ROOT
+# erlaubt Container/andere Benutzer ohne Codeänderung.
+DATA_DIR = Path(
+    os.environ.get("JARVIS_DATA_ROOT")
+    or (Path.home() / ".local/share/jarvis-realtime-bridge")
+)
+TURN_GATE_DIR = str(DATA_DIR / "turn-gates")
 TURN_GATE_TTL = 15.0
 
 
@@ -332,13 +338,13 @@ class XiaozhiSession:
     # (openclaw-voice-skill-action): derselbe Schaltbefehl wird innerhalb des
     # Fensters nur einmal an Alexa geschickt, egal welcher Pfad zuerst kommt.
     ALEXA_DEDUPE_STATE_PATH = (
-        "/home/openclaw/.local/share/jarvis-realtime-bridge/last-alexa-command.json"
+        str(DATA_DIR / "last-alexa-command.json")
     )
     ALEXA_DEDUPE_WINDOW_SECONDS = 8.0
     # Modus-Schalter: liegt diese Datei vor, ist der Software-Direktpfad AUS
     # und Smart-Home-Befehle gehen den offiziellen KI-Weg (Agent-Consult).
     FASTPATH_DISABLE_FLAG = (
-        "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+        str(DATA_DIR / "disable-smart-home-fastpath")
     )
 
     def __init__(self, websocket, args):
@@ -699,7 +705,7 @@ class XiaozhiSession:
     def is_smart_home_fast_path(transcript):
         # Modus "ki": Direktpfad bewusst abgeschaltet lassen.
         if os.path.exists(
-            "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+            str(DATA_DIR / "disable-smart-home-fastpath")
         ):
             return False
         normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
@@ -3196,7 +3202,7 @@ async def main():
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe_id = re.sub(r"[^0-9A-Za-z]", "", device_id or "device")
         target = Path(
-            f"/home/openclaw/.local/share/jarvis-realtime-bridge/photo-{safe_id}-{stamp}.jpg"
+            str(DATA_DIR / f"photo-{safe_id}-{stamp}.jpg")
         )
         try:
             target.write_bytes(image)

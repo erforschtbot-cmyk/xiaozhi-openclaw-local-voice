@@ -114,6 +114,7 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Lokaler Smart-Home-Resolver (ohne Agentenlauf) | `local-smarthome/` |
 | **Geräteverwaltung im Browser** (`:8088`, Namen/Räume/Gruppen/Satz-Test) | `local-smarthome/panel.py`, `systemd/geraeteverwaltung.service.in`, `docs/16-WEBOBERFLAECHE.md` |
 | Diagnose „lokaler Weg nicht nutzbar“, 8088/8770 abgrenzen | `docs/17-SCHNELLWEG-DIAGNOSE.md` |
+| Andere Hosts, Container, getrennte Gateways | `docs/18-ANDERE-HOSTS.md`, `jarvis.env` |
 
 | **Schnellweg für einfache Schaltbefehle** (Gateway-Weiche, ohne KI-Lauf) | `gateway/smart-home-router.mjs`, `docs/12-SMART-HOME-SCHNELLWEG.md` |
 | Alexa-Geräteliste für den Schnellweg (taeglich erneuert) | `gateway/refresh-alexa-catalog.mjs`, `systemd/jarvis-alexa-catalog.timer` |

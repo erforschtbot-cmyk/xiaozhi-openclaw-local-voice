@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import { applyRoom, readActiveRoom } from './room-command.mjs';
+import { alexaEndpoint, dataFile } from './jarvis-paths.mjs';
 
-export const CATALOG = '/home/openclaw/.local/share/jarvis-realtime-bridge/alexa-device-catalog.json';
+export const CATALOG = dataFile('alexa-device-catalog.json');
 // Der Helper hinterlegt hier den echten gesprochenen Satz. Beim tool-call ist
 // das die einzige verlaessliche Gegenprobe gegen vom Modell gekuerzte Auftraege.
-export const SPOKEN_UTTERANCE = '/home/openclaw/.local/share/jarvis-realtime-bridge/last-utterance.json';
+export const SPOKEN_UTTERANCE = dataFile('last-utterance.json');
 const SPOKEN_TTL_MS = 120_000;
 
 // Pfad bei jedem Aufruf aufloesen: Tests und Umgebungen koennen ihn setzen,
@@ -28,7 +29,6 @@ export function readSpokenUtterance(path = spokenUtterancePath(), now = Date.now
   if (now - ts > SPOKEN_TTL_MS || ts > now + 60_000) return null;
   return utterance.trim();
 }
-const ENDPOINT = 'http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand';
 export const normalize = text => String(text).normalize('NFC').toLocaleLowerCase('de').trim().replace(/\s+/g, ' ');
 const compound = /\b(?:und|oder|danach|dann|vorher|anschließend|anschliessend|später|spaeter|verzögerung|verzoegerung|wenn|falls|bevor|nachdem|nicht|kein|keine|außer|ausser|aber|erst|gleichzeitig|sekunden?|minuten?|stunden?|morgen|heute|bitte nicht)\b/;
 // Limit automatic admission to ordinary low-risk loads. Names alone are not
@@ -148,7 +148,7 @@ export function originalUtteranceBoth(prompt) {
 }
 
 export function createRouter({ loadCatalog = () => JSON.parse(fs.readFileSync(CATALOG, 'utf8')), send = async (command, signal) => {
-  const response = await fetch(`${ENDPOINT}?value=${encodeURIComponent(command)}`, {
+  const response = await fetch(`${alexaEndpoint()}?value=${encodeURIComponent(command)}`, {
     signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(3000)]),
     redirect: 'error',
   });

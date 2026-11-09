@@ -33,7 +33,7 @@ local_voice=1
 local_stt=1
 restart=1
 install_stt=1
-iobroker_url="${IOBROKER_SIMPLE_API:-http://127.0.0.1:8087}"
+iobroker_url="${JARVIS_IOBROKER_URL:-${IOBROKER_SIMPLE_API:-http://127.0.0.1:8087}}"
 iobroker_alexa_endpoint=""
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jarvis-realtime-bridge"
 while (($#)); do
@@ -177,9 +177,16 @@ for test_file in "$repo_dir"/gateway/test-*.mjs "$repo_dir"/gateway/test_*.py; d
   install -m 0644 "$test_file" "$install_dir/"
 done
 
-# Katalog-Units mitliefern, aber NICHT aktivieren: der Timer wuerde einen
-# fremden ioBroker kontaktieren, bevor der Betreiber seinen Endpunkt eintraegt.
-install -m 0644 "$repo_dir/systemd/jarvis-alexa-catalog.service" "$HOME/.config/systemd/user/"
+# Katalog-Unit auf den tatsächlichen Installationsort rendern. Der Timer wird
+# mitgeliefert, aber NICHT aktiviert: er würde einen fremden ioBroker
+# kontaktieren, bevor der Betreiber seinen Endpunkt eingetragen hat.
+python3 - "$repo_dir/systemd/jarvis-alexa-catalog.service.in" \
+  "$HOME/.config/systemd/user/jarvis-alexa-catalog.service" "$install_dir" <<'PY'
+from pathlib import Path
+import sys
+source, target, bridge_dir = sys.argv[1:]
+Path(target).write_text(Path(source).read_text().replace("@BRIDGE_DIR@", bridge_dir))
+PY
 install -m 0644 "$repo_dir/systemd/jarvis-alexa-catalog.timer" "$HOME/.config/systemd/user/"
 
 # --- Python-Umgebung ------------------------------------------------------
@@ -269,6 +276,39 @@ consult_session_key="agent:voice:xiaozhi-consult-v6"
 # ioBroker-Adresse und Port der Geraeteverwaltung sind Betreiberangaben.
 panel_port="${PANEL_PORT:-8088}"
 alexa_dir="$local_smarthome_dir"
+
+# --- Zentrale Konfiguration für alle Jarvis-Dienste -----------------------
+# Pfade und Endpunkte stehen ab jetzt an EINER Stelle. Bekannte Schlüssel
+# werden aktualisiert, unbekannte Zeilen (eigene Ergänzungen) bleiben stehen.
+env_file="$install_dir/jarvis.env"
+python3 - "$env_file" "$install_dir" "$local_smarthome_dir" "$iobroker_url" <<'PY'
+from pathlib import Path
+import os, sys
+target, data_root, smarthome, iobroker = sys.argv[1:]
+managed = {
+    "JARVIS_DATA_ROOT": data_root,
+    "JARVIS_SMARTHOME_DIR": smarthome,
+    "JARVIS_IOBROKER_URL": iobroker,
+    "OPENCLAW_GATEWAY_URL": os.environ.get("OPENCLAW_GATEWAY_URL", "wss://127.0.0.1:18789"),
+}
+for extra in ("JARVIS_ALEXA_ENDPOINT", "JARVIS_ECHO_DEVICE_ID"):
+    if os.environ.get(extra):
+        managed[extra] = os.environ[extra]
+path = Path(target)
+kept = []
+if path.is_file():
+    for line in path.read_text().splitlines():
+        key = line.split("=", 1)[0].strip()
+        if line.strip() and not line.lstrip().startswith("#") and key in managed:
+            continue
+        kept.append(line)
+lines = ["# Vom Installer gepflegt. Eigene Zeilen bleiben erhalten."]
+lines += [f"{key}={value}" for key, value in managed.items()]
+if kept:
+    lines.append("")
+    lines += kept
+path.write_text("\n".join(lines) + "\n")
+PY
 
 unit_target="$HOME/.config/systemd/user/jarvis-realtime-bridge.service"
 render_unit "$unit_target" "$local_stt" "$local_voice"
@@ -399,6 +439,40 @@ fi
 if [[ -n "$iobroker_alexa_endpoint" ]]; then
   "$repo_dir/scripts/install-iobroker-plugin.sh" "$iobroker_alexa_endpoint"
 fi
+
+# --- Selbstpruefung: lokaler Schaltweg und Betreiberangaben --------------
+# Diese Pruefung installiert nichts und schaltet nichts. Sie macht sichtbar,
+# welche Angaben noch vom Betreiber kommen muessen, statt sie stillschweigend
+# anzunehmen.
+echo
+echo "=== Betreiberangaben ==="
+if [[ -x "$install_dir/.venv/bin/python" && -f "$local_smarthome_dir/smarthome_cli.py" ]]; then
+  # Ein fehlender ioBroker darf die Installation nicht abbrechen: die
+  # Pruefung ist eine Frage an den Betreiber, kein Fehler des Hosts.
+  dry="$(SMARTHOME_DRY_RUN=1 JARVIS_DATA_ROOT="$install_dir" \
+      JARVIS_SMARTHOME_DIR="$local_smarthome_dir" \
+      "$install_dir/.venv/bin/python" "$local_smarthome_dir/smarthome_cli.py" \
+      "schalte den Monitor aus" 2>/dev/null | tail -n 1 || true)"
+  echo "  Lokaler Weg (Dry-Run): ${dry:-keine Antwort}"
+else
+  echo "  FEHLER: Resolver oder Bridge-venv fehlt — schneller Schaltweg bleibt aus." >&2
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  if curl -fsS --max-time 3 -o /dev/null "${iobroker_url%/}/"; then
+    echo "  ioBroker erreichbar: $iobroker_url"
+  else
+    echo "  FRAGE AN DEN BETREIBER: ioBroker unter $iobroker_url nicht erreichbar."
+    echo "    Richtige Adresse eintragen: IOBROKER_SIMPLE_API=http://HOST:8087 $0 ..."
+    echo "    Ohne ioBroker bleibt Sprache und Agent nutzbar; lokales Schalten und"
+    echo "    die Geraeteliste fehlen."
+  fi
+fi
+
+case "${OPENCLAW_GATEWAY_URL:-wss://127.0.0.1:18789}" in
+  *127.0.0.1*|*localhost*) ;;
+  *) echo "  Gateway extern: ${OPENCLAW_GATEWAY_URL} — Erreichbarkeit und TLS-CA pruefen." ;;
+esac
 
 echo
 echo "Installed: jarvis-realtime-bridge.service  ($install_dir)"

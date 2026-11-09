@@ -131,6 +131,11 @@ Sinnvoll sind genau diese Angaben, damit der Zustand vergleichbar ist:
 
 ## Voraussetzung, die nicht verhandelbar ist
 
+Der Patch enthält absolute Pfade unter `/home/openclaw`. Bridge und Resolver
+lassen sich dagegen über `JARVIS_DATA_ROOT`/`JARVIS_SMARTHOME_DIR` umstellen.
+Konfiguration, Container-Betrieb und die Fragen an den Betreiber:
+[`18-ANDERE-HOSTS.md`](18-ANDERE-HOSTS.md).
+
 Der Patch und der Helfer enthalten absolute Pfade unter `/home/openclaw`.
 Ein anderer Benutzername bricht sie still oder beim Laden. Wer den Host anders
 aufsetzt, muss den Patchsatz neu erzeugen und die Pfade im Helfer anpassen –

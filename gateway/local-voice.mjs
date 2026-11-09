@@ -111,7 +111,7 @@ const pendingRuns = new Map();
 let activeRun = null;
 
 const client = new GatewayClient({
-  url: "wss://127.0.0.1:18789",
+  url: process.env.OPENCLAW_GATEWAY_URL || "wss://127.0.0.1:18789",
   token: gatewayToken(),
   clientName: "cli",
   clientDisplayName: "XiaoZhi Local Voice Helper",
@@ -259,12 +259,18 @@ function isPhotoRequest(text) {
 // aufgeloest (alexa-direct/resolver.py, gemessen 2,55 ms) und direkt auf
 // zigbee/wled/yeelight geschrieben. Kein Alexa, kein Amazon, kein Agent.
 // Liegt das Flag vor, ist der Weg aus und alles laeuft wie bisher.
-const LOCAL_SMARTHOME_FLAG =
-  "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-local-smarthome";
-const LOCAL_SMARTHOME_CLI =
-  "/home/openclaw/.local/share/alexa-direct/smarthome_cli.py";
-const LOCAL_SMARTHOME_PY =
-  "/home/openclaw/.local/share/jarvis-realtime-bridge/.venv/bin/python";
+// Pfade sind konfigurierbar, damit Bridge und Resolver auch in einem Container
+// oder unter einem anderen Benutzer laufen. Ohne gesetzte Variablen gilt exakt
+// der bisherige Referenzort.
+const BRIDGE_DIR =
+  process.env.JARVIS_DATA_ROOT ||
+  path.join(os.homedir(), ".local/share/jarvis-realtime-bridge");
+const SMARTHOME_DIR =
+  process.env.JARVIS_SMARTHOME_DIR ||
+  path.join(os.homedir(), ".local/share/alexa-direct");
+const LOCAL_SMARTHOME_FLAG = path.join(BRIDGE_DIR, "disable-local-smarthome");
+const LOCAL_SMARTHOME_CLI = path.join(SMARTHOME_DIR, "smarthome_cli.py");
+const LOCAL_SMARTHOME_PY = path.join(BRIDGE_DIR, ".venv/bin/python");
 
 function tryLocalSmartHome(text) {
   if (fs.existsSync(LOCAL_SMARTHOME_FLAG)) return null;
@@ -276,7 +282,7 @@ function tryLocalSmartHome(text) {
       {
         encoding: "utf8",
         timeout: 8000,
-        env: { ...process.env, PYTHONPATH: "/home/openclaw/.local/share/alexa-direct" },
+        env: { ...process.env, PYTHONPATH: SMARTHOME_DIR },
       },
     );
   } catch (error) {
@@ -352,7 +358,7 @@ function lokalerHinweis(local, text) {
 // Datei je Device-ID; hier wird kurz darauf gewartet.
 const TURN_GATE_DIR =
   process.env.OPENCLAW_TURN_GATE_DIR ||
-  "/home/openclaw/.local/share/jarvis-realtime-bridge/turn-gates";
+  path.join(BRIDGE_DIR, "turn-gates");
 // Muss groesser sein als die Sammelfrist des Servers (SETTLE_SECONDS = 1.4 s),
 // sonst laeuft der Helfer in die Zeitueberschreitung und sendet, bevor die
 // Entscheidung feststeht - genau der Fall vom 27.10.2026 19:42 (156 sendete,
