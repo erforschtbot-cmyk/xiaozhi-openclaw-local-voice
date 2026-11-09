@@ -1,0 +1,17 @@
+{
+  "version": "2026.10.9",
+  "files": [
+    {
+      "path": "dist/handlers-B5Rt4cMl.mjs",
+      "patch": "handlers-B5Rt4cMl.mjs.patch",
+      "before": "b5fad14ef1997dedcbfebc229bc5095e76d093a4e6e3c5f7521ba17cf1188c26",
+      "after": "3572d0f08f8f953d943e132726e892d9420dee3eba32ffccbd48071cb23fb474"
+    },
+    {
+      "path": "dist/agent-tools.before-tool-call-CQkX3nOj.mjs",
+      "patch": "agent-tools.before-tool-call-CQkX3nOj.mjs.patch",
+      "before": "e541d3d24b22b5e5a89d07d52191552d23967bfa5189d3ffd0f2c719ea8a35a3",
+      "after": "bf9fd82c4476167aa74302c54e4efaaa6dc39ff3fb281cd2ee8d68f15c38d213"
+    }
+  ]
+}

@@ -1,13 +1,13 @@
 # Verbindliche Versionen
 
-Diese Werte beschreiben den **Ist-Stand vom 2026-10-28** auf dem Referenzhost.
+Diese Werte beschreiben den **Ist-Stand vom 2026-11-09** auf dem Referenzhost.
 Die 4B-Firmware enthält zusätzlich zur lokalen Sprachkette die dauerhafte
 TFT-Kartenanzeige (`self.screen.show/hide`, RGB565 im PSRAM) und räumt sie beim
 Übergang zu **Bereitschaft** wieder zugunsten des Gesichts auf.
 
 | Komponente | Version / Pin |
 |---|---|
-| OpenClaw | `2026.10.7` (Ist-Stand 2026-10-27; exakter Patchsatz unter `patches/openclaw-2026.10.7/`) |
+| OpenClaw | `2026.11.2` (exakter Patchsatz unter `patches/openclaw-2026.11.2/`) |
 | Node.js | `26.12.1` auf dem Referenzhost |
 | Python | `3.14.7` auf dem Referenzhost |
 | XiaoZhi Upstream | `78/xiaozhi-esp32@4632dc51f0a5ad26e08542e131e6e48da41e4ff3` |
@@ -121,16 +121,17 @@ Firmware. Vollständige Anleitung: `docs/11-AUDIO-BOARD.md`.
 | Boardziel | `waveshare/esp32-s3-audio-board` |
 | Patch | `firmware/patches/jarvis-audio-board-ring.patch` |
 | Sprache / Wakeword | `de-DE` / `wn9_jarvis_tts` (wie 4B) |
-| Geräte-MAC | `90:70:69:eb:1e:b4` |
-| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 20 2026 15:38:24` (Tasten, Ring-Anzeige, Kennlinie, playback_drained, **Weiß-Blitz bei Kameraaufnahme**) |
+| Hardware-Anker | Gerät `90:70:69:eb:1c:0c` |
+| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 30 2026 13:21:57`, ELF `c3b6180358a391016dd414bf5a7cd63cba08db3655ced4a689d0c1c1752518ca` |
 | Geflasht auf | Gerät `90:70:69:eb:1c:0c` (Wohnzimmer), App-Partition `0x20000`, NVS erhalten |
-| App-SHA256 (Ist-Stand) | `acf864c5001638ee18eb7c7439ab555b7d09f4a16a93c2baa6842246e7a6b4bc` |
-| Veröffentlichter Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (App-Partition, 2.833.056 B) |
-| Anker-SHA256 | `acf864c5001638ee18eb7c7439ab555b7d09f4a16a93c2baa6842246e7a6b4bc` |
-| Anker-Status | **Am Gerät bestätigt (2026-10-20, 18:08).** Foto-Lauf protokolliert: Auslösung 18:08:06, Upload fertig 18:08:07, korrekte Bildbeschreibung, gesprochen. Der Blitz war rund eine Sekunde an. |
+| App-SHA256 (Ist-Stand) | `c660bd429dcc589c0e95c2837877f01597221609e624a76635e910e5e44a3b36` |
+| Veröffentlichter App-Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (2.866.736 B) |
+| Veröffentlichtes Vollimage | `firmware/prebuilt/audio-board/merged-binary.bin` (9.603.259 B), SHA256 `10fa6cec822716b2c37a979633fd8ddfe86dd854f5cf49cc5ffc1065441df402` |
+| Anker-Status | **Am Gerät bestätigt (2026-11-09).** Genau 2.866.736 Byte bei `0x20000` zurückgelesen und bytegleich; restliche App-Partition vollständig `0xFF`. Vollbackup und NVS bleiben privat. |
 | Vorheriger Anker | `firmware/prebuilt/audio-board/previous-vor-kamera-blitz/xiaozhi.bin` (`eb8671648ec85ebce…`, Stand ohne Blitz) |
 
-Der Anker ist die **App-Partition** (2.833.056 B), nicht das Vollimage. Er enthält
+Der Hardware-Anker ist die **App-Partition** (2.866.736 B). Zusätzlich liegt
+für einen wirklich leeren Flash das aus demselben Build erzeugte Vollimage vor. Beide enthalten
 **keine** Zugangsdaten — WLAN-Name und -Passwort liegen ausschließlich in der NVS,
 die nicht im Repo ist. Geschrieben wird bei `0x20000`; NVS und Assets bleiben
 unangetastet, das Gerät verbindet sich danach **ohne** Neu-Provisionierung.

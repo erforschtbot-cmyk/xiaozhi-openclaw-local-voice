@@ -48,7 +48,12 @@ OFF_WORDS = {"aus", "ab", "ausschalten", "abschalten", "ausmachen", "ausschalte"
 TOGGLE_WORDS = {"umschalten", "umschalte", "toggle", "invertiere", "wechseln"}
 
 # Relativ: heller/dunkler bzw. oeffnen/schliessen
-UP_WORDS = {"hoch", "rauf", "heller", "auf", "oeffne", "oeffnen", "aufmachen",
+# "auf" stand hier frueher und war falsch: "Schalte den Deckenstrahler auf
+# warmes Weiss" wurde dadurch als "heller machen" gelesen und dimmte die Lampe
+# auf 11 % statt den Weisston zu setzen (belegt 2026-11-04 an genau diesem Satz).
+# "auf" ist eine Praeposition ("auf 30 prozent", "auf warmes weiss") und kein
+# Steigerungswort. Absolute Werte werden vorher schon abgefangen.
+UP_WORDS = {"hoch", "rauf", "heller", "oeffne", "oeffnen", "aufmachen",
             "heller machen"}
 DOWN_WORDS = {"runter", "dunkler", "zu", "herunter", "niedriger", "dunkler machen"}
 
@@ -81,6 +86,82 @@ def normalize(text: str) -> str:
 
 def tokens(text: str) -> list[str]:
     return normalize(text).split()
+
+
+# ---------------------------------------------------------------- Abfrage
+# Eine feste Frageform, bewusst eng: "Wie ist die Temperatur [im|von|vom|in|ohne
+# Praeposition] <Ort>?". Der Eigentuemer hat sie am 2026-11-07 vorgegeben:
+# genau dieser Satz, nicht "Wie ist die Temperatur?" allein - ohne Ort waere
+# die Frage mehrdeutig und muesste weiter von der KI beantwortet werden.
+#
+# Warum ueberhaupt lokal: derselbe Satz landete vorher bei parse_action() als
+# "frage" und ging an den Agenten. Gemessen am 2026-11-07:
+#   11:37:01 nicht aufgeloest (frage) -> Antwort nach 7,3 s
+#   12:25:14 nicht aufgeloest (frage) -> Antwort nach 8,9 s
+# Lokal sind es Millisekunden, und die Antwort ist derselbe Datenpunkt, den
+# auch das Panel zeigt.
+TEMP_QUESTION_PREFIXES = (
+    ("wie", "ist", "die", "temperatur"),
+    ("wie", "ist", "temperatur"),
+    ("wie", "hoch", "ist", "die", "temperatur"),
+    ("wie", "hoch", "ist", "temperatur"),
+    ("wie", "viel", "grad"),
+    ("wie", "warm", "ist", "es"),
+    ("wie", "kalt", "ist", "es"),
+    ("wie", "warm", "ist"),
+    ("wie", "kalt", "ist"),
+    ("welche", "temperatur"),
+    ("was", "ist", "die", "temperatur"),
+    ("was", "fuer", "eine", "temperatur"),
+    ("temperatur",),
+)
+
+# Fuellwoerter zwischen Frage und Ort. "mit ohne" heisst beim Eigentuemer:
+# mit Praeposition ("im Wohnzimmer") ODER ohne ("wohnzimmer") - beides gilt.
+LOCATION_FILLERS = {"im", "in", "am", "an", "vom", "von", "aus", "beim",
+                    "bei", "auf", "zu", "der", "dem", "den", "die", "das",
+                    "des", "mein", "meine", "meinem", "meinen", "unser",
+                    "unsere", "hat", "haben", "ist", "sind", "es"}
+# Anhaengsel, die den Ort nicht veraendern.
+LOCATION_TAIL = FILLERS | {"gerade", "aktuell", "momentan", "zurzeit",
+                           "draussen", "drin", "innen"}
+
+
+def parse_temperature_query(text: str) -> list[str] | None:
+    """Ort aus einer Temperaturfrage - oder None, wenn es keine ist.
+
+    Rueckgabe: die Ortswoerter (Liste, kann leer sein, wenn keiner genannt
+    wurde). None bedeutet: der Satz ist keine Temperaturfrage und geht den
+    normalen Weg.
+    """
+    t = tokens(text)
+    if not t:
+        return None
+    rest = None
+    for prefix in TEMP_QUESTION_PREFIXES:
+        if tuple(t[:len(prefix)]) == prefix:
+            rest = t[len(prefix):]
+            break
+    if rest is None:
+        return None
+    # Abgrenzung gegen SOLLWERT-Befehle: "Temperatur Klimaanlage auf 22 Grad"
+    # faengt zwar auch mit "temperatur" an, ist aber ein Schaltbefehl. Eine
+    # Zahl oder ein Setz-Verb im Satz heisst: kein Messwert gefragt.
+    if _number(text) is not None:
+        return None
+    # "auf" steht hier NICHT: es ist auch eine Ortsangabe ("auf der
+    # Terrasse", belegt 2026-11-07). Sollwerte sind über die Zahl davor
+    # schon abgefangen ("auf 22 Grad").
+    if set(t) & {"stelle", "stell", "setze", "setz", "regle", "drehe",
+                 "erhoehe", "senke", "prozent", "celsius", "kelvin"}:
+        return None
+    # Praeposition/Artikel vor dem Ort entfernen - beliebig oft, damit
+    # "im schlafzimmer" und "von der poolheizung" beide funktionieren.
+    while rest and rest[0] in LOCATION_FILLERS:
+        rest = rest[1:]
+    while rest and rest[-1] in LOCATION_TAIL:
+        rest = rest[:-1]
+    return rest
 
 
 # ---------------------------------------------------------------- Aktion
@@ -389,7 +470,25 @@ def is_light_device(name: str, writable: list[str]) -> bool:
     return bool({"brightness", "color", "colortemp"} & set(writable or []))
 
 
-def resolve_by_room(text: str, devices: list[dict], action: str) -> "Resolution":
+# Geräte, die zwar einen Sollwert führen, aber kein Raumthermostat sind.
+# "Lüfter" ist der Ofen im Wohnzimmer (Setpoint 0_userdata.0.Wohnzimmer.
+# ofenanaus, Istwert ofen_ist). Über "Temperatur im Wohnzimmer" darf der
+# nicht gestellt werden - belegt 2026-11-07.
+NOT_THERMOSTAT = ("luefter", "lufter", "ventilator", "ofen", "herd",
+                  "backofen", "drucker", "steckdose", "licht", "lampe",
+                  "kuehlschrank", "kaffee", "wasserkocher")
+
+
+def ist_raumthermostat(name: str, writable: list[str]) -> bool:
+    """Kann dieses Gerät über "Temperatur im <Raum>" gestellt werden?"""
+    if "targetSetpoint" not in (writable or []):
+        return False
+    n = " " + " ".join(tokens(name)) + " "
+    return not any(f" {w} " in n or w in n for w in NOT_THERMOSTAT)
+
+
+def resolve_by_room(text: str, devices: list[dict], action: str,
+                    value=None) -> "Resolution":
     """Nennt der Satz nur einen Raum, nimm das EINE Geraet darin, das die
     Aktion kann. Gibt es mehrere, wird NICHT geraten."""
     room = room_in(text)
@@ -402,7 +501,19 @@ def resolve_by_room(text: str, devices: list[dict], action: str) -> "Resolution"
         dev_tokens = set(tokens(dev["name"]))
         # Raum muss im Geraetenamen stecken ("Lampe Kueche") oder das Geraet
         # heisst exakt wie der Raum.
-        if room not in dev_tokens and " ".join(tokens(dev["name"])) != room:
+        im_namen = (room in dev_tokens
+                    or " ".join(tokens(dev["name"])) == room)
+        # Sollwert: hier zaehlt die Raumzuordnung, nicht der Name. Ein
+        # Thermostat heisst "Temperatur Klimaanlage" und traegt den Raum
+        # nirgends im Namen (belegt 2026-11-07: "stelle die temperatur im
+        # arbeitszimmer auf 22 grad" fand ihn nicht). Bewusst nur fuer diese
+        # Aktion - bei an/aus wuerde dieselbe Regel die Raumaufloesung
+        # verwaschen (viele Geraete teilen sich einen Raum).
+        im_raum = (action == "temperature"
+                   and normalize(dev.get("room") or "") == room
+                   and ist_raumthermostat(dev["name"],
+                                          dev.get("writable") or []))
+        if not (im_namen or im_raum):
             continue
         if not any(c in (dev.get("writable") or []) for c in wanted):
             continue
@@ -411,18 +522,50 @@ def resolve_by_room(text: str, devices: list[dict], action: str) -> "Resolution"
             lights_in_room.append(dev)
     # Ortsname = Licht. Gibt es genau eine Lampe im Raum, gewinnt sie gegen
     # Schalter wie "Klima Schlafzimmer" oder "Badezimmer Heizung".
-    if len(lights_in_room) == 1:
+    # Bei der Sollwert-Aktion nie: dort ist die Lampe nie gemeint.
+    if len(lights_in_room) == 1 and action != "temperature":
         capable = lights_in_room
     if len(capable) == 1:
         dev = capable[0]
         state = next(c for c in wanted if c in dev["writable"])
-        value = (True if action in ("on", "relative")
-                 else False if action == "off" else None)
+        if action == "temperature":
+            # Der Sollwert kommt aus dem Satz ("... auf 22 Grad"), nicht aus
+            # der Aktion. Ohne ihn waere es ein Schreibvorgang mit None.
+            return Resolution(True, text, action=action, device=dev["name"],
+                              device_id=dev["id"], state=state, value=value,
+                              reason=f"raum:{room}")
+        value_ = (True if action in ("on", "relative")
+                  else False if action == "off" else None)
         return Resolution(True, text, action=action, device=dev["name"],
-                          device_id=dev["id"], state=state, value=value,
+                          device_id=dev["id"], state=state, value=value_,
                           reason=f"raum:{room}")
+    if action == "temperature" and not capable:
+        # Kein Raumthermostat vorhanden - das ehrlich sagen, statt
+        # "mehrdeutig" (es gibt gar keinen Kandidaten).
+        return Resolution(False, text, action=action, reason="kein-thermostat",
+                          candidates=[])
     return Resolution(False, text, action=action, reason="raum-mehrdeutig",
                       candidates=[d["name"] for d in (capable or lights_in_room)][:5])
+
+
+def thermostat_ersatz(best, devices: list[dict]):
+    """Sollwert-Geraet zu einem genannten Geraet finden.
+
+    Belegt 2026-11-07: "stell die klimaanlage auf 22 grad" traf "Klimaanlage"
+    (nur Ein/Aus). Den Sollwert fuehrt "Temperatur Klimaanlage". Ein Ersatz
+    wird nur genommen, wenn GENAU EIN Sollwert-Geraet die Woerter des
+    genannten Namens enthaelt - sonst waere es geraten.
+    """
+    wort = set(tokens(best.name))
+    if not wort:
+        return None
+    kandidaten = []
+    for dev in devices:
+        if "targetSetpoint" not in (dev.get("writable") or []):
+            continue
+        if wort <= set(tokens(dev["name"])):
+            kandidaten.append(dev)
+    return kandidaten[0] if len(kandidaten) == 1 else None
 
 
 @dataclass
@@ -447,10 +590,20 @@ def resolve(text: str, devices: list[dict]) -> Resolution:
 
     matches = match_devices(text, devices)
     if not matches:
-        return resolve_by_room(text, devices, intent.action)
+        return resolve_by_room(text, devices, intent.action, intent.value)
 
     best = matches[0]
     rivals = [m for m in matches[1:] if best.score - m.score < AMBIGUITY_MARGIN]
+    # Wortfolge schlägt Wortmenge: steht der Gerätename zusammenhängend im
+    # Satz, ist er gemeint - auch wenn ein anderer Name dieselben Wörter in
+    # anderer Reihenfolge trägt. Belegt 2026-11-04: "licht arbeitszimmer an"
+    # traf "Licht Arbeitszimmer" (exakt, 116) und "Arbeitszimmer Licht"
+    # (nur dieselben Wörter, 106); der Abstand lag unter der Mehrdeutigkeits-
+    # schwelle und der Befehl wurde abgelehnt. Vorher rettete die Lokal-Erst-
+    # Regel das zufällig - eine Sonderregel nach Herkunft, die es nicht mehr
+    # gibt. Diese Regel hier gilt für jedes Gerät gleich.
+    if best.reason == "exakt":
+        rivals = [m for m in rivals if m.reason == "exakt"]
     if rivals:
         return Resolution(False, text, action=intent.action, reason="mehrdeutig",
                           candidates=[best.name] + [m.name for m in rivals[:4]],
@@ -475,6 +628,16 @@ def resolve(text: str, devices: list[dict]) -> Resolution:
                               candidates=sorted(best.writable))
 
     state = next((c for c in CAP_FOR.get(action, []) if c in best.writable), None)
+    if state is None and action == "temperature":
+        # Sollwert: das genannte Geraet kann nur Ein/Aus ("Klimaanlage"),
+        # den Sollwert fuehrt ein Thermostat ("Temperatur Klimaanlage").
+        # Nur bei Eindeutigkeit ersetzen - sonst bleibt es beim Fehlschlag.
+        ersatz = thermostat_ersatz(best, devices)
+        if ersatz is not None:
+            return Resolution(True, text, action="temperature",
+                              device=ersatz["name"], device_id=ersatz["id"],
+                              state="targetSetpoint", value=intent.value,
+                              reason=f"thermostat:{best.name}")
     if state is None:
         # Falsches Geraet nicht ersetzen: der Nutzer hat dieses gemeint.
         return Resolution(False, text, action=action, device=best.name,

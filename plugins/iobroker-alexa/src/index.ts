@@ -3,7 +3,7 @@ import type { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
-const ENDPOINT = "http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value=";
+const DEFAULT_ENDPOINT = "http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value=";
 
 // Raum-Voranstellung. Ohne Raum loest Alexa den Befehl in der Gruppe des
 // angesprochenen Echos auf — und der ist fest das Arbeitszimmer. Deshalb
@@ -87,7 +87,7 @@ const parameters = Type.Object({
 
 async function executeAlexaCommand(
   { text }: { text: string },
-  _config: unknown,
+  config: unknown,
   context: { signal?: AbortSignal },
 ) {
   if (!text.trim() || text.length > 500 || /[\x00-\x1f\x7f]/.test(text) || /^alexa\b/i.test(text.trim())) throw new Error("Ungültiger Text: 1–500 Zeichen, keine Steuerzeichen, kein Alexa-Präfix.");
@@ -98,10 +98,18 @@ async function executeAlexaCommand(
     AsyncLocalStorage<{ room?: string; observedAt?: number }> | undefined;
   const turn = storage?.getStore();
   const room = turn?.room && turn.observedAt && Date.now() - turn.observedAt < 120000 ? turn.room : null;
-  const command = withRoom(text, ACTIVE_ROOM, room);
+  const settings = (config && typeof config === "object" ? config : {}) as {
+    endpoint?: unknown; activeRoomPath?: unknown;
+  };
+  const endpoint = typeof settings.endpoint === "string" && settings.endpoint
+    ? settings.endpoint : DEFAULT_ENDPOINT;
+  const activeRoomPath = typeof settings.activeRoomPath === "string" && settings.activeRoomPath
+    ? settings.activeRoomPath : ACTIVE_ROOM;
+  if (!/^https?:\/\//.test(endpoint)) throw new Error("Plugin-Konfiguration endpoint muss http(s) sein.");
+  const command = withRoom(text, activeRoomPath, room);
   const timeout = AbortSignal.timeout(10000);
   const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
-  const response = await fetch(ENDPOINT + encodeURIComponent(command), { method: "GET", redirect: "error", signal });
+  const response = await fetch(endpoint + encodeURIComponent(command), { method: "GET", redirect: "error", signal });
   await response.body?.cancel();
   if (response.status !== 200) throw new Error(`ioBroker HTTP ${response.status}; nicht automatisch wiederholen.`);
   return { accepted: true, httpStatus: response.status, text: command, sentAs: command, physicalStateVerified: false };

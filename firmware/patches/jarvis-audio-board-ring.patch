@@ -118,7 +118,7 @@ index 1e69597..18e71ae 100644
 \ No newline at end of file
 +}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
-index e983fb4..aaf6d85 100644
+index e983fb4..b96a763 100644
 --- a/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 +++ b/main/boards/waveshare/esp32-s3-audio-board/esp32-s3-audio_board.cc
 @@ -17,6 +17,7 @@
@@ -129,7 +129,7 @@ index e983fb4..aaf6d85 100644
  #include "esp_lcd_jd9853.h"
  
  #define TAG "waveshare_s3_audio_board"
-@@ -33,6 +34,46 @@ private:
+@@ -33,6 +34,47 @@ private:
      LcdDisplay* display_;
      EspVideo* camera_;
  
@@ -139,6 +139,7 @@ index e983fb4..aaf6d85 100644
 +    static CustomBoard* instance_;
 +    button_handle_t key1_handle_ = nullptr;
 +    button_handle_t key3_handle_ = nullptr;
++    button_handle_t key2_handle_ = nullptr;
 +
 +    /// Liest einen Expander-Eingang. Die Taster sind aktiv low.
 +    uint8_t IoExpanderKeyLevel(uint16_t pin_mask) {
@@ -176,7 +177,7 @@ index e983fb4..aaf6d85 100644
      void InitializeI2c() {
          // Initialize I2C peripheral
          i2c_master_bus_config_t i2c_bus_cfg = {
-@@ -153,6 +194,63 @@ private:
+@@ -153,6 +195,82 @@ private:
              }
              app.ToggleChatState();
          });
@@ -184,11 +185,11 @@ index e983fb4..aaf6d85 100644
 +        InitializeVolumeKeys();
 +    }
 +
-+    /// K1 = lauter, K3 = leiser (kurz druecken).
++    /// K1 = lauter, K3 = leiser, K2 = Ring-Helligkeit (kurz druecken).
 +    ///
-+    /// K2 bleibt absichtlich frei: im Waveshare-Demo steuert diese Taste die
-+    /// MP3-Wiedergabe, die es in dieser Firmware nicht gibt. Eine Taste mit
-+    /// fremder Bedeutung zu belegen waere verwirrender als sie leer zu lassen.
++    /// K2 schaltet die Helligkeit in Stufen durch: aus -> 8 % -> 15 % ->
++    /// 25 % -> 45 % -> 70 % -> aus. Die Stufe wirkt sofort im aktuellen
++    /// Zustand, damit man das Ergebnis ohne Sprachbefehl sieht.
 +    void InitializeVolumeKeys() {
 +        if (io_expander == nullptr) {
 +            ESP_LOGW(TAG, "No IO expander; K1/K3 volume keys unavailable");
@@ -237,10 +238,29 @@ index e983fb4..aaf6d85 100644
 +                ESP_LOGI(TAG, "K3 volume-down ready");
 +            }
 +        }
++
++        // K2 = Ring-Helligkeit in Stufen (aus -> ... -> aus).
++        auto* k2_driver = static_cast<button_driver_t*>(calloc(1, sizeof(button_driver_t)));
++        if (k2_driver != nullptr) {
++            k2_driver->enable_power_save = false;
++            k2_driver->get_key_level = [](button_driver_t*) -> uint8_t {
++                return instance_->IoExpanderKeyLevel(IO_EXPANDER_PIN_NUM_10);
++            };
++            if (iot_button_create(&cfg, k2_driver, &key2_handle_) == ESP_OK) {
++                iot_button_register_cb(key2_handle_, BUTTON_SINGLE_CLICK, nullptr,
++                    [](void*, void*) {
++                        auto* ring = static_cast<JarvisRingLed*>(instance_->GetLed());
++                        if (ring != nullptr) {
++                            ring->CycleBrightness();
++                        }
++                    }, nullptr);
++                ESP_LOGI(TAG, "K2 ring-brightness ready");
++            }
++        }
      }
  
      void InitializeCamera() {
-@@ -212,7 +310,9 @@ public:
+@@ -212,7 +330,9 @@ public:
      }
  
      virtual Led* GetLed() override {
@@ -251,7 +271,7 @@ index e983fb4..aaf6d85 100644
          return &led;
      }
  
-@@ -236,4 +336,6 @@ public:
+@@ -236,4 +356,6 @@ public:
      }
  };
  
@@ -260,14 +280,15 @@ index e983fb4..aaf6d85 100644
  DECLARE_BOARD(CustomBoard);
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
 new file mode 100644
-index 0000000..ac13fdb
+index 0000000..9d56970
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,245 @@
 +#include "jarvis_ring_led.h"
 +#include "application.h"
 +#include "device_state.h"
 +
++#include <esp_log.h>
 +#include <esp_timer.h>
 +
 +// Visuelle Zustandssprache des 7er-RGB-Rings.
@@ -303,9 +324,42 @@ index 0000000..ac13fdb
 +// (z. B. esp32-c6-lcd-0.85, esp32-s3-lcd-0.85): sie rufen ihre Farbhelfer
 +// ebenfalls mit (gruen, rot, blau).
 +
-+static const uint8_t HI  = 96;   // kraeftig, aber nicht blendend
-+static const uint8_t MED = 40;
-+static const uint8_t LO  = 6;
++// Ring-Helligkeit in Stufen, mit K2 durchschaltbar. 0 = aus.
++// Die Kanalwerte entstehen aus dem Prozentwert, damit die Farbverhaeltnisse
++// und damit die Zustandssprache erhalten bleiben.
++static const uint8_t RING_LEVELS[] = {0, 8, 15, 25, 45, 70};
++static const int RING_LEVEL_COUNT =
++    static_cast<int>(sizeof(RING_LEVELS) / sizeof(RING_LEVELS[0]));
++static int ring_level_index = 3;   // Start bei 25 %
++
++static uint8_t HI  = 24;
++static uint8_t MED = 10;
++static uint8_t LO  = 2;
++
++static inline uint8_t ScaleChannel(uint8_t base, uint8_t percent) {
++    if (percent == 0) {
++        return 0;
++    }
++    uint16_t value = static_cast<uint16_t>(base) * percent / 100;
++    // Nie ganz auf 0 fallen, sonst waere die Zustandsfarbe unsichtbar.
++    return value == 0 ? 1 : static_cast<uint8_t>(value);
++}
++
++static void ApplyRingLevel() {
++    uint8_t percent = RING_LEVELS[ring_level_index];
++    HI  = ScaleChannel(96, percent);
++    MED = ScaleChannel(40, percent);
++    LO  = ScaleChannel(6, percent);
++}
++
++// Breathe() zaehlt pro Tick genau +1. Ein kleiner Farbabstand ergaebe bei
++// festem Intervall ein hektisches Pulsieren; das Intervall wird deshalb aus
++// der Strecke berechnet, damit ein Atemzug gleich lange dauert.
++static inline int BreatheInterval(uint8_t from, uint8_t to, int duration_ms) {
++    int steps = (to > from) ? (to - from) : 1;
++    int interval = duration_ms / steps;
++    return interval < 20 ? 20 : interval;
++}
 +
 +// Natuerliche Farbeingabe (r, g, b) -> Treiber-/Platinenreihenfolge.
 +static inline StripColor PanelColor(uint8_t r, uint8_t g, uint8_t b) {
@@ -313,10 +367,29 @@ index 0000000..ac13fdb
 +    return StripColor{g, r, b};
 +}
 +
++void JarvisRingLed::CycleBrightness() {
++    // K2: aus -> Stufe -> Stufe -> ... -> aus.
++    ring_level_index = (ring_level_index + 1) % RING_LEVEL_COUNT;
++    ApplyRingLevel();
++    if (RING_LEVELS[ring_level_index] == 0) {
++        SetAllColor(StripColor{0, 0, 0});
++    } else {
++        // Neue Stufe sofort im aktuellen Zustand zeigen (blau/gruen/cyan).
++        OnStateChanged();
++    }
++    ESP_LOGI("JarvisRingLed", "Ring-Helligkeit: %u %%",
++             static_cast<unsigned>(RING_LEVELS[ring_level_index]));
++}
++
 +void JarvisRingLed::OnStateChanged() {
 +    // Waehrend einer Aufnahme hat das weisse Licht Vorrang: sonst wuerde ein
 +    // Zustandswechsel (z. B. Sprechen) das Foto-Licht ueberschreiben.
 +    if (camera_flash_) {
++        return;
++    }
++    // Stufe 0 = aus: keine Animation starten, Ring dunkel lassen.
++    if (RING_LEVELS[ring_level_index] == 0) {
++        SetAllColor(StripColor{0, 0, 0});
 +        return;
 +    }
 +    auto& app = Application::GetInstance();
@@ -332,7 +405,8 @@ index 0000000..ac13fdb
 +
 +        case kDeviceStateIdle:
 +            // Bereitschaft: gedimmt blau, ruhiges Atmen.
-+            Breathe(PanelColor(0, 0, LO), PanelColor(0, 0, MED), 60);
++            Breathe(PanelColor(0, 0, LO), PanelColor(0, 0, MED),
++                    BreatheInterval(LO, MED, 2000));
 +            break;
 +
 +        case kDeviceStateConnecting:
@@ -348,7 +422,8 @@ index 0000000..ac13fdb
 +
 +        case kDeviceStateSpeaking:
 +        case kDeviceStateNotifying:
-+            Breathe(PanelColor(0, LO, LO), PanelColor(0, HI, HI), 45);
++            Breathe(PanelColor(0, LO, LO), PanelColor(0, HI, HI),
++                    BreatheInterval(LO, HI, 4000));
 +            break;
 +
 +        case kDeviceStateUpgrading:
@@ -456,10 +531,10 @@ index 0000000..ac13fdb
 +}
 diff --git a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
 new file mode 100644
-index 0000000..1d54f2c
+index 0000000..4c67af4
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,57 @@
 +#ifndef _JARVIS_RING_LED_H_
 +#define _JARVIS_RING_LED_H_
 +
@@ -481,6 +556,13 @@ index 0000000..1d54f2c
 +    }
 +
 +    void OnStateChanged() override;
++
++    /// Schaltet die Ring-Helligkeit eine Stufe weiter (aus -> ... -> aus).
++    ///
++    /// Wird von Taste K2 ausgeloest. Der Aufruf kommt bewusst von aussen:
++    /// SetBrightness() ruft seinerseits OnStateChanged() auf, ein Aufruf
++    /// innerhalb dieser Methode waere eine Endlos-Rekursion.
++    void CycleBrightness();
 +
 +    /// Helles Weiss (100 %) waehrend einer Kameraaufnahme.
 +    ///

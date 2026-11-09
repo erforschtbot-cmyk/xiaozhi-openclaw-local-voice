@@ -17,6 +17,9 @@ usage() {
   echo "       --tts-split MODUS    clause | sentence | whole (Standard: sentence)" >&2
   echo "       --provider-stt       ohne lokale Erkennung (OpenAI hoert zu)" >&2
   echo "       --provider-voice     ohne lokale Sprachausgabe (OpenAI-Stimme)" >&2
+  echo "       --skip-stt-install   lokalen STT-Dienst nicht automatisch installieren" >&2
+  echo "       --iobroker-url URL   ioBroker simple-api Basis (z.B. http://HOST:8087)" >&2
+  echo "       --iobroker-alexa-endpoint URL  kompletter Echo-textCommand-Endpunkt" >&2
   echo "       --no-restart         Unit schreiben, aber nicht starten" >&2
   exit 2
 }
@@ -29,6 +32,9 @@ stt_uri="127.0.0.1:10303"
 local_voice=1
 local_stt=1
 restart=1
+install_stt=1
+iobroker_url="${IOBROKER_SIMPLE_API:-http://127.0.0.1:8087}"
+iobroker_alexa_endpoint=""
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jarvis-realtime-bridge"
 while (($#)); do
   case "$1" in
@@ -40,6 +46,9 @@ while (($#)); do
     --stt-uri) stt_uri="${2:-}"; shift 2 ;;
     --provider-stt) local_stt=0; shift ;;
     --provider-voice) local_voice=0; shift ;;
+    --skip-stt-install) install_stt=0; shift ;;
+    --iobroker-url) iobroker_url="${2:-}"; shift 2 ;;
+    --iobroker-alexa-endpoint) iobroker_alexa_endpoint="${2:-}"; shift 2 ;;
     --no-restart) restart=0; shift ;;
     *) usage ;;
   esac
@@ -77,6 +86,7 @@ mkdir -p "$local_smarthome_dir" "$screen_dir/templates" "$display_skill_dir"
 # Format: Quelldatei:Zielmodus. 0644 fuer Daten, 0755 fuer Programme.
 runtime_files=(
   "server.py:0644"
+  "mic_capture.py:0644"
   "room_command.py:0644"
   "piper_speaker.py:0644"
   "local_stt.mjs:0644"
@@ -193,6 +203,19 @@ if (( local_voice )); then
   fi
 fi
 
+# Der Standard-Nullstart umfasst auch die lokale Erkennung. Nur der dokumentierte
+# Default 127.0.0.1:10303 wird automatisch installiert; eine fremde STT-Adresse
+# gilt als bewusst extern bereitgestellter Dienst.
+if (( local_stt && install_stt )) && [[ "$stt_uri" == "127.0.0.1:10303" ]]; then
+  if ! systemctl --user is-active --quiet wyoming-canary1b.service; then
+    if (( restart )); then
+      "$repo_dir/scripts/install-canary1b.sh"
+    else
+      "$repo_dir/scripts/install-canary1b.sh" --no-start
+    fi
+  fi
+fi
+
 # --- systemd-Units --------------------------------------------------------
 render_unit() {
   local target="$1" local_stt_flag="$2" local_voice_flag="$3"
@@ -244,7 +267,6 @@ fi
 session_key="agent:voice:xiaozhi-realtime-v6"
 consult_session_key="agent:voice:xiaozhi-consult-v6"
 # ioBroker-Adresse und Port der Geraeteverwaltung sind Betreiberangaben.
-iobroker_url="${IOBROKER_SIMPLE_API:-http://127.0.0.1:8087}"
 panel_port="${PANEL_PORT:-8088}"
 alexa_dir="$local_smarthome_dir"
 
@@ -362,6 +384,10 @@ if (( restart )); then
   fi
 fi
 
+if [[ -n "$iobroker_alexa_endpoint" ]]; then
+  "$repo_dir/scripts/install-iobroker-plugin.sh" "$iobroker_alexa_endpoint"
+fi
+
 echo
 echo "Installed: jarvis-realtime-bridge.service  ($install_dir)"
 echo "Installed: jarvis-screen.service           ($screen_dir)"
@@ -379,7 +405,9 @@ cat <<'EOF'
 
 Noch zu tun (bewusst nicht automatisiert):
   1. room-map.json: eigene Device-Ids eintragen, sonst kein Raumbezug.
-  2. STT-Dienst muss auf der angegebenen Adresse laufen.
+  2. Bei externer/abweichender STT-Adresse deren Erreichbarkeit pruefen.
+     Der Standard 127.0.0.1:10303 wird ohne --skip-stt-install automatisch
+     mit Canary-1B eingerichtet.
   3. Gateway-TLS/Token muss passen: ~/.openclaw/ssl/gateway.crt und
      gateway.authToken in ~/.openclaw/secrets.json.
   4. Pruefen: python3 scripts/check-new-host.py

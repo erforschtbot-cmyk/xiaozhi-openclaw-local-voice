@@ -70,11 +70,18 @@ Nur bei leerem oder vollständig beschädigtem Flash:
 
 ```bash
 ./scripts/flash-firmware.sh --port /dev/ttyACM0 --board 4b --full
+# oder fuer den runden Lautsprecher ohne Display:
+./scripts/flash-firmware.sh --port /dev/ttyACM0 --board audio --full
 ```
 
 Dieses Image wurde mit **geleertem NVS** (`0x9000`–`0xF000` auf `0xFF`) abgelegt,
 enthält also keine WLAN-Zugangsdaten des Referenzgeräts. Nach dem Flashen ist eine
 erneute WLAN-Provisionierung erforderlich.
+
+Beide Vollimages liegen fertig im Repository. Das Audio-Board-Vollimage stammt
+aus demselben Build wie die am 09.11.2026 vom Gerät zurückgelesene, bytegleiche
+App-Partition. Das vollständige Referenzgeräte-Backup und dessen NVS werden
+wegen WLAN-Daten und individueller Kalibrierung ausdrücklich nicht veröffentlicht.
 
 ## Aus Quellen bauen
 

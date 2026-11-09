@@ -27,15 +27,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "localmap.json")
 MAX_AGE = 6 * 3600
 
-# Nur diese Praefixe gelten als "lokal" (kein Amazon, kein Cloud-Dienst).
-LOCAL_PREFIX = (
-    "zigbee.", "shelly.", "tuya.", "wled.", "mqtt.", "tasmota.", "esphome.",
-    "ham.", "yeelight", "javascript.", "0_userdata.", "modbus.", "knx.",
-    "zwave.", "homekit.", "sonoff.", "sainlogic.", "ecovacs.",
-)
-# Ausdruecklich NICHT lokal: der Amazon-Weg selbst.
-CLOUD_PREFIX = ("alexa2.", "iot.", "cloud.", "smartthings.")
-
 # "switch.power" gehoert dazu: bei Luefter und Temperatur Klimaanlage sitzt
 # der echte Ein/Aus-Schalter in einem .POWER-Geschwister ohne smartName
 # (belegt 2026-10-26), waehrend der smartName am .SET/.ACTUAL haengt.
@@ -43,19 +34,31 @@ ROLE_ON = ("switch", "switch.light", "switch.power", "switch.outlet", "socket")
 ROLE_DIM = ("level.dimmer",)
 ROLE_COLOR = ("level.color.rgb",)
 ROLE_TEMP_COLOR = ("level.color.temperature",)
-ROLE_SETPOINT = ("level.temperature", "value.temperature")
+ROLE_SETPOINT = ("level.temperature",)
+
+# Reine Messwerte (write=false). Sie stehen im Panel als Gerät mit Zustand,
+# werden aber nie geschaltet. Rolle -> (Fähigkeit in der Oberfläche, Einheit).
+# Belegt über alias.0.*.ACTUAL: value.temperature → zigbee/tuya-Temperatur,
+# value.power → shelly, value.voltage/current → Duschwasser-Zähler.
+READ_ROLE_CAP = {
+    "value.temperature": ("temperature", "°C"),
+    "value.humidity": ("humidity", "%"),
+    "value.power": ("power", "W"),
+    "value.voltage": ("voltage", "V"),
+    "value.current": ("current", "mA"),
+}
+READ_CAPS = {cap for cap, _unit in READ_ROLE_CAP.values()}
+
+# Alias-Ordner, die keine Geräte sind, sondern Reste einer allgemeinen
+# Konfiguration ("Brightness of the light", "On / Off"). Ohne diese Sperre
+# entstünden Geräte namens "bri" und "on".
+SKIP_ALIAS_ROOMS = {"brightness of the light", "on / off"}
 
 
 def normalize(text) -> str:
     s = unicodedata.normalize("NFC", str(text or "")).lower()
     s = s.replace("ß", "ss").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
     return " ".join(re.sub(r"[^\w\s]", " ", s).split())
-
-
-def _is_local(oid: str) -> bool:
-    if oid.startswith(CLOUD_PREFIX):
-        return False
-    return oid.startswith(LOCAL_PREFIX)
 
 
 def _fetch_objects():
@@ -102,6 +105,7 @@ def build():
             "write": bool(common.get("write")),
             "name": _smart_name(common),
             "smartType": smart.get("smartType") if isinstance(smart, dict) else None,
+            "unit": common.get("unit"),
         })
 
     # Ein Eintrag pro Alexa-Name
@@ -132,10 +136,32 @@ def build():
                 role = "level.dimmer"
             elif st in ("THERMOSTAT",) and entry["type"] == "number":
                 role = "level.temperature"
-        if not _is_local(target):
-            rec.setdefault("blocked", []).append(target)
-            return
+        # Keine Sonderregel nach Herkunft: ein Ziel ist ein Ziel, egal ob es
+        # unter zigbee., alexa2. oder sonst wo liegt. Fruehere Fassung hat
+        # alles ausserhalb von LOCAL_PREFIX als "blocked" verworfen - das
+        # haette cloud-erreichbare Geraete grundlos schlechter gestellt.
+        # Geprueft am 2026-11-04: das Entfernen aendert kein einziges Ziel
+        # (0 von 60 Geraeten), die Sperre war also wirkungslos und nur eine
+        # Sonderbehandlung.
+        # Was bleibt, ist die echte Pruefung: ein Ziel, das es nicht gibt,
+        # darf nie geschrieben werden (siehe oben, broken).
         if not entry["write"]:
+            # Messwert statt Schalter: aufnehmen, damit das Gerät im Panel
+            # sichtbar ist (Temp Wohnzimmer, Pool, Stromverbrauch ...).
+            if role in READ_ROLE_CAP:
+                cap, default_unit = READ_ROLE_CAP[role]
+                rec["caps"].setdefault(cap, target)
+                # Einheit vom ECHTEN Datenpunkt nehmen, nicht vom Alias:
+                # alias.0.Allgemein.Stromverbrauch traegt faelschlich °C,
+                # waehrend shelly...InstantPower W fuehrt (geprueft 2026-11-07).
+                ziel_obj = objects.get(target) or {}
+                ziel_common = ziel_obj.get("common") or {}
+                einheit = (ziel_common.get("unit")
+                           or entry.get("unit") or default_unit)
+                # Tuya liefert "℃" statt "°C" (belegt 2026-11-07 an
+                # tuya.0.bfd6f1d6c9c5ba2c54aktw.1) - eine Anzeige, eine Schreibweise.
+                einheit = str(einheit or "").replace("℃", "°C")
+                rec.setdefault("units", {}).setdefault(cap, einheit)
             return
         if role in ROLE_ON:
             rec["caps"].setdefault("onoff", target)
@@ -149,12 +175,29 @@ def build():
             rec["caps"].setdefault("setpoint", target)
 
     # 1) Alias-Geraete: smartName sitzt oft nur auf EINEM Geschwister.
+    #    Fehlt er ganz (Wegbeleuchtung 1-6, Haustuer, Klimaanlage, ...), gilt
+    #    der Alias-Pfad: alias.0.<Raum>.<Geraet>.<Mitglied>. Der Name kommt
+    #    aus dem Geraeteordner, der Raum aus dem Raumordner. Die Kanalnamen
+    #    taugen dafuer nicht: bei Wegbeleuchtung_2 bis _6 heissen alle sechs
+    #    Kanaele "Wegbeleuchtung 1" (in ioBroker nachgeprueft 2026-11-07).
     for base, children in alias_children.items():
+        teile = base.split(".")
+        raum = teile[2] if len(teile) > 2 else ""
+        if raum.strip().casefold() in SKIP_ALIAS_ROOMS:
+            continue
         name = next((c["name"] for c in children if c["name"]), None)
+        ersatz = None
+        if len(teile) > 3:
+            ersatz = " ".join(teile[3].replace("_", " ").split())
+        if not name:
+            name = ersatz
         if not name:
             continue
         for child in children:
             add_capability(name, child)
+            rec = devices.get(name)
+            if rec is not None and raum and not rec.get("room"):
+                rec["room"] = raum
 
     # 2) Direkte smartName-Objekte ohne Alias (z. B. yeelight, javascript).
     for oid, obj in objects.items():
@@ -186,6 +229,11 @@ def build():
     for name, rec in devices.items():
         caps = rec.setdefault("caps", {})
         if "onoff" in caps:
+            continue
+        # Reine Messgeraete haben keinen Schalter, den man ableiten koennte.
+        # Ohne diese Sperre bekaeme "Temp Wohnzimmer" ein onoff vom
+        # Zigbee-Geraet, auf das der Temperaturwert zeigt.
+        if caps and all(c in READ_CAPS for c in caps):
             continue
         zigbee_devices = set()
         for target in caps.values():
@@ -243,6 +291,8 @@ def build():
             "name": name,
             "key": normalize(name),
             "caps": caps,
+            "units": rec.get("units") or {},
+            "room": rec.get("room") or None,
             "blocked": sorted(set(rec.get("blocked") or [])),
             "broken": broken,
             "derived": sorted(set(rec.get("derived") or [])),

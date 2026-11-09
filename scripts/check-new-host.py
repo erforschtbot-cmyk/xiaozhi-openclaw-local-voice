@@ -97,7 +97,7 @@ check((home / ".openclaw/ssl/gateway.crt").is_file(), "Gateway-CA fuer TLS vorha
 # Vollstaendige Importkette. Fehlt eine Datei, startet die Bridge nicht oder
 # der Gateway-Handler laedt nicht mehr — Datei fuer Datei pruefen.
 required = [
-    "server.py", "room_command.py", "piper_speaker.py",
+    "server.py", "mic_capture.py", "room_command.py", "piper_speaker.py",
     "openclaw-talk-realtime.mjs", "openclaw-thin-client.mjs",
     "local-voice.mjs", "local_stt.mjs",
     "voice-turn-context.mjs", "scoped-smart-home-router.mjs",
@@ -116,13 +116,11 @@ for filename in ["show.py", "render.py", "serve.py", "palette.py",
 display_skill = home / ".openclaw/workspace-voice/skills/display-cards/SKILL.md"
 check(display_skill.is_file(), "Agent-Skill: display-cards")
 
-if (screen / ".venv/bin/python").exists():
-    result = subprocess.run(
-        [str(screen / ".venv/bin/python"), "-c", "import PIL"],
-        capture_output=True)
-    check(result.returncode == 0, "Anzeige: Pillow importierbar")
-else:
-    check(False, "Anzeige: eigenes venv")
+screen_python = screen / ".venv/bin/python"
+if not screen_python.exists():
+    screen_python = Path(shutil.which("python3") or "")
+result = subprocess.run([str(screen_python), "-c", "import PIL"], capture_output=True)
+check(result.returncode == 0, "Anzeige: Pillow importierbar")
 
 for filename in [
     "catalog.py", "control.py", "fuzzy.py", "localmap.py", "resolver.py",
@@ -177,11 +175,13 @@ if python is not None:
         print("        pip install -r gateway/requirements.txt")
 
 model_dir = home / ".cache/jarvis-stt-cand5-canary1b-onnx"
-for filename in [
-    "encoder-model.onnx", "encoder-model.onnx.data", "decoder-model.onnx",
-    "vocab.txt", "config.json",
+for alternatives in [
+    ("encoder-model.int8.onnx", "encoder-model.onnx"),
+    ("decoder-model.int8.onnx", "decoder-model.onnx"),
+    ("encoder-model.onnx.data",), ("vocab.txt",), ("config.json",),
 ]:
-    check((model_dir / filename).is_file(), "Canary-1B-Modell: " + filename)
+    found = next((name for name in alternatives if (model_dir / name).is_file()), None)
+    check(found is not None, "Canary-1B-Modell: " + " oder ".join(alternatives))
 
 print()
 print("Nur Vorbedingungen geprueft; weder Provider-Login noch Audio, WLAN, "

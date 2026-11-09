@@ -1,0 +1,12 @@
+{
+  "version": "2026.11.2",
+  "files": [
+    {
+      "path": "dist/handlers-BmY1EwSF.mjs",
+      "patch": "handlers-BmY1EwSF.mjs.patch",
+      "before": "1ab14564624fc0994024fc6abb74aa4f42bc1c04d50a048285f4d48e98314d23",
+      "after": "34f38d19bc1b6168d554fa8fd53aa7c5c6014c4ee9f367375b43a61a203d7b54"
+    }
+  ],
+  "notes": "2026.11.2: Patchsatz aus 2026.11.1 uebernommen; alle 11 Hunks passten unveraendert auf das neue Bundle (nur Dateiname/Hash geaendert). Patch A entfaellt weiterhin (client-voice-confirmation upstream entfernt)."
+}

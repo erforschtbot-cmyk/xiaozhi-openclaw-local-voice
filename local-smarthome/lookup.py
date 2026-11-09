@@ -39,9 +39,21 @@ def _load(name: str) -> list:
 
 
 def _local_entries() -> list:
-    """Geraete mit belegtem lokalem Ziel (alias/iot-Abgleich)."""
+    """Geräte mit belegtem lokalem Ziel - mit den Namen des Eigentümers.
+
+    Über `localmap.load()` statt über die Rohdatei, damit Umbenennungen und
+    Ausblendungen gelten. Belegt 2026-11-04: nach dem Umbenennen von
+    „Alle Lampen“ auf „Deckenstrahler“ fand das Nachschlagen den Gruppen-
+    Eintrag nicht mehr und schlug stattdessen die Szene „Deckenstrahleran“
+    vor; ausgeblendete Strahler erschienen weiter als Ziele.
+    """
+    import localmap
+    try:
+        quell = localmap.load().get("devices") or []
+    except Exception:
+        quell = _load("localmap.json")
     out = []
-    for dev in _load("localmap.json"):
+    for dev in quell:
         caps = dev.get("caps") or {}
         if not caps:
             continue
@@ -60,9 +72,17 @@ def _local_entries() -> list:
 
 
 def _remote_entries() -> list:
-    """Geraete aus dem Alexa-Katalog (alexa2-Datenpunkt, direkt schaltbar)."""
+    """Geräte aus dem Alexa-Katalog (alexa2-Datenpunkt, direkt schaltbar).
+
+    Über `catalog.load()`, damit Umbenennungen und Ausblendungen gelten.
+    """
+    import catalog
+    try:
+        quell = catalog.load().get("devices") or []
+    except Exception:
+        quell = _load("catalog.json")
     out = []
-    for dev in _load("catalog.json"):
+    for dev in quell:
         name = dev.get("name")
         if not name:
             continue

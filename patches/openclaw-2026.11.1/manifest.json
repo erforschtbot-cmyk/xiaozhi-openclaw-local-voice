@@ -1,0 +1,12 @@
+{
+  "version": "2026.11.1",
+  "files": [
+    {
+      "path": "dist/handlers-CfnM6psS.mjs",
+      "patch": "handlers-CfnM6psS.mjs.patch",
+      "before": "9e9949a8b8470cebc9f6a165630950dad9b8937dae75a9db3799a42f168b0664",
+      "after": "1d9e36bbff2680fa5b6d1926e9600a2b937735c15f2acfe0b6f41cb70a133437"
+    }
+  ],
+  "notes": "2026.11.1: Patch A (voice confirmation gate) entfaellt - das Modul client-voice-confirmation wurde upstream entfernt. Patch B aus 2026.10.9 auf neue Bundle-Struktur portiert: runArgs-Wrapper, Router-Block, Relay-Turn-Plumbing und onTranscript-Gate nachgezogen."
+}

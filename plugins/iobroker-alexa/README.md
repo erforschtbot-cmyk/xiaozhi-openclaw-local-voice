@@ -6,7 +6,7 @@ Die bisher fehlende Agent-Werkzeugseite ergänzt den Gateway-Schnellweg.
 
 ## Bauen
 
-Voraussetzung: OpenClaw 2026.10.7 unter
+Voraussetzung: OpenClaw 2026.11.2 unter
 `/home/openclaw/.npm-global/lib/node_modules/openclaw`. package.json/Lockfile
 verweisen per `file:` darauf. Andere npm-Pfade erfordern eine angepasste
 Abhängigkeit und neu geprüfte Lockdatei.
@@ -18,11 +18,21 @@ npm run build
 npm test
 ```
 
-Vor dem Einsatz `ENDPOINT` in `src/index.ts` auf den eigenen ioBroker-simple-api-
-Host und Echo-textCommand-Datenpunkt setzen, danach erneut bauen.
+Den eigenen ioBroker-simple-api-Host und Echo-textCommand-Datenpunkt als
+Pluginfeld `endpoint` setzen; ein Neu-Build ist dafür nicht erforderlich.
 HTTP-Erfolg bedeutet angenommen, nicht physisch geschaltet. Keine Auto-Retries.
 
 ## Einbinden
+
+Automatisiert, einschließlich Build, Tests, Kopie, Abhängigkeiten und
+erhaltender Änderung der bestehenden OpenClaw-Konfiguration:
+
+```bash
+./scripts/install-iobroker-plugin.sh \
+  'http://IOBROKER:8087/set/alexa2.0.Echo-Devices.ECHO_ID.Commands.textCommand?value='
+```
+
+Das Skript startet den Gateway nicht neu.
 
 Projekt samt dist, Manifest, package.json und installierten Dependencies an einem
 dauerhaften Ort installieren (Referenz:
@@ -33,7 +43,15 @@ OpenClaw-Konfiguration **hinzufügen**, vorhandene Listen/Einträge erhalten:
 {
   "plugins": {
     "load": { "paths": ["/home/openclaw/.local/share/iobroker-alexa-plugin"] },
-    "entries": { "iobroker-alexa": { "enabled": true } }
+    "entries": {
+      "iobroker-alexa": {
+        "enabled": true,
+        "config": {
+          "endpoint": "http://IOBROKER:8087/set/alexa2.0.Echo-Devices.ECHO_ID.Commands.textCommand?value=",
+          "activeRoomPath": "/home/openclaw/.local/share/jarvis-realtime-bridge/active-room.json"
+        }
+      }
+    }
   }
 }
 ```

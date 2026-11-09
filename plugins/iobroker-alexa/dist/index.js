@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-const ENDPOINT = "http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value=";
+const DEFAULT_ENDPOINT = "http://192.168.178.24:8087/set/alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value=";
 // Raum-Voranstellung. Ohne Raum loest Alexa den Befehl in der Gruppe des
 // angesprochenen Echos auf — und der ist fest das Arbeitszimmer. Deshalb
 // bekommt "Licht an" den Raum des sprechenden Geraets vorangestellt.
@@ -83,7 +83,7 @@ export function withRoom(text, roomPath = ACTIVE_ROOM, boundRoom) {
 const parameters = Type.Object({
     text: Type.String({ minLength: 1, maxLength: 500, description: "Wörtlicher Befehl, z.B. Schalte den Monitor aus" }),
 }, { additionalProperties: false });
-async function executeAlexaCommand({ text }, _config, context) {
+async function executeAlexaCommand({ text }, config, context) {
     if (!text.trim() || text.length > 500 || /[\x00-\x1f\x7f]/.test(text) || /^alexa\b/i.test(text.trim()))
         throw new Error("Ungültiger Text: 1–500 Zeichen, keine Steuerzeichen, kein Alexa-Präfix.");
     context.signal?.throwIfAborted();
@@ -92,10 +92,17 @@ async function executeAlexaCommand({ text }, _config, context) {
     const storage = globalThis[Symbol.for("jarvis.voiceTurn.v1")];
     const turn = storage?.getStore();
     const room = turn?.room && turn.observedAt && Date.now() - turn.observedAt < 120000 ? turn.room : null;
-    const command = withRoom(text, ACTIVE_ROOM, room);
+    const settings = (config && typeof config === "object" ? config : {});
+    const endpoint = typeof settings.endpoint === "string" && settings.endpoint
+        ? settings.endpoint : DEFAULT_ENDPOINT;
+    const activeRoomPath = typeof settings.activeRoomPath === "string" && settings.activeRoomPath
+        ? settings.activeRoomPath : ACTIVE_ROOM;
+    if (!/^https?:\/\//.test(endpoint))
+        throw new Error("Plugin-Konfiguration endpoint muss http(s) sein.");
+    const command = withRoom(text, activeRoomPath, room);
     const timeout = AbortSignal.timeout(10000);
     const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
-    const response = await fetch(ENDPOINT + encodeURIComponent(command), { method: "GET", redirect: "error", signal });
+    const response = await fetch(endpoint + encodeURIComponent(command), { method: "GET", redirect: "error", signal });
     await response.body?.cancel();
     if (response.status !== 200)
         throw new Error(`ioBroker HTTP ${response.status}; nicht automatisch wiederholen.`);

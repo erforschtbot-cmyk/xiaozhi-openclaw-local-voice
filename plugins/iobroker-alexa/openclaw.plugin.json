@@ -5,7 +5,16 @@
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "description": "Vollstaendige ioBroker-simple-api-URL bis einschliesslich ?value="
+      },
+      "activeRoomPath": {
+        "type": "string",
+        "description": "Pfad zu active-room.json; Standard ist der feste Jarvis-Installationsort"
+      }
+    },
     "additionalProperties": false
   },
   "activation": {

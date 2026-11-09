@@ -21,6 +21,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const HELPER = path.join(REPO, "gateway", "local-voice.mjs");
 const WAV = process.argv[2] || "/tmp/stt_probe.wav";
+const STT_URI = process.env.JARVIS_STT_URI || "127.0.0.1:10303";
 
 const failures = [];
 const events = [];
@@ -57,7 +58,7 @@ const child = spawn("node", [HELPER, "16000", "2", "1"], {
     // Eigene Test-Session, damit der Produktivpfad unberuehrt bleibt.
     OPENCLAW_TALK_SESSION_KEY: "agent:voice:lokal-test",
     OPENCLAW_TALK_CONSULT_SESSION_KEY: "",
-    OPENCLAW_WHISPER_URI: "127.0.0.1:10300",
+    OPENCLAW_WHISPER_URI: STT_URI,
     NODE_EXTRA_CA_CERTS: gatewayCa,
   },
   stdio: ["pipe", "pipe", "pipe"],

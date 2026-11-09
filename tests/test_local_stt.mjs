@@ -15,6 +15,7 @@ import { transcribePcm, UtteranceDetector } from "../gateway/local_stt.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAV = process.argv[2] || "/tmp/stt_probe.wav";
+const STT_URI = process.env.JARVIS_STT_URI || "127.0.0.1:10303";
 
 const failures = [];
 
@@ -149,7 +150,7 @@ if (!fs.existsSync(WAV)) {
 
   const started = Date.now();
   try {
-    const text = await transcribePcm(pcm, { uri: "127.0.0.1:10300", language: "de" });
+    const text = await transcribePcm(pcm, { uri: STT_URI, language: "de" });
     const elapsed = (Date.now() - started) / 1000;
     const audioSeconds = pcm.length / 2 / RATE;
     console.log(`  Text: ${JSON.stringify(text)}`);

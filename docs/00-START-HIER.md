@@ -5,9 +5,9 @@ Wenn eine KI diesen Aufbau ohne Vorwissen übernimmt, liest sie zusätzlich
 die Rückfragen, die nicht aus Code ableitbar sind, und die vollständige Kette
 von beiden Firmwarezielen bis ioBroker, STT und TTS.
 
-Stand: 23.10.2026. **Die lokale Sprachkette (Canary + Piper) ist am Gerät
+Stand: 09.11.2026. **Die lokale Sprachkette (Canary + Piper) ist am Gerät
 abgenommen.** Der Host-Aufbau ist durch `scripts/install-host.sh` abgedeckt und
-prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.10.7 vor.
+prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.11.2 vor.
 Der verbindliche Dateibestand steht in
 [`00-DATEIBESTAND.md`](00-DATEIBESTAND.md).
 
@@ -39,7 +39,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | OTA-Konfigurationsserver | verrät dem Gerät seine WebSocket-Adresse | Bestandteil von `gateway/server.py`, TCP 8766 |
 | Audio-Bridge | übersetzt XiaoZhi/Opus zum OpenClaw-Talk-Pfad | `gateway/server.py`, TCP 8765 |
 | Gateway-Helfer | authentifizierte Talk-Verbindung | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.7`, TLS TCP 18789 |
+| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.11.2`, TLS TCP 18789 |
 | Lokaler Smart-Home-Resolver | eindeutige Befehle ohne Agentenlauf | `local-smarthome/`, ioBroker Simple API |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
@@ -64,7 +64,7 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
 2. Linux-Host mit Node/npm, Python/venv/libopus, Git und Docker vorbereiten.
    Die Referenz erwartet Benutzer `/home/openclaw` und npm unter
    `/home/openclaw/.npm-global`; die Pfade sind derzeit nicht portabel.
-3. OpenClaw **2026.10.7** installieren, Gateway konfigurieren, Provider anmelden
+3. OpenClaw **2026.11.2** installieren, Gateway konfigurieren, Provider anmelden
    und das Talk-/Consult-Sessionziel `agent:voice:…` prüfen. **Die Host-Anleitung
    automatisiert diesen Teil nicht** — Schritt 3 bleibt Handarbeit, ist aber in
    `docs/01-HOST-INSTALLATION.md` mit Prüfpunkt beschrieben.
@@ -128,7 +128,7 @@ Partitionstabelle und Assets/Wakeword-Daten fehlen dann weiterhin.
 | Gerät | Bereits eingerichtet | Wirklich leer |
 |---|---|---|
 | 4B | geprüftes App-Image `firmware/prebuilt/xiaozhi.bin` (inkl. TFT-Anzeige) | `firmware/prebuilt/merged-binary.bin`; erfolgreich gebaut, nicht auf dem eingerichteten Referenzgerät vollgeflasht; Hostadresse/NVS beachten |
-| Audio-Board | `firmware/prebuilt/audio-board/xiaozhi.bin` | **kein Audio-Board-Vollimage im Repo**; mit dessen Buildskript `build/firmware/merged-binary.bin` erzeugen |
+| Audio-Board | `firmware/prebuilt/audio-board/xiaozhi.bin` | `firmware/prebuilt/audio-board/merged-binary.bin`; App am 09.11. vom Gerät zurückgelesen und bytegleich, Vollimage aus demselben Build |
 
 Build-Aufrufe (jeweils eigener frischer Repo-Clone, da alte Skripte denselben
 `source/`- und `build/`-Ordner verwenden und den Quellbaum löschen):
@@ -163,42 +163,41 @@ Vollimage überschreibt diese Daten. Das 4B-Vollimage **nicht** für das Audio-B
 nehmen. Diese Prüfung hat kein USB-Gerät geflasht und keinen neuen Hardware-
 End-to-End-Test durchgeführt.
 
-## Prüfergebnisse und verbleibende Lücken
+## Prüfergebnisse und unvermeidbare Betreiberangaben
 
-- GitHub-Remote vor Audit: Cloud `043f446`, Lokal `25c9bd3`, jeweils identisch zu HEAD.
-- Bestehende Prüfsummen: Cloud 77/77, Lokal 75/75 korrekt.
-- Gemeinsame Firmware-Dateien beider Repos: bytegleich.
-- Cloud: 28 vorhandene Bridge-Dateien bytegleich zum Live-Verzeichnis;
-  kein dort vorhandenes Python-/MJS-Modul fehlt im Cloud-Repo.
-- Lokal, erneuter Audit 27.10.2026: die heute aktiven Bridge-Korrekturen
-  (lokale Antwort aus `assistant_done`, Doppelsprechschutz, 180-ms-TTS-Vorlauf),
-  Foto-Deduplizierung und der lokale Smart-Home-Resolver sind im Repo. Der
-  Resolver war zuvor eine harte, vollständig fehlende Außenabhängigkeit.
-- JavaScript-Routertests Cloud: 149 bestanden, 0 fehlgeschlagen (nachgezaehlt 27.10.2026, fuenf Suiten).
-- Python-Tests Cloud mit Bridge-venv: 61 ausgeführt, 8 Fehler, 0 Fehlschläge
-  (Stand 27.10.2026). Alle acht liegen in `test_conversation_timing.py` und
-  beruhen auf veralteten Test-Attrappen (u. a. `note_followup_audio`), nicht
-  auf dem laufenden Dienst: derselbe Fehlersatz tritt mit dem vorherigen
-  `server.py` byteidentisch auf. Die uebrigen Suiten (`test_wake_arbiter`,
-  `test_helper_guard`, `test_room_command`, `test_speaking_guard`,
-  `test_persistent_standby`) sind grün. Kein Beleg für einen kaputten
-  laufenden Dienst, aber auch keine vollständig grüne Testbasis für einen
-  Neubau.
-- Der lokale Installer liefert jetzt zusätzlich den Resolver samt Importkette,
-  erhält gepflegte Zuordnungen und prüft jede Pflichtdatei.
-- Host-Bootstrap und ein End-to-End ab vollständig leerem Host/Flash sind noch
-  nicht abgenommen. Der neue 4B-Helligkeitspatch wurde auf frischem Checkout
-  angewendet, aber noch nicht als vollständiger Neubau geflasht und am Gerät
-  nach einem Neustart abgenommen. **Keine pauschale Vollständigkeitszusage.**
+- Referenzhost und Repo enthalten bytegleichen Bridge- und Resolver-Quellcode.
+- OpenClaw 2026.11.2: Handler exakt zum veröffentlichten Manifest-Hash;
+  Scope-Prüfung sowie 145/145 Gateway-Routertests grün.
+- Lokaler Resolver: 34/34 Offline-Fälle grün.
+- Die veralteten Gesprächs-Timing- und TTS-Testattrappen sind auf den aktuellen
+  ereignisgesteuerten Stand nachgezogen und grün.
+- Isolierter Installerlauf unter einem leeren temporären HOME: Importkette,
+  Units, Bridge, Anzeige und Resolver vollständig erzeugt.
+- Die Weboberfläche antwortet über LAN auf `http://<HOST>:8088/`; Port,
+  ioBroker-Basis und Raumanzahl werden in der Seite angezeigt.
+- Audio-Board `90:70:69:eb:1c:0c`: 16-MB-Flash vollständig lokal gesichert;
+  veröffentlichte App (2.866.736 Byte) bei `0x20000` zurückgelesen und
+  bytegleich. Der übrige App-Slot war vollständig `0xFF`.
+- Fertige Vollimages liegen für 4B und Audio-Board vor. Ihre NVS-Bereiche sind
+  vollständig `0xFF`; WLAN-Daten und individuelle Kalibrierung werden nicht
+  veröffentlicht.
+
+Nicht automatisierbar sind nur fremde Zugangsdaten und Entscheidungen: WLAN,
+OpenClaw-Provider/Token, konkrete ioBroker-/Echo-Adresse, Geräte-IDs und Räume.
+Der fremde Agent muss diese Werte vom Betreiber erfragen; sie dürfen nicht aus
+dem Referenzhost übernommen oder in GitHub eingecheckt werden. Ein physischer
+Hör-/Mikrofon-/Raumtest bleibt nach der Installation Pflicht.
 
 ## Zusätzlich gefunden: Agent-Werkzeug-Plugin
 
 Das aktive `iobroker-alexa`-Plugin fehlte bisher in beiden Repos. Es ist jetzt
 unter `plugins/iobroker-alexa/` einschließlich Bau- und Einbauanleitung enthalten.
-Der Bridge-Installer installiert es nicht automatisch.
+Mit `--iobroker-alexa-endpoint` installiert der Bridge-Installer es automatisch;
+alternativ steht `scripts/install-iobroker-plugin.sh` einzeln bereit.
 
 Plugin-Nachweis: `npm ci`, TypeScript-Build und 10/10 Tests erfolgreich am
-20.10.2026 im separaten Repository-Verzeichnis; kein Live-Plugin geändert.
+09.11.2026; Laufzeit-Abhängigkeiten (`npm audit --omit=dev`) ohne bekannte
+Schwachstelle. Der nötige Gateway-Neustart bleibt Betreiberaufgabe.
 
 ## Lesender Host-Check
 
@@ -208,13 +207,14 @@ Exit 1 benennt fehlende Voraussetzungen. Es installiert nichts, schaltet nichts
 und ersetzt keinen Audio-/Provider-Test. Das `agent:voice:`-Sessionpräfix darf
 nicht ohne Prüfung mit einem statischen Agent-Eintrag gleichgesetzt werden.
 
-## Frischer Audio-Board-Komplettbuild, 20.10.2026
+## Audio-Board-Komplettbuild und Hardware-Anker, 09.11.2026
 
-Erfolgreich (Exit 0): frischer Upstream-Checkout plus veröffentlichter Board-Patch,
-ESP-IDF v6.1, Deutsch und `wn9_jarvis_tts`. App und Vollimage einschließlich
-Bootloader, Partitionstabelle und Assets erzeugt. Nachweis mit Größen und SHA-256:
-`firmware/audio-board/build-proof-20261020.json`. Generierte Konfiguration bestätigt
-Audio-Board und Deutsch. Die Abhängigkeitsauflösung des Builds liegt jetzt separat
-für das Audio-Board vor. **Kein Flash-/Audio-Test dieses neuen Images.** Der bisher
-bestätigte Prebuilt-Anker wurde nicht ersetzt. Der 4B-Vollbuild wurde in diesem
-Audit nicht wiederholt (dessen Patch-Anwendung wurde geprüft).
+Gepinnter Upstream, ESP-IDF v6.1, Deutsch, `wn9_jarvis_tts` und die eigene
+Audio-Board-Lockdatei. Das Buildskript entfernt den Upstream-Ausschluss der
+`dependencies.lock` aus `.dockerignore`; ohne diesen Schritt würde der Container
+trotz vorhandener Lockdatei tagesaktuell neu auflösen. App und Vollimage
+einschließlich Bootloader, Partitionstabelle und Assets liegen fertig unter
+`firmware/prebuilt/audio-board/`. Die App ist der bytegleich zurückgelesene
+Hardware-Anker; ein Vollimage ist nur für leeren/defekten Flash gedacht und
+erfordert danach WLAN-Provisionierung beziehungsweise das Zurückspielen der
+vorher gesicherten individuellen NVS.

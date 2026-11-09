@@ -56,6 +56,13 @@ def main():
             if digest(target) != item['after']:
                 raise SystemExit('Patched result does not match recorded live hash')
             subprocess.run(['node', '--check', str(target)], check=True)
+            # Syntax allein reicht nicht: am 2026-10-20 benutzte der 10.5-Patch
+            # jarvisObservedTurn ohne Deklaration. Das war syntaktisch gueltig,
+            # bestand alle Marker- und Router-Pruefungen und beendete trotzdem
+            # den Gateway-Prozess beim ersten finalen Satz.
+            scope_check = Path(__file__).resolve().parent / 'check-patched-scope.mjs'
+            if scope_check.is_file():
+                subprocess.run(['node', str(scope_check), str(target)], check=True)
             pending.append((source, target, item))
             print('REPRODUCIBLE:', item['path'])
         if args.apply:

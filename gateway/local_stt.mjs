@@ -223,12 +223,14 @@ export class UtteranceDetector {
       silenceMs = 700,
       minSpeechMs = 200,
       maxUtteranceMs = 20000,
+      onDiscard = null,
     } = options;
     this.rate = rate;
     this.speechRms = speechRms;
     this.silenceMs = silenceMs;
     this.minSpeechMs = minSpeechMs;
     this.maxUtteranceMs = maxUtteranceMs;
+    this.onDiscard = typeof onDiscard === "function" ? onDiscard : null;
     // Startwert des Grundrauschens: gemessen liegt Stille am Geraet bei
     // RMS 14-20. Ein hoeherer Startwert wuerde die ersten Sekunden Sprache
     // unterdruecken, weil die Schwelle erst langsam absinkt.
@@ -308,6 +310,28 @@ export class UtteranceDetector {
     const tooLong = Date.now() - this.startedAtMs > this.maxUtteranceMs;
     const quietEnough =
       this.silenceMsAccum >= this.silenceMs && this.speechMs >= this.minSpeechMs;
+
+    // Kurzblip verwerfen, statt die Aeusserung offen zu halten.
+    //
+    // Belegt 31.10.2026 21:05:53-21:06:02: Der Rest des Aktivierungstons hob
+    // den Pegel fuer 60 ms ueber die Schwelle, danach war es still. Weil
+    // `quietEnough` zusaetzlich `speechMs >= minSpeechMs` verlangt, wurde die
+    // Aeusserung NICHT geschlossen; `silenceMsAccum` wuchs ueber 5.7 s weiter
+    // und der naechste gesprochene Befehl landete in derselben, schon toten
+    // Aeusserung. Ergebnis: rund 10 s ohne jede Reaktion, der erste Befehl
+    // ("Licht aus") fiel komplett aus, erst der zweite wurde erkannt.
+    // Die Pause ist die Grenze: ist sie erreicht und war zu wenig Sprache da,
+    // ist das ein Geraeusch und keine Aeusserung.
+    if (!tooLong && this.silenceMsAccum >= this.silenceMs && this.speechMs < this.minSpeechMs) {
+      this.onDiscard?.({
+        reason: "too-short",
+        speechMs: this.speechMs,
+        silenceMs: this.silenceMsAccum,
+        bytes: this.bytes,
+      });
+      this.reset();
+      return null;
+    }
 
     if (!tooLong && !quietEnough) return null;
 

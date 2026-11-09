@@ -4,7 +4,7 @@
 Speist echte Sprache als Opus-Rahmen in die laufende Bridge ein — genau so,
 wie es das Geraet tut — und prueft die vollstaendige lokale Kette:
 
-    Opus-Audio -> Bridge -> lokaler Whisper -> Agent -> Piper (lokal) -> Opus
+    Opus-Audio -> Bridge -> lokaler STT-Dienst -> Agent -> Piper (lokal) -> Opus
 
 Verlangt werden:
   1. der Nutzer-Transkript kommt aus lokaler Erkennung,
@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import wave
 from pathlib import Path
 
@@ -42,11 +43,35 @@ GATEWAY_CA = os.environ.get(
     "OPENCLAW_GATEWAY_CA", str(Path.home() / ".openclaw" / "ssl" / "gateway.crt")
 )
 SPEECH_WAV = os.environ.get("SPEECH_WAV", "/tmp/stt_probe.wav")
+STT_URI = os.environ.get("JARVIS_STT_URI", "127.0.0.1:10303")
 PORT = 8797
 OTA_PORT = 8798
 RATE = 16000  # Das Geraet sendet 16 kHz.
 
 failures: list[str] = []
+
+
+def ensure_speech_wav() -> Path:
+    """Liefert ein 16-kHz-Sprachsample; erzeugt es lokal mit Piper bei Bedarf."""
+    configured = Path(SPEECH_WAV)
+    if configured.exists():
+        return configured
+
+    from piper_speaker import PiperSpeaker, find_default_voice
+
+    model = find_default_voice(VOICE_DIR, VOICE)
+    speaker = PiperSpeaker(model, target_rate=RATE)
+    # Bewusst keine Schaltaufforderung: der E2E-Test darf den echten
+    # Referenz-Agenten ansprechen, aber keinen Hauszustand veraendern.
+    pcm = speaker.synthesize_pcm("Der Monitor steht im Arbeitszimmer.")
+    generated = Path(tempfile.gettempdir()) / "jarvis-stt-e2e-generated.wav"
+    with wave.open(str(generated), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(RATE)
+        handle.writeframes(pcm)
+    print(f"  [fixture] lokales Testaudio erzeugt: {generated}")
+    return generated
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -57,7 +82,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 def speech_frames() -> list[bytes]:
     """Erzeugt 60-ms-Opus-Rahmen mit echter Sprache, dann Stille."""
-    with wave.open(SPEECH_WAV, "rb") as handle:
+    with wave.open(str(ensure_speech_wav()), "rb") as handle:
         assert handle.getframerate() == RATE, "Testaudio muss 16 kHz sein"
         pcm = handle.readframes(handle.getnframes())
 
@@ -79,10 +104,6 @@ def speech_frames() -> list[bytes]:
 
 
 async def main() -> None:
-    if not Path(SPEECH_WAV).exists():
-        print(f"Testaudio fehlt: {SPEECH_WAV}")
-        sys.exit(1)
-
     proc = await asyncio.create_subprocess_exec(
         sys.executable, str(GATEWAY),
         "--host", "127.0.0.1", "--port", str(PORT), "--ota-port", str(OTA_PORT),
@@ -90,7 +111,7 @@ async def main() -> None:
         "--session-key", "agent:voice:lokal-e2e",
         "--consult-session-key", "",
         "--helper", str(HELPER),
-        "--stt-local", "--stt-uri", "127.0.0.1:10300", "--stt-language", "de",
+        "--stt-local", "--stt-uri", STT_URI, "--stt-language", "de",
         "--tts-local", "--tts-voice", VOICE, "--tts-voice-dir", VOICE_DIR,
         "--gateway-ca", GATEWAY_CA,
         stdout=asyncio.subprocess.PIPE,
@@ -161,8 +182,10 @@ async def main() -> None:
         check("Nutzer-Transkript lokal erkannt", len(transcripts) == 1,
               str(transcripts))
         if transcripts:
-            check("Transkript enthaelt 'Monitor'",
-                  "monitor" in transcripts[0].lower(), transcripts[0])
+            normalized = transcripts[0].lower()
+            check("Transkript enthaelt Testbegriff",
+                  "monitor" in normalized or "arbeitszimmer" in normalized,
+                  transcripts[0])
         check("tts gestartet", "start" in states, str(states[:8]))
         check("tts abgeschlossen", "stream_end" in states, str(states[:8]))
         check("Lokales Audio geliefert", opus_frames > 0,

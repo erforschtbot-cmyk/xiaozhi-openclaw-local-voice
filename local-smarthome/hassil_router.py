@@ -601,6 +601,24 @@ def als_schaltbefehl(ergebnis):
                 #    aehnliche Geraete in Frage kommen.
                 _rest_n = _norm_raum(_rest)
                 _alle = [n for n in _caps if _rest_n and _rest_n in _norm_raum(n)]
+                # 2b) Der Rest kann LAENGER sein als der Geraetename, weil
+                #     Verben/Fuellwoerter stehenbleiben: "Schalte den
+                #     Deckenstrahler auf warmes weiss" -> Rest "Schalte den
+                #     Deckenstrahler auf". Die Teilstring-Pruefung oben findet
+                #     dann nichts, der Befehl lief ins Leere (belegt
+                #     2026-11-04). Deshalb hier der normale Namensabgleich,
+                #     der Fuellwoerter kennt und Wortstellung bewertet.
+                if not _alle and _rest:
+                    try:
+                        import resolver as _resolver
+                        _devs = [{"id": n, "name": n,
+                                  "writable": sorted((_caps.get(n) or {}).keys())}
+                                 for n in _caps]
+                        _m = _resolver.match_devices(_rest, _devs)
+                        if _m:
+                            _alle = [_m[0].name]
+                    except Exception:
+                        _alle = []
                 # Erst die Geraete, die die gebrauchte Faehigkeit haben.
                 if _noetig:
                     _passend = [n for n in _alle if _noetig in (_caps[n] or {})]

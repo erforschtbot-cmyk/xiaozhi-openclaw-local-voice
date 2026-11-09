@@ -54,6 +54,17 @@ KNOWN_CONFUSIONS = {
     "monitorlich": "Monitorlicht",
     "deckentstrahler": "Deckenstrahler",
     "steckdosen": "Steckdose",
+
+    # Beobachtet am 2026-11-04 (Sprachgeraet im Arbeitszimmer, mehrfach):
+    # "Deckenstrahler" wurde als "Steckenstrahlarm" verhoert. Diese Form
+    # erreicht nur Aehnlichkeit 0,75 und liegt damit UNTER der Schwelle 0,78 -
+    # die Aehnlichkeitskorrektur griff nicht, der Satz galt als namenlos und
+    # schaltete die Gruppe des Sprachgeraets. Deshalb als belegter Eintrag,
+    # nicht durch Senken der globalen Schwelle (das wuerde "licht", "alles",
+    # "hier" faelschlich auf Geraete abbilden).
+    "steckenstrahlarm": "Deckenstrahler",
+    "steckenstrahler": "Deckenstrahler",
+    "deckenstrahlarm": "Deckenstrahler",
 }
 
 

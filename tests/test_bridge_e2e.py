@@ -74,7 +74,9 @@ async def main() -> None:
 
     try:
         # Auf den Listener warten.
-        for _ in range(60):
+        # Kalter ONNX/Piper-Start kann auf demselben Referenzhost 5–12 s
+        # dauern; erst der Listener ist der belastbare Startbeleg.
+        for _ in range(150):
             await asyncio.sleep(0.1)
             if any("listening on" in line for line in log_lines):
                 break

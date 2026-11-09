@@ -324,13 +324,16 @@ esptool --chip esp32s3 --port /dev/ttyACM0 write-flash 0x9000 nvs.bin
 
 ## Veröffentlichter Anker
 
-`firmware/prebuilt/audio-board/xiaozhi.bin` ist die **App-Partition** (2.833.056 B),
-nicht das Vollimage. Sie wurde partition-weise geprüft: **keine** echten
-Zugangsdaten enthalten (WLAN-Name/Passwort stehen ausschließlich in der NVS, die
-nicht im Repo liegt). Die `password`/`ssid`/`ota_url`-Treffer im String-Scan sind
-Code-Konstanten (WLAN-Fehlermeldungen, JSON-Schlüssel, die Einrichtungs-Webseite);
+`firmware/prebuilt/audio-board/xiaozhi.bin` ist der am USB-Gerät bytegleich
+geprüfte **App-Anker** (2.866.736 B). Daneben liegt
+`merged-binary.bin` als vollständiges 16-MB-Layout bis zum Ende der Assets
+(Dateigröße 9.603.259 B). Sein NVS-Bereich `0x9000..0xcfff` besteht vollständig
+aus `0xFF`: Es werden keine WLAN-Daten oder individuellen Kalibrierwerte
+veröffentlicht. Die `password`/`ssid`/`ota_url`-Treffer im String-Scan sind
+Code-Konstanten (WLAN-Fehlermeldungen, JSON-Schlüssel, Einrichtungs-Webseite);
 `-----BEGIN … PRIVATE KEY-----` sind OpenSSL-Stringtabellen aus dem TLS-Stack,
-keine eingebetteten Schlüssel.
+keine eingebetteten Schlüssel. Ein frischer, gelockter Quellbuild ist separat
+in `firmware/audio-board/build-proof-20261109.json` dokumentiert.
 
 ## Tasten am Gerät
 

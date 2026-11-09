@@ -221,8 +221,8 @@ Das Verhalten ist im Log sichtbar:
 ```text
 VAD: empfindlicher Durchgang (2.10s) -> keine Sprache
 Keine Sprache erkannt (VAD, 2.10s); kein Transkript
-``` Der Modellordner enthält `encoder-model.onnx`,
-`encoder-model.onnx.data`, `decoder-model.onnx`, `vocab.txt` und
+``` Der INT8-Modellordner enthält `encoder-model.int8.onnx`,
+`encoder-model.onnx.data`, `decoder-model.int8.onnx`, `vocab.txt` und
 `config.json` (`model_type: nemo-conformer-aed`) — rund 3,7 GB.
 
 Der exakt gepinnte Referenzsatz liegt in
@@ -243,6 +243,15 @@ lädt `nemo-canary-1b-v2` in den angegebenen Modellpfad. Erst nachdem
 `vocab.txt` und
 `config.json` vollständig vorhanden sind, die Unit mit
 `HF_HUB_OFFLINE=1` starten.
+
+Der vollständige automatisierte Weg für einen leeren Host ist:
+
+```bash
+./scripts/install-canary1b.sh
+```
+
+Er erstellt das venv, installiert den gepinnten Paketsatz, lädt INT8-Modell
+und Silero-VAD, führt einen Modell-Warmup aus, rendert die Unit und startet sie.
 
 ## Bridge darauf umstellen
 

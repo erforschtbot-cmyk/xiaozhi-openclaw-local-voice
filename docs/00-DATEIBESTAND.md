@@ -1,6 +1,6 @@
 # 0. Dateibestand — Nullstart ohne Vorwissen
 
-Stand: **2026-10-28**, Referenzhost `cachyos-x8664`.
+Stand: **2026-11-09**, Referenzhost `cachyos-x8664`.
 
 Diese Datei trennt Pflichtdateien, automatisch erzeugte Daten und externe
 Voraussetzungen. Sie ist die Inventarliste für einen Agenten, der nur den
@@ -38,6 +38,7 @@ installiert.
 | Datei | Rolle / Importeur |
 |---|---|
 | `server.py` | WebSocket/OTA, systemd-Einstieg |
+| `mic_capture.py` | optionaler lokaler Mikrofonmitschnitt; ohne `capture.enabled` inaktiv |
 | `room_command.py` | Raumzuordnung, von `server.py` importiert |
 | `piper_speaker.py` | lokale Sprachausgabe, von `server.py` importiert |
 | `local-voice.mjs` | lokaler Sprach-/Agentenpfad |
@@ -105,11 +106,11 @@ werden aus ioBroker erzeugt und gehören nicht ins Repository.
 
 | Voraussetzung | Referenz / Folge bei Fehlen |
 |---|---|
-| OpenClaw | exakt `2026.10.7`; Patchsatz ist versionsgebunden |
+| OpenClaw | exakt `2026.11.2`; Patchsatz ist versionsgebunden |
 | Gateway-TLS | `~/.openclaw/ssl/gateway.crt`; Helper verbindet sonst nicht |
 | Provider-Anmeldung und Modell | interaktiv im eigenen OpenClaw einrichten |
 | Piper-Stimme | `~/.local/share/piper-voices/de_DE-kerstin-low.onnx` |
-| Wyoming-STT | Referenz `127.0.0.1:10303` |
+| Wyoming-STT | Referenz `127.0.0.1:10303`; Nullstart über `scripts/install-canary1b.sh` |
 | Canary-1B-Laufzeit | `gateway/wyoming_canary1b.py`, `gateway/requirements-canary1b.txt`, `systemd/wyoming-canary1b.service.in` |
 | ioBroker Simple API | Referenz `http://192.168.178.24:8087`, per `IOBROKER_SIMPLE_API` änderbar |
 | Firmware-Hardware | Waveshare Smart-86-Box/Touch-LCD-4B oder Audio-Board |
@@ -122,7 +123,7 @@ bewusst nicht veröffentlicht.
 
 ## OpenClaw-Patches
 
-Für `2026.10.7` ist `patches/openclaw-2026.10.7/` der exakte Satz.
+Für `2026.11.2` ist `patches/openclaw-2026.11.2/` der exakte Satz.
 `manifest.json` pinnt Vorher-/Nachher-SHA256. Aktiv sind:
 
 - `voice-confirmation-disabled-by-owner-v1`
@@ -145,7 +146,7 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 ## Nullstart-Reihenfolge
 
 1. `docs/00-START-HIER.md` lesen und Hardwarevariante bestimmen.
-2. OpenClaw 2026.10.7 installieren, TLS/Provider/Gateway selbst einrichten.
+2. OpenClaw 2026.11.2 installieren, TLS/Provider/Gateway selbst einrichten.
 3. `scripts/install-host.sh --public-host <LAN-IP> --no-restart` ausführen.
 4. lokalen Resolver gemäß `local-smarthome/README.md` erzeugen und trocken testen.
 5. OpenClaw-Patch rein lesend prüfen, dann bewusst anwenden und Gateway durch
@@ -153,14 +154,16 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 6. Firmware für das richtige Board bauen oder den passenden App-Anker flashen.
    Leerer Flash braucht das Vollimage; App-only bei `0x20000` setzt Bootloader,
    Partitionstabelle und Assets voraus.
+   Fertige Vollimages liegen für 4B und Audio-Board im jeweiligen
+   `firmware/prebuilt/`-Verzeichnis.
 7. `scripts/check-new-host.py`, `scripts/verify-host.sh` und
    `docs/04-TESTPLAN.md` vollständig abarbeiten.
 
-## Verifizierungsstand 28.10.2026
+## Verifizierungsstand 09.11.2026
 
-- OpenClaw 2026.10.7: beide gepatchten `dist`-Dateien exakt zu den
-  Manifest-`after`-Hashes.
-- Gateway-Routertests: 149/149 grün (fünf Suiten, gemessen 27.10.2026).
+- OpenClaw 2026.11.2: der gepatchte Handler ist exakt zum
+  Manifest-`after`-Hash; Patch A entfällt seit 2026.11.1 upstream.
+- Gateway-Routertests: 145/145 grün (vier Suiten, neu gemessen 09.11.2026).
 - Lokaler Resolver: 34/34 Offline-Fälle grün.
 - 4B-Basis-, Helligkeits- und TFT-Patch: vollständiger Container-Build mit
   `espressif/idf:v6.1` erfolgreich; laufende App über 2.909.840 Byte
@@ -168,12 +171,14 @@ Gateway-Neustart ist bewusst kein Teil des Skripts.
 - Wetterkarte und Suchbild: Owner-Abnahme am Gerät („funzt super. und schnell“);
   Pushformat RGB565 480×480, 460.800 Byte.
 - Bestehender Bridge-End-to-End-Test mit lokaler Piper-Ausgabe: grün.
-- Nicht grün sind zwei ältere Testhüllen: `test_conversation_timing.py`
-  referenziert die entfernte Methode `note_followup_audio`;
-  `test_local_tts.py` besitzt im Taktungs-Stub noch kein `_pcm_peak`.
-  Das sind offen dokumentierte Testdrifts, keine bestandenen Tests.
-- Kein vollständiger 4B-Neubau und kein Leerhost-/Leerflash-Hardwaretest in
-  diesem Audit. Der Buildweg ist vorhanden, aber diese Prüfstufe bleibt offen.
+- Die zuvor veralteten Testhüllen für Gesprächs-Timing und lokale
+  TTS-Taktung sind auf die ereignisgesteuerte Nachhörlogik nachgezogen.
+- Audio-Board: frischer Container-Neubau mit gepinntem `dependencies.lock`
+  erfolgreich; Lock-Rückkopie bytegleich, Buildbeweis unter
+  `firmware/audio-board/build-proof-20261109.json`.
+- Nicht simuliert werden kann nur der physische Leerhost-/Leerflash-Durchlauf
+  auf einer zweiten Maschine. Dafür sind Installer, Vollimages und die
+  maschinenlesbare Checkliste vorhanden; Zugangsdaten bleiben Betreiberangabe.
 
 ## Ergänzende Dokumente im Quellbaum
 

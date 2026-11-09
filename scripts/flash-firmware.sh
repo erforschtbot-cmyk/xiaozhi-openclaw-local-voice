@@ -18,12 +18,13 @@ usage() {
 Usage: flash-firmware.sh --port /dev/ttyACM0 [--board auto|4b|audio] [--full] [--yes]
 
   --port PORT   Serieller Port (z.B. /dev/ttyACM0)
-  --board       Zielboard. 'auto' (Standard) erkennt es am laufenden Geraet.
+  --board       Zielboard. 'auto' (Standard) bricht sicher ab und nennt die
+                Boot-Log-Kennungen; ESP32-S3/16 MB allein ist nicht eindeutig.
                 4b    = Waveshare ESP32-S3-Touch-LCD-4B (Display, Gesicht)
                 audio = Waveshare ESP32-S3-AUDIO-Board (Ring-LEDs, kein Display)
   --full        Vollimage inkl. Bootloader/Partitionstabelle/Assets.
                 Nur bei leerem oder beschaedigtem Flash. Loescht NVS (WLAN).
-                Fuer das Audio-Board existiert KEIN Vollimage im Repo.
+                Fuer beide unterstuetzten Boards liegt ein Vollimage im Repo.
   --yes         Ohne Rueckfrage schreiben (fuer automatisierte Laeufe)
   --from-build  build/firmware/xiaozhi.bin schreiben (frisch gebaute Firmware)
   --image PFAD  eigenes App-Image schreiben
@@ -32,7 +33,8 @@ Ohne --full wird nur die App-Partition (0x20000) geschrieben. WLAN/NVS und
 Assets bleiben erhalten, das Geraet verbindet sich ohne Neu-Provisionierung.
 
 Vor dem Schreiben wird das Image ueber seine eingebaute Board-Kennung gegen
---board geprueft. Passt es nicht, wird nichts geschrieben.
+das ausdrücklich gewählte --board geprueft. Passt es nicht, wird nichts
+geschrieben.
 
 ACHTUNG: Ohne --from-build/--image wird das veroeffentlichte Prebuilt-Image
 geschrieben, nicht ein lokaler Neubau. Nach ./scripts/build-firmware-*.sh
@@ -86,25 +88,23 @@ classify_image() {
 }
 
 if ((full)); then
-  image="$repo_dir/firmware/prebuilt/merged-binary.bin"
+  if [[ "$board" == "auto" ]]; then
+    echo "FEHLER: --board auto ist fuer ein Vollimage nicht eindeutig." >&2
+    echo "        Beide Boards melden ESP32-S3/16 MB; bitte 4b oder audio angeben." >&2
+    exit 1
+  fi
+  case "$board" in
+    4b)    image="$repo_dir/firmware/prebuilt/merged-binary.bin" ;;
+    audio) image="$repo_dir/firmware/prebuilt/audio-board/merged-binary.bin" ;;
+  esac
   offset="0x0"
   image_board="$(classify_image "$image")"
-  if [[ "$image_board" == "audio" ]]; then
-    : # Platzhalter: es gibt derzeit kein Audio-Vollimage im Repo
-  fi
-  if [[ "$image_board" != "4b" ]]; then
-    echo "FEHLER: Das Vollimage gehoert nicht zum 4B (erkannt: $image_board)." >&2
+  if [[ "$image_board" != "$board" ]]; then
+    echo "FEHLER: Das Vollimage passt nicht zu --board $board (erkannt: $image_board)." >&2
     exit 1
   fi
-  echo "Vollimage: $image (Board: 4B, Offset 0x0)"
+  echo "Vollimage: $image (Board: $board, Offset 0x0)"
   echo "WARNUNG: Ein Vollimage loescht NVS und Assets. WLAN muss neu eingerichtet werden."
-  if [[ "$board" == "audio" ]]; then
-    echo "FEHLER: Fuer das Audio-Board gibt es KEIN Vollimage im Repo." >&2
-    echo "        Ein leeres Audio-Board braucht einen frischen Build:" >&2
-    echo "          ./scripts/build-firmware-audio-board.sh <HOST_IM_GERAETENETZ>" >&2
-    echo "        Danach build/firmware/merged-binary.bin mit --board audio --full schreiben." >&2
-    exit 1
-  fi
 else
   case "$board" in
     4b)

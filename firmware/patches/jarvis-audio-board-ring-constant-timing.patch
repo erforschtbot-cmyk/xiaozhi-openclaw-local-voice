@@ -1,0 +1,372 @@
+--- a/main/led/circular_strip.h
++++ b/main/led/circular_strip.h
+@@ -32,6 +32,40 @@
+     void Breathe(StripColor low, StripColor high, int interval_ms);
+     void Scroll(StripColor low, StripColor high, int length, int interval_ms);
+ 
++    /// Weiches Atmen mit voller Farbaufloesung, auch bei kleiner Helligkeit.
++    ///
++    /// `duration_ms` ist die Dauer eines KOMPLETTEN Atemzugs (auf und ab).
++    ///
++    /// Warum es diese Variante zusaetzlich zu Breathe() gibt: Breathe() zaehlt
++    /// die Kanalwerte in Ganzzahlen hoch. Wird das Ergebnis anschliessend auf
++    /// eine kleine Helligkeitsstufe heruntergerechnet, bleiben nur noch wenige
++    /// unterscheidbare Werte uebrig - bei 8 % sind es vier (1..4). Die
++    /// Animation springt dann sichtbar in Stufen, obwohl sie rechnerisch
++    /// stufenlos laeuft (belegt am 4B, 2026-10-30: "richtiges Stottern",
++    /// bei voller Helligkeit dagegen weich).
++    ///
++    /// Diese Variante rechnet die Farbwerte als Gleitkomma und verteilt den
++    /// Rundungsrest ueber die Zeit (Temporal-Dithering): Jeder Frame gibt den
++    /// naechstliegenden Ganzzahlwert aus, der Fehler wird mitgenommen. Bei
++    /// hoher Bildrate mittelt das Auge die Werte und nimmt Zwischenstufen
++    /// wahr, die eine 8-Bit-LED allein nicht darstellen kann.
++    ///
++    /// Bei voller Helligkeit (Faktor 100) ist das Verfahren wirkungslos: Die
++    /// Werte sind dann ohnehin ganzzahlig, der Fehler bleibt 0 und die Anzeige
++    /// entspricht exakt der bisherigen.
++    void BreatheSmooth(StripColor low, StripColor high, int duration_ms);
++
++    /// Skaliert alle Ausgabefarben auf einen Prozentwert (0..100).
++    ///
++    /// Die Effekte rechnen weiter mit ihren vollen Farbwerten; nur die Werte,
++    /// die tatsaechlich auf den LEDs landen, werden angepasst. Dadurch bleibt
++    /// der Takt eines Effekts unabhaengig von der Helligkeit: Breathe() macht
++    /// immer dieselbe Anzahl Schritte, egal wie dunkel der Ring eingestellt
++    /// ist. Wuerde man stattdessen die Zielfarben mitskalieren, schrumpfte die
++    /// Schrittanzahl und die Animation wuerde bei kleiner Helligkeit zaeh und
++    /// abgehackt (belegt am 4B, 2026-10-30).
++    void SetColorScale(uint8_t percent);
++
+ private:
+     std::mutex mutex_;
+     TaskHandle_t blink_task_ = nullptr;
+@@ -46,6 +80,21 @@
+     uint8_t default_brightness_ = DEFAULT_BRIGHTNESS;
+     uint8_t low_brightness_ = LOW_BRIGHTNESS;
+ 
++    // Ausgabe-Skalierung (Prozent). 100 = unveraendert.
++    uint8_t color_scale_ = 100;
++
++    // Setzt einen Pixel mit angewendeter Ausgabe-Skalierung. Aufrufer haelt
++    // mutex_.
++    void WritePixel(int index, StripColor color);
++
++    // Setzt einen Pixel OHNE Ausgabe-Skalierung. Fuer Effekte, die den Faktor
++    // bereits selbst in Gleitkomma eingerechnet haben (BreatheSmooth).
++    void WritePixelRaw(int index, StripColor color);
++
++    // Zustand fuer BreatheSmooth: Startzeit, Phase und Dither-Fehler je Kanal.
++    int64_t breathe_start_us_ = 0;
++    float   breathe_err_[3] = {0.0f, 0.0f, 0.0f};
++
+     // Per-effect state — reset at the start of each effect call so that
+     // re-triggering an effect always starts clean.
+     bool       blink_on_        = true;
+--- a/main/led/circular_strip.cc
++++ b/main/led/circular_strip.cc
+@@ -2,6 +2,7 @@
+ #include "application.h"
+ #include <esp_log.h>
+ #include <algorithm>
++#include <cmath>
+ 
+ #define TAG "CircularStrip"
+ 
+@@ -49,12 +50,107 @@
+ }
+ 
+ 
++void CircularStrip::WritePixel(int index, StripColor color) {
++    if (color_scale_ < 100) {
++        auto scale = [this](uint8_t value) -> uint8_t {
++            if (value == 0) {
++                return 0;
++            }
++            if (color_scale_ == 0) {
++                return 0;
++            }
++            // Gerundet, damit die sichtbare Helligkeit jeder Stufe exakt der
++            // bisherigen Rechnung entspricht (Abschneiden verloere bis zu
++            // zwei Kanalwerte).
++            uint16_t scaled = (static_cast<uint16_t>(value) * color_scale_ + 50) / 100;
++            // Nie ganz auf 0 fallen, solange die Stufe an ist: sonst
++            // verschwaende die Zustandsfarbe bei kleiner Helligkeit und der
++            // Ring wuerde im Takt der Animation flackern.
++            return scaled == 0 ? 1 : static_cast<uint8_t>(scaled);
++        };
++        color.red   = scale(color.red);
++        color.green = scale(color.green);
++        color.blue  = scale(color.blue);
++    }
++    led_strip_set_pixel(led_strip_, index, color.red, color.green, color.blue);
++}
++
++void CircularStrip::WritePixelRaw(int index, StripColor color) {
++    led_strip_set_pixel(led_strip_, index, color.red, color.green, color.blue);
++}
++
++void CircularStrip::BreatheSmooth(StripColor low, StripColor high, int duration_ms) {
++    if (duration_ms < 100) {
++        duration_ms = 100;
++    }
++    breathe_start_us_ = esp_timer_get_time();
++    breathe_err_[0] = 0.0f;
++    breathe_err_[1] = 0.0f;
++    breathe_err_[2] = 0.0f;
++
++    const int   scale = color_scale_;
++    const uint8_t lo[3] = {low.red, low.green, low.blue};
++    const uint8_t hi[3] = {high.red, high.green, high.blue};
++
++    // Feste Bildrate, unabhaengig von der Helligkeit. Sie muss hoch genug
++    // sein, dass das Auge die geditherten Werte mitteln kann: bei 8 % liegen
++    // zwischen zwei echten LED-Werten 15 ms - mit 16-ms-Frames verteilt sich
++    // der Rundungsrest sauber.
++    StartStripTask(16, [this, lo, hi, duration_ms, scale]() {
++        const int64_t now = esp_timer_get_time();
++        double phase = static_cast<double>(now - breathe_start_us_) /
++                       (static_cast<double>(duration_ms) * 1000.0);
++        if (phase < 0.0) {
++            phase = 0.0;
++        }
++        // Dreieckswelle: 0 -> 1 -> 0, Periode 2.0
++        double p = std::fmod(phase, 2.0);
++        if (p < 0.0) {
++            p += 2.0;
++        }
++        if (p > 1.0) {
++            p = 2.0 - p;
++        }
++
++        uint8_t out[3];
++        for (int c = 0; c < 3; c++) {
++            double target = lo[c] + (static_cast<double>(hi[c]) - lo[c]) * p;
++            if (scale < 100) {
++                target = target * scale / 100.0;
++            }
++            // Temporal-Dithering: den Fehler zum gerundeten Wert mitnehmen,
++            // statt ihn zu verwerfen. Dadurch schwankt die Ausgabe um den
++            // Sollwert und wirkt gemittelt feiner als die 8 Bit der LED.
++            const double with_err = target + breathe_err_[c];
++            double rounded = std::floor(with_err + 0.5);
++            if (rounded < 0.0) {
++                rounded = 0.0;
++            }
++            if (rounded > 255.0) {
++                rounded = 255.0;
++            }
++            breathe_err_[c] = static_cast<float>(with_err - rounded);
++            out[c] = static_cast<uint8_t>(rounded);
++        }
++
++        StripColor color{out[0], out[1], out[2]};
++        for (int i = 0; i < max_leds_; i++) {
++            WritePixelRaw(i, color);
++        }
++        led_strip_refresh(led_strip_);
++    });
++}
++
++void CircularStrip::SetColorScale(uint8_t percent) {
++    color_scale_ = percent > 100 ? 100 : percent;
++}
++
+ void CircularStrip::SetAllColor(StripColor color) {
+     std::lock_guard<std::mutex> lock(mutex_);
+     esp_timer_stop(strip_timer_);
+     for (int i = 0; i < max_leds_; i++) {
+         colors_[i] = color;
+-        led_strip_set_pixel(led_strip_, i, color.red, color.green, color.blue);
++        WritePixel(i, color);
+     }
+     led_strip_refresh(led_strip_);
+ }
+@@ -63,7 +159,7 @@
+     std::lock_guard<std::mutex> lock(mutex_);
+     esp_timer_stop(strip_timer_);
+     colors_[index] = color;
+-    led_strip_set_pixel(led_strip_, index, color.red, color.green, color.blue);
++    WritePixel(index, color);
+     led_strip_refresh(led_strip_);
+ }
+ 
+@@ -73,7 +169,7 @@
+     int count = std::min(max_leds_, static_cast<int>(colors.size()));
+     for (int i = 0; i < count; i++) {
+         colors_[i] = colors[i];
+-        led_strip_set_pixel(led_strip_, i, colors[i].red, colors[i].green, colors[i].blue);
++        WritePixel(i, colors[i]);
+     }
+     led_strip_refresh(led_strip_);
+ }
+@@ -86,7 +182,7 @@
+     StartStripTask(interval_ms, [this]() {
+         if (blink_on_) {
+             for (int i = 0; i < max_leds_; i++) {
+-                led_strip_set_pixel(led_strip_, i, colors_[i].red, colors_[i].green, colors_[i].blue);
++                WritePixel(i, colors_[i]);
+             }
+             led_strip_refresh(led_strip_);
+         } else {
+@@ -135,7 +231,7 @@
+                 breathe_up_ = true;
+         }
+         for (int i = 0; i < max_leds_; i++)
+-            led_strip_set_pixel(led_strip_, i, breathe_color_.red, breathe_color_.green, breathe_color_.blue);
++            WritePixel(i, breathe_color_);
+         led_strip_refresh(led_strip_);
+     });
+ }
+@@ -155,7 +251,7 @@
+             colors_[i] = high;
+         }
+         for (int i = 0; i < max_leds_; i++) {
+-            led_strip_set_pixel(led_strip_, i, colors_[i].red, colors_[i].green, colors_[i].blue);
++            WritePixel(i, colors_[i]);
+         }
+         led_strip_refresh(led_strip_);
+         scroll_offset_ = (offset + 1) % max_leds_;
+--- a/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
++++ b/main/boards/waveshare/esp32-s3-audio-board/jarvis_ring_led.cc
+@@ -46,33 +46,46 @@
+     static_cast<int>(sizeof(RING_LEVELS) / sizeof(RING_LEVELS[0]));
+ static int ring_level_index = 3;   // Start bei 25 %
+ 
+-static uint8_t HI  = 24;
+-static uint8_t MED = 10;
+-static uint8_t LO  = 2;
+-
+-static inline uint8_t ScaleChannel(uint8_t base, uint8_t percent) {
++// Hoechste Stufe gilt als "volle Helligkeit". Auf ihre Kanalwerte wird die
++// Animation eingefroren, damit sich dort nichts aendert.
++static const uint8_t RING_MAX_PERCENT = 70;
++
++// Animations-Amplituden, eingefroren auf die Werte bei voller Helligkeit:
++//   HI  = 96 * 70/100 = 67
++//   MED = 40 * 70/100 = 28
++//   LO  =  6 * 70/100 =  4
++//
++// WARUM EINGEFROREN: Breathe() zaehlt pro Tick genau +1 pro Kanal. Skaliert
++// man die Zielfarben mit der Helligkeitsstufe, schrumpft die Zahl der
++// Zwischenschritte: bei 70 % waren es 24 Schritte, bei 8 % nur noch zwei -
++// die dann je eine Sekunde stehen. Der Ring wirkte dadurch zaeh und
++// abgehackt, und zwar umso mehr, je dunkler er eingestellt war. Belegt am
++// 4B, 2026-10-30.
++//
++// Mit eingefrorener Amplitude hat JEDER Atemzug bei JEDER Stufe exakt
++// dieselbe Schrittfolge und damit dieselbe Dauer. Die Helligkeit wirkt erst
++// beim Schreiben auf die LEDs (CircularStrip::SetColorScale).
++static uint8_t HI  = 67;
++static uint8_t MED = 28;
++static uint8_t LO  = 4;
++
++// Rechnet die Helligkeitsstufe in den Ausgabe-Faktor um.
++//
++// Bezugspunkt ist die volle Stufe: dort bleibt der Faktor 100, also exakt
++// die heutigen Farben. 25 % ergibt 25*100/70 = 36, was auf die eingefrorenen
++// 67 einen Kanalwert von 24 ergibt - genau den Wert, den die alte Skalierung
++// bei 25 % lieferte. Die sichtbare Helligkeit jeder Stufe bleibt damit
++// unveraendert; nur der Takt ist jetzt stufenunabhaengig.
++static inline uint8_t RingOutputScale(uint8_t percent) {
+     if (percent == 0) {
+         return 0;
+     }
+-    uint16_t value = static_cast<uint16_t>(base) * percent / 100;
+-    // Nie ganz auf 0 fallen, sonst waere die Zustandsfarbe unsichtbar.
+-    return value == 0 ? 1 : static_cast<uint8_t>(value);
+-}
+-
+-static void ApplyRingLevel() {
+-    uint8_t percent = RING_LEVELS[ring_level_index];
+-    HI  = ScaleChannel(96, percent);
+-    MED = ScaleChannel(40, percent);
+-    LO  = ScaleChannel(6, percent);
+-}
+-
+-// Breathe() zaehlt pro Tick genau +1. Ein kleiner Farbabstand ergaebe bei
+-// festem Intervall ein hektisches Pulsieren; das Intervall wird deshalb aus
+-// der Strecke berechnet, damit ein Atemzug gleich lange dauert.
+-static inline int BreatheInterval(uint8_t from, uint8_t to, int duration_ms) {
+-    int steps = (to > from) ? (to - from) : 1;
+-    int interval = duration_ms / steps;
+-    return interval < 20 ? 20 : interval;
++    // Gerundet, nicht abgeschnitten: sonst verliert die zweistufige
++    // Skalierung (Stufe -> Faktor -> Kanal) bis zu zwei Kanalwerte gegenueber
++    // der alten Rechnung, und die sichtbare Helligkeit wiche minimal ab.
++    uint16_t scale = (static_cast<uint16_t>(percent) * 100 + RING_MAX_PERCENT / 2)
++                     / RING_MAX_PERCENT;
++    return scale > 100 ? 100 : static_cast<uint8_t>(scale);
+ }
+ 
+ // Natuerliche Farbeingabe (r, g, b) -> Treiber-/Platinenreihenfolge.
+@@ -84,11 +97,13 @@
+ void JarvisRingLed::CycleBrightness() {
+     // K2: aus -> Stufe -> Stufe -> ... -> aus.
+     ring_level_index = (ring_level_index + 1) % RING_LEVEL_COUNT;
+-    ApplyRingLevel();
+     if (RING_LEVELS[ring_level_index] == 0) {
++        SetColorScale(0);
+         SetAllColor(StripColor{0, 0, 0});
+     } else {
+         // Neue Stufe sofort im aktuellen Zustand zeigen (blau/gruen/cyan).
++        // OnStateChanged() setzt die Skalierung selbst; die Amplitude bleibt
++        // unveraendert, damit der Takt gleich bleibt.
+         OnStateChanged();
+     }
+     ESP_LOGI("JarvisRingLed", "Ring-Helligkeit: %u %%",
+@@ -103,9 +118,14 @@
+     }
+     // Stufe 0 = aus: keine Animation starten, Ring dunkel lassen.
+     if (RING_LEVELS[ring_level_index] == 0) {
++        SetColorScale(0);
+         SetAllColor(StripColor{0, 0, 0});
+         return;
+     }
++    // Ausgabe-Helligkeit anwenden, BEVOR der Effekt startet. Die Effektfarben
++    // bleiben auf voller Amplitude; nur das, was auf die LEDs geht, wird
++    // skaliert. Dadurch ist der Takt bei jeder Stufe identisch.
++    SetColorScale(RingOutputScale(RING_LEVELS[ring_level_index]));
+     auto& app = Application::GetInstance();
+     switch (app.GetDeviceState()) {
+         case kDeviceStateStarting:
+@@ -119,8 +139,16 @@
+ 
+         case kDeviceStateIdle:
+             // Bereitschaft: gedimmt blau, ruhiges Atmen.
+-            Breathe(PanelColor(0, 0, LO), PanelColor(0, 0, MED),
+-                    BreatheInterval(LO, MED, 2000));
++            //
++            // BreatheSmooth statt Breathe: Bei kleiner Helligkeit bleiben von
++            // der Farbstrecke nur wenige unterscheidbare LED-Werte uebrig
++            // (bei 8 % sind es vier). Breathe() springt dann sichtbar in
++            // Stufen, waehrend es bei voller Helligkeit weich laeuft. Die
++            // weiche Variante rechnet in Gleitkomma und verteilt den
++            // Rundungsrest ueber die Frames (Temporal-Dithering), sodass der
++            // Atemzug bei JEDER Stufe gleich weich wirkt. Belegt am 4B,
++            // 2026-10-30: "richtiges Stottern" nur bei gedimmtem Ring.
++            BreatheSmooth(PanelColor(0, 0, LO), PanelColor(0, 0, MED), 4000);
+             break;
+ 
+         case kDeviceStateConnecting:
+@@ -136,8 +164,7 @@
+ 
+         case kDeviceStateSpeaking:
+         case kDeviceStateNotifying:
+-            Breathe(PanelColor(0, LO, LO), PanelColor(0, HI, HI),
+-                    BreatheInterval(LO, HI, 4000));
++            BreatheSmooth(PanelColor(0, LO, LO), PanelColor(0, HI, HI), 8000);
+             break;
+ 
+         case kDeviceStateUpgrading:
+@@ -170,6 +197,10 @@
+         camera_flash_ = true;
+         // Volles Weiss (255) unabhaengig von der gedimmten Zustandsfarbe:
+         // maximale Sichtbarkeit und zugleich Ausleuchtung des Motivs.
++        // Die Ausgabe-Skalierung MUSS dafuer kurz aus: sonst wuerde das
++        // Blitzlicht auf Ring-Helligkeit heruntergerechnet. OnStateChanged()
++        // stellt die Stufe nach dem Blitz wieder her.
++        SetColorScale(100);
+         SetAllColor(PanelColor(255, 255, 255));
+ 
+         // Wachhund: bleibt die Rueckmeldung aus (haengende Aufnahme, Fehler

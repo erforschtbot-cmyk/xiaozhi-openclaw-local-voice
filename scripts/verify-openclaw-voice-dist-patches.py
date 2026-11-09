@@ -19,13 +19,16 @@ dist = root / "openclaw" / "dist"
 
 checked = []
 
-# ---- Patch A
+# ---- Patch A (entfaellt ab 2026.11.1, dort ist das Modul upstream entfernt)
 confirm = [p for p in sorted(dist.glob("agent-tools.before-tool-call-*.mjs"))
            if "client-voice-confirmation.ts" in p.read_text()]
-assert confirm, "Kein Bewaestigungs-Bundle gefunden"
-for path in confirm:
-    assert "voice-confirmation-disabled-by-owner-v1" in path.read_text(), f"Patch A fehlt: {path}"
-checked += confirm
+if confirm:
+    for path in confirm:
+        assert "voice-confirmation-disabled-by-owner-v1" in path.read_text(), f"Patch A fehlt: {path}"
+    checked += confirm
+    print("Patch A: Sprachbestaetigung im Bundle vorhanden und deaktiviert.")
+else:
+    print("Patch A: entfaellt (client-voice-confirmation upstream nicht mehr vorhanden).")
 
 # ---- Patch B
 handlers = [p for p in sorted(dist.glob("handlers-*.mjs"))
@@ -45,6 +48,6 @@ for path in handlers:
         assert needle in text, f"Patch B Teil fehlt ({what}): {path}"
 checked += handlers
 
-print("Voice-dist-Patches A und B verifiziert:")
+print("Voice-dist-Patches verifiziert:")
 for path in checked:
     print(" ", path)

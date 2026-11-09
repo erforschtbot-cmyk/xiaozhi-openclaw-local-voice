@@ -281,23 +281,52 @@ function tryLocalSmartHome(text) {
     );
   } catch (error) {
     log(`Lokaler Smart-Home-Weg nicht nutzbar: ${error.message}`);
-    return null;
+    return { ok: false, reason: "weg-nicht-nutzbar", roh: null };
   }
   let result;
   try {
     result = JSON.parse(String(raw).trim().split("\n").pop());
   } catch {
     log(`Lokaler Smart-Home-Weg: Antwort unlesbar: ${String(raw).slice(0, 120)}`);
-    return null;
+    return { ok: false, reason: "antwort-unlesbar", roh: null };
   }
   if (!result || result.ok !== true) {
-    // Nicht aufgeloest (Frage, mehrdeutig, unbekanntes Geraet): normaler Weg.
-    if (result && result.reason) {
-      log(`Lokaler Smart-Home-Weg: nicht aufgeloest (${result.reason})`);
-    }
-    return null;
+    // Nicht aufgeloest (Frage, mehrdeutig, unbekanntes Geraet).
+    // NICHT hier aufgeben: das Ergebnis geht mit an den Agenten, damit ER
+    // entscheiden kann. Ein blosses "nicht verstanden" ist keine Antwort -
+    // der Agent soll wissen, was der lokale Weg versucht hat und warum es
+    // nicht griff (Eigentuemer, 2026-11-04).
+    const grund = (result && result.reason) || "kein-treffer";
+    log(`Lokaler Smart-Home-Weg: nicht aufgeloest (${grund}) -> Agent entscheidet`);
+    return { ok: false, reason: grund, roh: result || null };
   }
   return result;
+}
+
+// Zusatzwissen fuer den Agenten, wenn der lokale Weg nicht griff.
+// Damit kann er selbst entscheiden statt "nicht verstanden" zu sagen:
+// er sieht den Grund, die Kandidaten und die tatsaechlich vorhandenen
+// Geraetenamen.
+function lokalerHinweis(local, text) {
+  const zeilen = [
+    "Der schnelle lokale Schaltweg hat diesen Satz NICHT ausgefuehrt.",
+    `Grund laut Aufloesung: ${local.reason || "unbekannt"}`,
+  ];
+  const roh = local.roh || {};
+  if (Array.isArray(roh.candidates) && roh.candidates.length) {
+    zeilen.push(`Moegliche Geraete: ${roh.candidates.join(", ")}`);
+  }
+  if (roh.corrected_utterance) {
+    zeilen.push(`Verhoert-Korrektur: "${roh.corrected_utterance}"`);
+  }
+  zeilen.push(
+    "Aufgabe: entscheide selbst. Wenn ein Geraet in der Wohnung gemeint ist, " +
+      "schalte es ueber deine Werkzeuge (Geraetename exakt, z. B. 'Monitor aus'); " +
+      "bei Unsicherheit ueber den Namen vorher nachschlagen statt raten. " +
+      "Wenn der Satz wirklich unklar bleibt, frage kurz nach - aber sage nicht " +
+      "pauschal, du haettest nichts verstanden.",
+  );
+  return zeilen.join("\n");
 }
 
 /**
@@ -386,11 +415,15 @@ async function handleUtterance(pcm) {
     }
     if (!text) {
       log("Leere Erkennung; keine Antwort angefordert");
+      // Kein Text = keine Stimme. Die Bridge zaehlt das und beendet das
+      // Nachhoerfenster, statt es an Geraeuschen weiter offen zu halten.
+      emit("utterance_empty", { reason: "empty" });
       return;
     }
     const cleaned = cleanTranscript(text);
     if (!cleaned) {
       log(`Wachwort-Rest verworfen: ${text}`);
+      emit("utterance_empty", { reason: "wake-rest" });
       return;
     }
     if (cleaned !== text) {
@@ -450,7 +483,33 @@ async function handleUtterance(pcm) {
     // Lokaler Smart-Home-Weg: eindeutige Schaltbefehle sofort ausfuehren.
     // Wichtig: vor chat.send, damit gar kein Agentenlauf entsteht.
     const local = tryLocalSmartHome(text);
-    if (local) {
+    if (local && (local.ok === true || local.answer)) {
+      // Temperaturfrage: es wurde nichts geschaltet, nur gelesen. Nicht als
+      // Schaltung protokollieren (sonst steht "Lokal geschaltet: undefined").
+      if (local.query) {
+        const antwort = local.answer || local.confirmation || "Kein Messwert.";
+        log(`Lokal beantwortet: ${antwort} (${local.datapoint || "-"})`);
+        emit("assistant_done", {
+          text: antwort,
+          audioFrameCount: 0,
+          audioByteCount: 0,
+          msSinceLastAudio: null,
+        });
+        return;
+      }
+      // Sollwert-Ablehnung ("Im Wohnzimmer habe ich keinen Thermostat."):
+      // auch das ist eine fertige Antwort. Ohne diesen Zweig liefe der Satz
+      // wieder 8 s zum Agenten, nur um dieselbe Auskunft zu geben.
+      if (local.ok !== true && local.answer) {
+        log(`Lokal beantwortet (nicht gestellt): ${local.answer}`);
+        emit("assistant_done", {
+          text: local.answer,
+          audioFrameCount: 0,
+          audioByteCount: 0,
+          msSinceLastAudio: null,
+        });
+        return;
+      }
       log(
         `Lokal geschaltet: ${local.room || local.device} ` +
           `(${local.targets ? local.targets + " Lampen" : local.datapoint})`,
@@ -465,6 +524,10 @@ async function handleUtterance(pcm) {
       log(`Antwort: ${answer}`);
       return;
     }
+    // Nicht gegriffen: der Satz geht MIT Begruendung an den Agenten. Er
+    // entscheidet selbst - nachschlagen, schalten oder gezielt nachfragen.
+    // Ein pauschales "nicht verstanden" waere hier falsch.
+    const hinweis = local ? lokalerHinweis(local, text) : "";
 
     // Textzustand fuer die Delta-Berechnung zuruecksetzen.
     assistantText = "";
@@ -473,7 +536,7 @@ async function handleUtterance(pcm) {
       if (gateway.error) throw gateway.error;
       const started = await client.request("chat.send", {
         sessionKey: SESSION_KEY,
-        message: text,
+        message: hinweis ? `${text}\n\n${hinweis}` : text,
         idempotencyKey: `xiaozhi-local-${Date.now()}`,
         // Kein `suppressCommandInterpretation`: dieses Feld verlangt
         // Admin-Rechte am Gateway, die der Token hier nicht hat. Fuer eine
@@ -545,7 +608,14 @@ process.stdin.on("data", (chunk) => {
     }
     const utterance = detector.push(frame);
     if (utterance) {
-      log(`Aeusserung erkannt: ${(utterance.length / 2 / rate).toFixed(2)} s`);
+      const seconds = utterance.length / 2 / rate;
+      log(`Aeusserung erkannt: ${seconds.toFixed(2)} s`);
+      // Die Erkennung braucht rund eine Sekunde. Meldet die Bridge das nicht,
+      // schliesst sie das Nachhoerfenster womoeglich mitten im Satz, bevor
+      // das Transkript da ist (belegt 03.11.2026: Fenster endete bei laufender
+      // Sprache). Das ist keine Pegelaussage, sondern "der Detektor hat eine
+      // Aeusserung abgeschlossen" - die Entscheidung faellt danach am Text.
+      emit("utterance_detected", { seconds: Number(seconds.toFixed(2)) });
       dispatchUtterance(utterance);
     }
   }

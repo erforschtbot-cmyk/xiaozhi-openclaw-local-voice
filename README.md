@@ -1,8 +1,10 @@
 # Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal (lokal)
 
-> **Neuaufbau ab leerem Gerät:** zuerst [START HIER / Audit 20.10.2026](docs/00-START-HIER.md) lesen.
-> Der bisherige Stand ist **nicht vollständig als Nullstart abgenommen**.
-> Dort stehen die festgestellten Lücken und der geprüfte Gateway-Wiederaufbau.
+> **Neuaufbau ab leerem Gerät:** zuerst [START HIER / Audit 09.11.2026](docs/00-START-HIER.md) lesen.
+> Der Nullstart-Bestand wurde am 09.11.2026 gegen OpenClaw 2026.11.2,
+> die laufende lokale Bridge und ein angeschlossenes Audio-Board abgeglichen.
+> Die verbleibenden betreiberspezifischen Eingaben (WLAN, Provider, Token,
+> ioBroker und Raumzuordnung) stehen ausdrücklich in der Checkliste.
 > Der genaue Pflicht-/Laufzeit-/Außenbestand steht in
 > [`docs/00-DATEIBESTAND.md`](docs/00-DATEIBESTAND.md).
 
@@ -36,6 +38,27 @@ Für eine KI ohne Vorwissen ist
 [`docs/14-KI-NEUAUFBAU-CHECKLISTE.md`](docs/14-KI-NEUAUFBAU-CHECKLISTE.md)
 der Entscheidungs- und Fragenkatalog: beide Geräte, Gateway, OpenClaw-Patch,
 STT/TTS, Echtzeit-Schalten, ioBroker-Erkundung und vergessliche Geräteeinstellungen.
+
+### Übergabe an einen fremden OpenClaw ohne Vorwissen
+
+Dem Agenten genügt der öffentliche Repository-Link. Er soll zuerst
+[`docs/00-START-HIER.md`](docs/00-START-HIER.md) lesen und anschließend den
+Nullstart-Check ausführen:
+
+```bash
+git clone https://github.com/erforschtbot-cmyk/xiaozhi-openclaw-local-voice.git
+cd xiaozhi-openclaw-local-voice
+sha256sum -c CHECKSUMS.sha256
+python3 scripts/check-new-host.py
+```
+
+Die fertigen App- und Vollimages liegen unter `firmware/prebuilt/`. Das
+USB-Gerät muss trotzdem zuerst erkannt und das passende Board (`4b` oder
+`audio`) ausdrücklich gewählt werden; ein Vollimage überschreibt NVS/WLAN.
+Der Host-Installer richtet Bridge, lokale Sprache, Geräteserver und die
+Weboberfläche ein. Diese ist danach im LAN unter
+`http://<IP-DES-OPENCLAW-HOSTS>:8088/` erreichbar. Betreiberabhängig bleiben
+nur Zugangsdaten, WLAN, ioBroker-Endpunkt sowie konkrete Geräte und Räume.
 
 ## Hardware
 
@@ -78,7 +101,7 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
 | **Zweites Gerät: Audio-Board** (Ring-LED statt Display) | `firmware/audio-board/`, `docs/11-AUDIO-BOARD.md` |
 | Audio-Board-Patch (7 LEDs + RGB-Farbordnung) | `firmware/patches/jarvis-audio-board-ring.patch` |
-| Audio-Board-Anchor (nur App-Partition) | `firmware/prebuilt/audio-board/xiaozhi.bin` |
+| Audio-Board-Anker (App + Vollimage für leeren Flash) | `firmware/prebuilt/audio-board/{xiaozhi.bin,merged-binary.bin}` |
 | Bridge-Skript 1 (Python, WebSocket-Server) | `gateway/server.py` |
 | Bridge-Skript 2 (Node, lokale Erkennung + Piper) | `gateway/local-voice.mjs` |
 | Lokale Erkennung (Wyoming-STT) | `gateway/local_stt.mjs` |
@@ -312,8 +335,9 @@ Klartext. Ein geflashtes Gerät muss danach neu provisoniert werden.
 - `firmware/prebuilt/xiaozhi.bin` wird bei `0x20000` geschrieben (nur App). NVS,
   WLAN und Assets bleiben erhalten.
 - `firmware/prebuilt/merged-binary.bin` überschreibt das gesamte Flash und wird
-  deshalb nur mit dem ausdrücklichen Schalter `--full` geflasht (und nur für das
-  4B — für das Audio-Board gibt es kein Vollimage im Repo).
+  deshalb nur mit dem ausdrücklichen Schalter `--full` geflasht. Für 4B und
+  Audio-Board liegt jeweils ein eigenes, vom Skript auf Boardkennung geprüftes
+  Vollimage vor.
 - **`--board` ist Pflicht.** 4B und Audio-Board haben verschiedene Images, sind
   aber beide ESP32-S3 mit 16 MB Flash. Das Skript prüft die Board-Kennung im
   Image und bricht ab, bevor es schreibt.

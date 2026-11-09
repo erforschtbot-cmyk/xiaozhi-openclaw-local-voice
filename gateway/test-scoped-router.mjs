@@ -86,12 +86,14 @@ test('ACTUAL gateway entry: direct skips agent, complex calls agent with scoped 
   assert.ok(handlerName, `kein gepatchter Handler in ${distDir}`);
   const source = fs.readFileSync(`${distDir}/${handlerName}`, 'utf8');
   const start = source.indexOf('\tconst runArgs = async (...args) => {');
-  const end = source.indexOf('\t\tconst confirmationGrant =', start);
+  // 2026.11.1: das Bestaetigungs-Modul wurde upstream entfernt; der Anker
+  // ist jetzt der Beginn des regulaeren Consult-Pfads.
+  const end = source.indexOf('\t\tconst runtime = owner', start);
   assert.ok(start >= 0 && end > start);
   const fragment = source.slice(start, end).replace('await import("file:///home/openclaw/.local/share/jarvis-realtime-bridge/scoped-smart-home-router.mjs")', '({ routeSmartHome: route })');
   const h = harness(); let agentCalls = 0, current = turn('Monitor aus');
   const sandbox = {
-    setTimeout, jarvisReadBinding: () => ({ room: "Schlafzimmer", deviceId: "device-a", voiceSessionId: "voice-1", sessionKey }), jarvisTurnStorage: voiceTurnStorage, route: h.route, canonicalKey: sessionKey, sessionKey, agentId: 'voice',
+    setTimeout, getConfig: () => ({}), jarvisReadBinding: () => ({ room: "Schlafzimmer", deviceId: "device-a", voiceSessionId: "voice-1", sessionKey }), jarvisTurnStorage: voiceTurnStorage, route: h.route, canonicalKey: sessionKey, sessionKey, agentId: 'voice',
     parseRealtimeVoiceAgentConsultArgs: x => x, isAgentEventLifecycleGenerationCurrent: () => true,
     params: {
       getJarvisTurn: () => current,

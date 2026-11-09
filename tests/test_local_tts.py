@@ -136,6 +136,8 @@ if speaker is not None:
 
         TTS_LEAD_FRAMES = XiaozhiSession.TTS_LEAD_FRAMES
         TTS_FRAME_SECONDS = XiaozhiSession.TTS_FRAME_SECONDS
+        PROVIDER_SPEECH_PEAK = XiaozhiSession.PROVIDER_SPEECH_PEAK
+        _pcm_peak = staticmethod(XiaozhiSession._pcm_peak)
         send_pcm = XiaozhiSession.send_pcm
         send_pcm_paced = XiaozhiSession.send_pcm_paced
 

@@ -21,6 +21,14 @@ git clone --filter=blob:none https://github.com/78/xiaozhi-esp32.git "$source_di
 git -C "$source_dir" checkout 4632dc51f0a5ad26e08542e131e6e48da41e4ff3
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
+# Ring-Timing von der Helligkeit entkoppeln. Ohne diesen Patch skaliert der
+# Ring die Animationsfarben mit der Helligkeitsstufe; weil Breathe() pro Tick
+# nur +1 pro Kanal zaehlt, schrumpft damit die Zahl der Zwischenschritte. Bei
+# 8 % blieben zwei Schritte uebrig, die je eine Sekunde stehen - der Ring wirkte
+# zaeh und abgehackt, bei 70 % dagegen weich. Muss NACH dem Ring-Patch laufen,
+# weil dieser die Dateien erst anlegt. Belegt am Geraet, 2026-10-30.
+git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-ring-constant-timing.patch"
+git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-ring-constant-timing.patch"
 # Kamera braucht PSRAM: der 2-MB-Bild-Cache und der JPEG-Encoder passen bei
 # 800x600 nicht zusammen in 8 MB. Ohne diesen Patch scheitert jedes Foto mit
 # "image_to_jpeg: alloc out buffer failed" und das Geraet sagt "Das Foto hat
@@ -37,6 +45,16 @@ git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board
 
 # Use the exact component resolution from the successful clean audit build.
 install -m 0644 "$repo_dir/firmware/audio-board/dependencies.lock" "$source_dir/dependencies.lock"
+# Upstream ignoriert dependencies.lock fuer Docker-Builds. Fuer diesen
+# reproduzierbaren Builder muss sie aber in das Image gelangen, sonst meldet
+# IDF "Dependencies lock doesn't exist" und loest zum jeweiligen Tagesstand.
+python3 - "$source_dir/.dockerignore" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+lines = [line for line in p.read_text().splitlines() if line.strip() != "dependencies.lock"]
+p.write_text("\n".join(lines) + "\n")
+PY
 
 # WLAN/Host in die Board-Konfiguration eintragen
 python3 - "$source_dir/main/boards/$board_dir/config.json" "$public_host" <<'PY'

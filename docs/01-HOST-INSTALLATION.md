@@ -6,7 +6,7 @@
 ## Voraussetzungen
 
 - Linux mit systemd-Userdiensten
-- OpenClaw `2026.10.7` (oder eine Version, für die unter `patches/` ein Satz liegt)
+- OpenClaw `2026.11.2` (oder eine Version, für die unter `patches/` ein Satz liegt)
 - Node.js und npm
 - Python 3 mit `venv` (Referenzhost: `3.14.7`)
 - `libopus`
@@ -32,8 +32,8 @@ sudo apt install -y nodejs npm python3 python3-venv libopus0 docker.io git
 OpenClaw installieren und anmelden:
 
 ```bash
-npm install -g openclaw@2026.10.7
-openclaw --version          # muss 2026.10.7 zeigen
+npm install -g openclaw@2026.11.2
+openclaw --version          # muss 2026.11.2 zeigen
 openclaw gateway status     # muss laufen
 ```
 
@@ -57,7 +57,7 @@ kopieren und keine Tokens ins Repository schreiben.
 Repository klonen und den tatsächlich im LAN erreichbaren Host angeben:
 
 ```bash
-git clone git@github.com:erforschtbot-cmyk/xiaozhi-openclaw-local-voice.git
+git clone https://github.com/erforschtbot-cmyk/xiaozhi-openclaw-local-voice.git
 cd xiaozhi-openclaw-local-voice
 ./scripts/install-host.sh --public-host 192.168.178.143
 ```
@@ -84,6 +84,10 @@ Der Installer:
 8. **prüft sich selbst:** jede erwartete Datei einzeln und danach die echte
    Python-Importkette. Bei einem Fehler bricht er ab, statt einen Dienst zu
    starten, der beim ersten Ton stirbt.
+9. installiert beim Standard `127.0.0.1:10303` den gepinnten Canary-1B-v2-
+   Dienst einschließlich INT8-Modell, VAD, Warmup und systemd-Unit, sofern er
+   noch nicht läuft. `--skip-stt-install` ist nur für bewusst extern
+   bereitgestellte STT-Dienste gedacht.
 
 **Prüfpunkt:** Am Ende muss `import OK: server.py inkl. room_command, opuslib,
 websockets` erscheinen und der Dienst `active` sein. Kommt stattdessen

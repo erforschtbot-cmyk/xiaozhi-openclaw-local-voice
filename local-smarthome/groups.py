@@ -165,8 +165,13 @@ def alle_geraete() -> dict:
 
     bekannt = {}
     for dev in localmap.load().get("devices") or []:
-        if dev.get("caps") and dev.get("name"):
-            bekannt[dev["name"]] = dict(dev["caps"])
+        # Nur schaltbare Geräte anbieten. Reine Messwerte (Temp Wohnzimmer,
+        # Pool, Stromverbrauch ...) stehen seit 2026-11-07 ebenfalls in der
+        # localmap, dürfen aber in keiner Gruppe landen: dort wird geschaltet.
+        schaltbar = {c: dp for c, dp in (dev.get("caps") or {}).items()
+                     if c not in localmap.READ_CAPS}
+        if schaltbar and dev.get("name"):
+            bekannt[dev["name"]] = schaltbar
 
     for dev in catalog.load().get("devices") or []:
         name = dev.get("name") or ""
@@ -180,12 +185,6 @@ def alle_geraete() -> dict:
         if abbildung:
             bekannt[name] = abbildung
     return bekannt
-
-
-def ist_lokal(caps: dict) -> bool:
-    """Schaltet dieses Gerät ohne Amazon?"""
-    import localmap
-    return any(localmap._is_local(dp) for dp in (caps or {}).values())
 
 
 def geraete_der_gruppe(gruppe) -> list:

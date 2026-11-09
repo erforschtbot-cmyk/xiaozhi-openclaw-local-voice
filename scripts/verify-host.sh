@@ -28,9 +28,20 @@ install_dir="$(systemctl --user show jarvis-realtime-bridge.service -p WorkingDi
 
 if grep -q -- '--stt-local' "$unit" 2>/dev/null; then
   stt_uri="$(grep -oP -- '--stt-uri \K[^ ]+' "$unit" | head -1)"
-  echo "Lokale Erkennung aktiv: Whisper unter ${stt_uri:-?}"
+  echo "Lokale Erkennung aktiv: Wyoming-ASR unter ${stt_uri:-?}"
   # Der Dienst muss antworten und das erwartete Modell melden.
-  "$install_dir/.venv/bin/python" - "$stt_uri" <<'PY'
+  wyoming_python=""
+  for candidate in \
+    "$install_dir/.venv/bin/python" \
+    "$HOME/.local/share/venvs/jarvis-canary1b/bin/python" \
+    "$HOME/stt-cand5-venv/bin/python"; do
+    if [[ -x "$candidate" ]] && "$candidate" -c 'import wyoming' 2>/dev/null; then
+      wyoming_python="$candidate"
+      break
+    fi
+  done
+  [[ -n "$wyoming_python" ]] || { echo "FEHLER: kein Python mit Wyoming-Client" >&2; exit 1; }
+  "$wyoming_python" - "$stt_uri" <<'PY'
 import asyncio, sys
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe, Info
@@ -46,7 +57,7 @@ async def main() -> int:
     event = await asyncio.wait_for(client.read_event(), timeout=5)
     info = Info.from_event(event)
     models = [m.name for a in info.asr for m in a.models]
-    print(f"  Whisper erreichbar, Modell(e): {models}")
+    print(f"  Wyoming-ASR erreichbar, Modell(e): {models}")
     await client.disconnect()
     return 0
 

@@ -163,12 +163,54 @@ def _wait_for_ack(datapoint, value, timeout=READBACK_TIMEOUT):
     return False
 
 
-def current_percent(datapoint_id, writable):
-    """Ist-Helligkeit, falls der Adapter sie zurueckmeldet."""
-    for cap in ("brightness", "percentage", "color-brightness"):
-        if cap in writable:
-            return _read_value(f"{datapoint_id}.{cap}")
+def _dp_prefix(datapoint: str) -> str:
+    """Geräte-Präfix eines Datenpunkts (ohne Endung).
+
+    Nötig, weil ein Ziel je nach Herkunft auf `.state`, `.on`, `.power`,
+    `.bri` oder `.SET` enden kann. Das Präfix ist in allen Fällen die
+    Geräte-Ebene, unter der Helligkeit/Farbe liegen.
+    """
+    for suffix in (".state", ".on", ".power", ".bri", ".SET", ".POWER"):
+        if datapoint.endswith(suffix):
+            return datapoint[: -len(suffix)]
+    return datapoint.rsplit(".", 1)[0]
+
+
+def _dp_existiert(datapoint) -> bool:
+    """Gibt es den Datenpunkt in ioBroker wirklich?"""
+    if not datapoint:
+        return False
+    return _get_state(datapoint) is not None
+
+
+def _istwert_datenpunkt(device_name) -> str | None:
+    """Nur lesbarer Istwert eines Geräts aus der localmap (oder None)."""
+    key = localmap.normalize(device_name)
+    for dev in localmap.load().get("devices") or []:
+        if dev.get("key") == key or localmap.normalize(dev.get("name")) == key:
+            return (dev.get("caps") or {}).get("temperature")
     return None
+
+
+def _thermostat_sperre(device, soll_datapoint, ist_datapoint):
+    """Sollwert nur schreiben, wenn Ist- UND Sollwert-Datenpunkt existieren.
+
+    Vorgabe des Eigentuemers (2026-11-07): ein Thermostat hat immer zwei
+    Werte - einen nur lesbaren Istwert und einen schreibbaren Sollwert. Fehlt
+    einer davon, wird NICHT gestellt: sonst schreibt der Sprachweg in einen
+    Datenpunkt, dessen Gegenstueck es nicht (mehr) gibt.
+
+    Gibt einen Grund-Text zurueck, wenn gesperrt werden muss, sonst None.
+    """
+    fehlt = []
+    if not _dp_existiert(ist_datapoint):
+        fehlt.append(f"Istwert ({ist_datapoint or 'keiner'})")
+    if not _dp_existiert(soll_datapoint):
+        fehlt.append(f"Sollwert ({soll_datapoint or 'keiner'})")
+    if not fehlt:
+        return None
+    return (f"{device}: nicht gestellt - " + " und ".join(fehlt)
+            + " fehlt in ioBroker")
 
 
 def execute(resolution, dry_run=False):
@@ -176,21 +218,38 @@ def execute(resolution, dry_run=False):
         return {"ok": False, "reason": resolution.reason,
                 "candidates": resolution.candidates}, 0.0
 
-    # Vorgegebenes Ziel schlaegt den abgeleiteten Datenpunkt. Betrifft den
-    # Alexa-Zweig (device_id + state); der lokale Zweig wird in
-    # local_target() behandelt.
-    # Faehigkeit mitgeben, damit eine Vorgabe fuer genau diesen Datenpunkt
-    # greift (etwa Farbe als hex_color statt JSON). state ist der Name der
-    # Faehigkeit im Alexa-Zweig: powerState, brightness, colorName, ...
+    # EIN Weg für alle Geräte - keine Sonderbehandlung nach Herkunft.
+    # Reihenfolge: Vorgabe des Eigentümers > abgeleitetes Ziel (localmap) >
+    # Katalog-Kanal. Welcher Adapter dahinter steht, ist unerheblich.
     _cap = _CAP_FOR_STATE.get(str(resolution.state or ""), resolution.state)
-    vorgabe = overrides.target_for(resolution.device_id, resolution.device, cap=_cap)
-    dp = vorgabe["datapoint"] if vorgabe else f"{resolution.device_id}.{resolution.state}"
-    value = resolution.value
+    hit = local_target(resolution.device, resolution.action, resolution.value,
+                       ident=resolution.device_id)
+    if hit:
+        dp, value = hit
+    else:
+        vorgabe = overrides.target_for(resolution.device_id, resolution.device, cap=_cap)
+        dp = vorgabe["datapoint"] if vorgabe else f"{resolution.device_id}.{resolution.state}"
+        value = resolution.value
 
     if resolution.relative is not None:
-        actual = current_percent(resolution.device_id, _caps(resolution.device_id))
+        # Ist-Helligkeit am ZIEL lesen, nicht am Gerätenamen: der Name ist
+        # bei lokalen Geräten kein Datenpunkt-Präfix.
+        prefix = _dp_prefix(dp)
+        actual = _read_value(f"{prefix}.brightness")
+        if actual is None:
+            actual = _read_value(f"{prefix}.percentage")
         base = actual if isinstance(actual, (int, float)) else 100 if resolution.relative > 0 else 0
         value = max(0, min(100, base + resolution.relative))
+
+    if resolution.action == "temperature":
+        # Sollwert nur bei vollstaendigem Thermostat: Istwert (nur lesbar)
+        # und Sollwert (schreibbar) muessen BEIDE in ioBroker existieren.
+        sperre = _thermostat_sperre(resolution.device, dp,
+                                    _istwert_datenpunkt(resolution.device))
+        if sperre:
+            return {"ok": False, "reason": "thermostat-unvollstaendig",
+                    "device": resolution.device, "datapoint": dp,
+                    "detail": sperre}, 0.0
 
     if dry_run:
         return {"ok": True, "dry_run": True, "datapoint": dp, "value": value,
@@ -203,14 +262,6 @@ def execute(resolution, dry_run=False):
     if ok:
         result["ack"] = _wait_for_ack(dp, value) if resolution.state in ("powerState", "active") else None
     return result, elapsed
-
-
-def _caps(device_id):
-    data = catalog.load()
-    for dev in data["devices"]:
-        if dev["id"] == device_id:
-            return dev["writable"]
-    return []
 
 
 # Welche lokale Faehigkeit traegt welche Aktion
@@ -260,7 +311,12 @@ def local_target(device_name, action, value=None, ident=None):
 
     key = localmap.normalize(device_name)
     for dev in localmap.load()["devices"]:
-        if dev["key"] != key:
+        # Gegen Schlüssel UND aktuellen Namen prüfen. Der Schlüssel wird beim
+        # Aufbau aus dem ursprünglichen Namen gebildet; wird ein Gerät später
+        # umbenannt (belegt 2026-11-04: "Alle Lampen" -> "Deckenstrahler"),
+        # passt er nicht mehr und das Gerät wäre über den Sprachweg nicht mehr
+        # auffindbar.
+        if dev["key"] != key and localmap.normalize(dev.get("name")) != key:
             continue
         caps = dev.get("caps") or {}
         if action == "temperature":
@@ -306,23 +362,443 @@ _CAP_TO_RESOLVER = {
 }
 
 
-def local_devices():
-    """Geraeteliste fuer den Resolver, aufgebaut aus dem lokalen Abgleich.
+def name_zu_datenpunkt(datapoint):
+    """Sprechname zu einem Datenpunkt - für die Antwort nach dem Schalten.
 
-    Notwendig, weil alexa2 denselben Namen mehrfach fuehren kann ("Heizung"
-    zweimal: Einzelgeraet und Gruppe), waehrend der smartName nur einmal
-    existiert. Lokal ist die Zuordnung dann eindeutig, in der Cloud nicht.
+    Der Name kommt aus den Daten, nicht aus dem Satz: HassIL legt bei Farbe
+    und Weisston den Rest der Äußerung als `floor` ab (belegt 2026-11-04:
+    „Deckenstrahler warmes Weiß“ -> floor=„Deckenstrahler warmes“). Ohne diese
+    Rückabbildung stünde der halbe Satz als Gerätename in der Sprachantwort.
+
+    Verglichen wird zuerst exakt, dann über das Geräte-Präfix, damit auch
+    `.colortemp`/`.brightness` den Gerätenamen finden.
+    """
+    if not datapoint:
+        return None
+    dp = str(datapoint)
+    prefix = _dp_prefix(dp)
+    # Endet der Datenpunkt auf eine Faehigkeit, ist der Praefix das Geraet.
+    # Sonst ist der Datenpunkt SELBST das Geraet - dann darf nicht auf Praefix
+    # verglichen werden. Belegt 2026-11-04: "Meine_Geraete.0.Beamer" bekam den
+    # Praefix "Meine_Geraete.0" und damit den Namen "Airwick".
+    _CAP_ENDUNGEN = (".state", ".on", ".power", ".bri", ".SET", ".POWER",
+                     ".brightness", ".percentage", ".color", ".colortemp",
+                     ".hex_color", ".active", ".powerState", ".dimmer")
+    ist_faehigkeit = dp.lower().endswith(_CAP_ENDUNGEN)
+
+    def passt(werte):
+        werte = [str(v) for v in werte if v]
+        if dp in werte:
+            return True
+        return ist_faehigkeit and prefix in {_dp_prefix(v) for v in werte}
+
+    try:
+        for dev in localmap.load().get("devices") or []:
+            if passt((dev.get("caps") or {}).values()):
+                return dev.get("name")
+    except Exception:
+        pass
+    try:
+        for dev in catalog.load().get("devices") or []:
+            if dp.startswith(f"{dev.get('id')}."):
+                return dev.get("name")
+    except Exception:
+        pass
+    return None
+
+
+def local_devices():
+    """EINE Geräteliste für den Resolver - alle Geräte gleich behandelt.
+
+    Früher gab es zwei Stufen: erst die localmap (nur Geräte mit lokalem
+    Ziel), dann der Alexa-Katalog. Das war eine Sonderregel nach Herkunft und
+    hat Cloud-Geräte benachteiligt - gemessen am 2026-11-04:
+      "monitor an" / "monitorlicht aus" / "mach den computer aus" /
+      "garten steckdose an" fanden in der localmap nichts und fielen durch,
+      obwohl sie im Katalog stehen.
+
+    Jetzt ist es eine Liste: zuerst die localmap-Einträge (sie führen den
+    genaueren Datenpunkt), danach alle Katalog-Geräte, deren Name noch fehlt.
+    Ob ein Ziel unter zigbee., alexa2. oder sonst wo liegt, spielt keine Rolle.
     """
     out = []
+    namen = set()
     for dev in localmap.load()["devices"]:
         writable = sorted({_CAP_TO_RESOLVER[c] for c in dev["caps"] if c in _CAP_TO_RESOLVER})
         if not writable:
             continue
-        out.append({"id": dev["name"], "name": dev["name"], "writable": writable})
+        name = dev["name"]
+        if not name or name.casefold() in namen:
+            continue
+        namen.add(name.casefold())
+        out.append({"id": name, "name": name, "writable": writable,
+                    "room": dev.get("room")})
+    for dev in catalog.load().get("devices") or []:
+        name = dev.get("name") or ""
+        if not name or name.casefold() in namen:
+            continue
+        writable = [c for c in (dev.get("writable") or []) if c]
+        if not writable:
+            continue
+        namen.add(name.casefold())
+        out.append({"id": dev.get("id"), "name": name, "writable": writable,
+                    "room": dev.get("room")})
     return out
 
 
 _VOCAB = None
+
+
+def temperature_devices():
+    """Alle Geräte mit einem Temperaturmesswert (auch reine Sensoren).
+
+    Absichtlich NICHT local_devices(): dort stehen nur schaltbare Geräte,
+    weil der Resolver damit Befehle auflöst. Eine Frage braucht aber genau
+    die Messgeräte (Temp Wohnzimmer, Pool, Poolheizung ...).
+    """
+    out = []
+    gesehen = set()
+    for dev in localmap.load().get("devices") or []:
+        caps = dev.get("caps") or {}
+        name = (dev.get("name") or "").strip()
+        if not name:
+            continue
+        key = localmap.normalize(name)
+        if key in gesehen:
+            continue
+        datapoint = caps.get("temperature")
+        einheit = (dev.get("units") or {}).get("temperature") or "°C"
+        if not datapoint:            # Vom Eigentümer vorgegebenes Ziel (Beispiel Pool: das Alias zeigt
+            # auf einen gelöschten Datenpunkt, der echte Wert liegt unter
+            # Meine_Geräte.0.Pool). Ohne diese Prüfung fehlte der Raumfühler
+            # und die Frage "im Pool" landete bei der Poolheizung.
+            vorgabe = overrides.target_for(name, cap="temperature")
+            if not vorgabe:
+                continue
+            datapoint = vorgabe["datapoint"]
+            einheit = "°C"
+        gesehen.add(key)
+        out.append({
+            "name": name,
+            "id": name,
+            "key": key,
+            "datapoint": datapoint,
+            "unit": einheit,
+            "room": dev.get("room"),
+            # Rein messend = kein Schalter daneben. Solche Geräte sind die
+            # Raumfühler und gewinnen gegen Geräte mit Zusatzfunktionen.
+            "pure": all(c in localmap.READ_CAPS for c in caps),
+            "writable": [c for c in caps if c not in localmap.READ_CAPS],
+            # Thermostat: hat zusaetzlich einen Sollwert.
+            "setpoint": caps.get("setpoint"),
+        })
+    return out
+
+
+def _grad_text(wert, einheit: str) -> str:
+    """Messwert deutsch mit Einheit: 16.69 °C -> "16,7 Grad"."""
+    try:
+        zahl = float(wert)
+    except (TypeError, ValueError):
+        return f"{wert} {einheit}".strip()
+    text = f"{zahl:.1f}".replace(".", ",")
+    if text.endswith(",0"):
+        text = text[:-2]
+    einheit = str(einheit or "")
+    if einheit.startswith("°"):
+        einheit = "Grad"
+    return f"{text} {einheit}".strip()
+
+
+# Kurzformen, die im Haus gesprochen werden, aber nicht so heißen wie der
+# Raum in ioBroker. Belegt am 2026-11-07: "Wie ist die Temperatur im Bad?"
+# fand keinen Raum, weil das Gerät in "Badezimmer" liegt.
+ROOM_ALIASES = {"bad": "badezimmer"}
+
+# Ab wann ein Messwert als alt gilt und der Zeitpunkt mitgesprochen wird.
+# 6 Stunden: ein Raumfuehler meldet im Normalbetrieb alle paar Minuten.
+STALE_HOURS = 6.0
+# Ab einer Woche ist es kein "meldet" mehr, sondern ein letzter Stand.
+STALE_DAYS = 7
+
+MONATE = ("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+          "August", "September", "Oktober", "November", "Dezember")
+
+# Ortsangabe im Satz. Deutsch verlangt hier den richtigen Artikel - "Im Küche"
+# ist falsch (gesehen 2026-11-07). Bewusst eine feste Tabelle statt einer
+# Genussschätzung: die Räume dieses Hauses sind bekannt.
+ROOM_PHRASE = {
+    "terrasse": "Auf der", "terasse": "Auf der", "balkon": "Auf dem",
+    "kueche": "In der", "garage": "In der", "diele": "In der",
+    "werkstatt": "In der", "sauna": "In der", "waschkueche": "In der",
+}
+
+# Dativformen für "Für ...". "Für Im Arbeitszimmer" ist falsch (gesehen
+# 2026-11-07).
+ROOM_PHRASE_DATIV = {
+    "terrasse": "Für die", "terasse": "Für die", "balkon": "Für den",
+    "kueche": "Für die", "garage": "Für die", "diele": "Für die",
+    "werkstatt": "Für die", "sauna": "Für die", "waschkueche": "Für die",
+    "garten": "Für den", "pool": "Für den",
+}
+
+
+def _ortsangabe(raum: str) -> str:
+    """"Im Wohnzimmer" / "In der Küche" / "Auf der Terrasse"."""
+    key = localmap.normalize(raum)
+    return f"{ROOM_PHRASE.get(key, 'Im')} {raum}"
+
+
+def _ortsangabe_dativ(raum: str) -> str:
+    """Dativform fuer "Für ...": "Für das Wohnzimmer", "Für die Küche"."""
+    key = localmap.normalize(raum)
+    return f"{ROOM_PHRASE_DATIV.get(key, 'Für das')} {raum}".replace("Für Für", "Für")
+
+
+def _raum_treffer(orte, geraete):
+    """Raum aus den Ortswoertern - laengster Treffer gewinnt.
+
+    Räume kommen aus der Raumzuordnung der Messgeräte. Die Anzeigeform kommt
+    von dort mit, damit die Antwort "Im Wohnzimmer" heißt und nicht
+    "Im wohnzimmer" (die Raumliste des Resolvers ist kleingeschrieben).
+    """
+    if not orte:
+        return None
+    orte_set = set(orte)
+    treffer = []
+    for dev in geraete:
+        raum = (dev.get("room") or "").strip()
+        if not raum:
+            continue
+        key = localmap.normalize(raum)
+        if not key:
+            continue
+        namen = {key}
+        namen.update(kurz for kurz, lang in ROOM_ALIASES.items() if lang == key)
+        if namen & orte_set:
+            treffer.append((len(key), raum))
+    if not treffer:
+        return None
+    return max(treffer, key=lambda x: x[0])[1]
+
+
+def temperature_query(text, assistant=None):
+    """Feste Frageform lokal beantworten: "Wie ist die Temperatur <Ort>?".
+
+    Gibt None zurück, wenn der Satz keine solche Frage ist - dann läuft
+    alles wie bisher. Sonst ein Ergebnis wie bei handle(), zusätzlich mit
+    "query": True und "answer" (der Sprechtext).
+
+    Es wird nie geraten: gibt es zum Ort mehrere gleichwertige Messgeräte,
+    kommt ok=False mit den Kandidaten zurück und der Agent entscheidet.
+    """
+    orte = resolver.parse_temperature_query(text)
+    if orte is None:
+        return None
+
+    geraete = temperature_devices()
+    if not geraete:
+        return {"ok": False, "query": True, "reason": "kein-messgeraet",
+                "utterance": text}
+    if not orte:
+        # "Wie ist die Temperatur?" allein - bewusst nicht beantwortet.
+        return {"ok": False, "query": True, "reason": "ort-fehlt",
+                "utterance": text}
+
+    # 1) Raum? Dann die Messgeräte dieses Raums.
+    raum = _raum_treffer(orte, geraete)
+    if raum:
+        key = localmap.normalize(raum)
+        kandidaten = [d for d in geraete
+                      if localmap.normalize(d.get("room") or "") == key]
+        if kandidaten:
+            # Gerät, das genauso heißt wie der Raum ("Pool"), ist gemeint.
+            gleich = [d for d in kandidaten if d["key"] == key]
+            if len(gleich) == 1:
+                kandidaten = gleich
+            else:
+                reine = [d for d in kandidaten if d["pure"]] or kandidaten
+                kandidaten = reine
+            if len(kandidaten) > 1:
+                return {"ok": False, "query": True, "reason": "mehrdeutig",
+                        "utterance": text,
+                        "candidates": [d["name"] for d in kandidaten]}
+            return _temperatur_antwort(text, kandidaten[0], raum)
+
+    # 2) Gerätename im Satz? Exakt zuerst, sonst unscharf - hier wird nur
+    #    gelesen, nie geschaltet, deshalb ist ein ähnlicher Name unkritisch.
+    #    Nötig für Schreibweisen wie "Terasse" (so heißt der Fühler in
+    #    ioBroker) gegen "Terrasse" (so wird es gesprochen).
+    matches = resolver.match_devices(" ".join(orte), geraete)
+    matches = [m for m in matches
+               if m.reason in ("exakt", "woerter", "kompositum")
+               or m.reason.startswith("aehnlich")]
+    if matches:
+        best = matches[0]
+        rivals = [m for m in matches[1:]
+                  if best.score - m.score < resolver.AMBIGUITY_MARGIN]
+        if rivals:
+            return {"ok": False, "query": True, "reason": "mehrdeutig",
+                    "utterance": text,
+                    "candidates": [best.name] + [m.name for m in rivals[:4]]}
+        dev = next(d for d in geraete if d["name"] == best.name)
+        return _temperatur_antwort(text, dev, _passender_raum(dev, raum))
+
+    # 2b) Teilname: "temperatur von klimaanlage" nennt nur ein Wort, das
+    #     Gerät heißt aber "Temperatur Klimaanlage". Es wird nur gelesen,
+    #     also ist ein Teilname unkritisch - trotzdem muss er EINDEUTIG sein.
+    #     Bei mehreren Treffern gewinnt ein Thermostat (es hat Ist- und
+    #     Sollwert), sonst wird nicht geantwortet.
+    woerter = set(orte)
+    teil = [d for d in geraete
+            if woerter and woerter <= set(resolver.tokens(d["name"]))]
+    if len(teil) > 1:
+        thermo = [d for d in teil if d.get("setpoint")]
+        if len(thermo) == 1:
+            teil = thermo
+    if len(teil) == 1:
+        return _temperatur_antwort(text, teil[0], _passender_raum(teil[0], raum))
+
+    # 3) Bekannter Raum, aber kein Fühler darin: ehrlich und lokal antworten.
+    #    Sonst liefe die Frage wieder 8 s über den Agenten, nur um zu hören,
+    #    dass es dort keinen Sensor gibt.
+    bekannter_raum = next((r for r in resolver.ROOMS
+                           if r in set(orte)), None)
+    if bekannter_raum:
+        anzeige = bekannter_raum.capitalize()
+        return {"ok": True, "query": True, "utterance": text,
+                "answer": f"{_ortsangabe(anzeige)} habe ich keinen "
+                          f"Temperaturwert.",
+                "room": anzeige, "value": None, "stale": True}
+
+    return {"ok": False, "query": True, "reason": "ort-unbekannt",
+            "utterance": text, "candidates": [d["name"] for d in geraete][:8]}
+
+
+def setpoint_result(text):
+    """Sollwert setzen - aber nur bei vollstaendigem Thermostat.
+
+    Gibt None zurueck, wenn der Satz kein Sollwert-Befehl ist (dann laeuft
+    alles wie bisher). Sonst ein Ergebnis mit Sprechtext, auch bei Ablehnung:
+    "Im Wohnzimmer habe ich keinen Thermostat." ist eine Antwort, kein Fehler.
+
+    Die harte Sperre sitzt in execute() (_thermostat_sperre): Ist- und
+    Sollwert-Datenpunkt muessen beide existieren.
+    """
+    intent = resolver.parse_action(text)
+    if intent.action != "temperature" or intent.value is None:
+        return None
+    devices = local_devices()
+    resolution = resolver.resolve(text, devices)
+    if not resolution.ok:
+        if resolution.reason == "kein-thermostat":
+            raum = resolver.room_in(text)
+            ort = _ortsangabe(raum.capitalize()) if raum else None
+            antwort = (f"{ort} habe ich keinen Thermostat." if ort
+                       else "Dafür habe ich keinen Thermostat.")
+            return {"ok": False, "reason": "kein-thermostat",
+                    "answer": antwort, "utterance": text}
+        return None
+    if resolution.action != "temperature":
+        return None
+    result, _ = execute(resolution, dry_run=True)
+    result["utterance"] = text
+    if not result.get("ok"):
+        # Zum Beispiel thermostat-unvollstaendig: den Grund sprechen.
+        return result
+    wert = resolution.value
+    try:
+        zahl = f"{float(wert):g}"
+    except (TypeError, ValueError):
+        zahl = str(wert)
+    result["answer"] = f"{resolution.device} auf {zahl} Grad gestellt."
+    return result
+
+
+def _passender_raum(dev, raum):
+    """Raum für die Antwort: der gefragte, sonst der des Geräts."""
+    eigener = (dev.get("room") or "").strip()
+    if raum and eigener and localmap.normalize(raum) == localmap.normalize(eigener):
+        return raum
+    if raum:
+        return raum
+    return eigener or None
+
+
+def _temperatur_antwort(text, dev, raum):
+    """Messwert lesen und den Sprechtext bauen.
+
+    Ist der Wert alt, wird das GESAGT. Belegt 2026-11-07: der Istwert der
+    Klimaanlage steht seit dem 23.05. auf 8 Grad, waehrend der Raumfuehler
+    18,8 Grad meldet. Ein nacktes "Im Arbeitszimmer sind es 8 Grad" waere
+    eine falsche Behauptung ueber die Gegenwart.
+    """
+    state = _get_state(dev["datapoint"])
+    wert = None if state is None else state.get("val")
+    ts = None if state is None else state.get("ts")
+    if wert is None:
+        # Kein Wert ist eine belegbare Aussage, keine Unbekannte: lieber kurz
+        # und ehrlich antworten als den Agenten 8 s rechnen lassen.
+        ort = _ortsangabe(raum) if raum else dev["name"]
+        return {"ok": True, "query": True, "utterance": text,
+                "answer": f"Für {ort} liegt kein Messwert vor.",
+                "device": dev["name"], "room": raum,
+                "datapoint": dev["datapoint"], "value": None,
+                "unit": dev.get("unit"), "stale": True}
+    grad = _grad_text(wert, dev.get("unit"))
+    alter = _alter_stunden(ts)
+    if alter is not None and alter > STALE_HOURS:
+        # Alter Wert: Zeitpunkt mit nennen. Bei sehr alten Werten (ueber eine
+        # Woche) ist es kein "meldet" mehr, sondern ein letzter Stand.
+        if alter > STALE_DAYS * 24:
+            ort = _ortsangabe_dativ(raum) if raum else f"{dev['name']}"
+            antwort = (f"{ort} liegt kein aktueller Wert vor. "
+                       f"Der letzte war {grad} {_alter_text(alter)}.")
+        else:
+            antwort = (f"{dev['name']} meldet {grad}, "
+                       f"letzter Wert {_alter_text(alter)}.")
+        return {"ok": True, "query": True, "utterance": text,
+                "answer": antwort, "device": dev["name"], "room": raum,
+                "datapoint": dev["datapoint"], "value": wert,
+                "unit": dev.get("unit"), "stale": True,
+                "ageHours": round(alter, 1)}
+    if raum:
+        answer = f"{_ortsangabe(raum)} sind es {grad}."
+    else:
+        answer = f"{dev['name']}: {grad}."
+    return {"ok": True, "query": True, "utterance": text,
+            "answer": answer, "device": dev["name"], "room": raum,
+            "datapoint": dev["datapoint"], "value": wert,
+            "unit": dev.get("unit")}
+
+
+def _alter_stunden(ts):
+    """Alter eines Zeitstempels in Stunden (None, wenn unbekannt)."""
+    try:
+        millis = float(ts)
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    return max(0.0, (time.time() * 1000 - millis) / 3600000.0)
+
+
+def _alter_text(stunden: float) -> str:
+    """Alter in Worten: "vor 12 Minuten", "vom 23. Mai".
+
+    Monat als Wort, nicht als Zahl: "vom 23.05." liest die Sprachausgabe als
+    "dreiundzwanzigter fünfter" vor (gesehen 2026-11-07).
+    """
+    if stunden < 1:
+        return f"vor {max(1, int(stunden * 60))} Minuten"
+    if stunden < 24:
+        return f"vor {int(stunden)} Stunden"
+    ts = time.time() - stunden * 3600
+    lokal = time.localtime(ts)
+    monat = MONATE[lokal.tm_mon - 1]
+    if lokal.tm_year != time.localtime().tm_year:
+        return f"vom {lokal.tm_mday}. {monat} {lokal.tm_year}"
+    return f"vom {lokal.tm_mday}. {monat}"
 
 
 def vocab():
@@ -411,7 +887,34 @@ def group_batch(text, assistant=None):
     try:
         devices = local_devices()
         treffer = resolver.match_devices(text, devices) if devices else []
-        if treffer and treffer[0].score >= 100:
+        # Auch die STT-korrigierte Fassung prüfen: die Spracherkennung verhört
+        # Gerätenamen regelmäßig (belegt 2026-11-04: "Beckenstrahler, warmes,
+        # weiß" -> korrigiert "Deckenstrahler warmes, weiß"). Ohne diesen
+        # zweiten Blick galt der Satz als namenlos und schaltete die Gruppe des
+        # Sprachgeräts - also das falsche Zimmer.
+        if not treffer:
+            try:
+                fest, _aenderungen = fuzzy.correct_sentence(text, vocab())
+                if fest != text:
+                    treffer = resolver.match_devices(fest, devices) if devices else []
+            except Exception:
+                pass
+        if treffer:
+            # IRGENDEIN erkannter Geraetename heisst: es ist KEIN Gruppenbefehl.
+            # Die Gruppe gilt nur fuer Saetze ohne jeden Geraetenamen -
+            # ausdruecklich so gewuenscht (Eigentuemer, 2026-11-04):
+            #   "Licht an", "Licht aus", "Licht 50 %"  -> Gruppe
+            #   alles mit Geraetenamen                  -> Geraet
+            # Auch ein nur schwach erkannter oder verhoerter Name zaehlt:
+            # sonst schaltet der Befehl die Gruppe des Sprachgeraets, also ein
+            # voellig anderes Zimmer. Belegt 2026-11-04: "Deckenstrahler warmes
+            # Weiss" (68 Punkte) schaltete "Arbeitszimmer", obwohl der
+            # Deckenstrahler im Wohnzimmer haengt. Passt der Name auf kein
+            # Geraet, ist "nicht verstanden" die richtige Antwort - nicht das
+            # falsche Zimmer.
+            # Reine Gruppensaetze erzeugen nachweislich keinen Treffer
+            # (geprueft 2026-11-04 ueber "Licht an", "Licht 50 %", "alles an",
+            # "hier heller", "licht warmweiss", "Licht auf maximum").
             return None
     except Exception:
         pass
@@ -512,82 +1015,93 @@ def group_batch(text, assistant=None):
             "targets": len(aufgaben)}
 
 
-def handle(text, dry_run=False, prefer_local=False, assistant=None):
+def handle(text, dry_run=False, assistant=None):
     """Satz auswerten und (ausser bei dry_run) schalten.
 
     `assistant` ist die Device-ID des Sprachgeräts, das das Wachwort gehört
     hat (aus OPENCLAW_VOICE_DEVICE_ID). Nur damit lässt sich eine Gruppe
     zuordnen - der Gruppenname selbst hat keine Bedeutung fürs Schalten.
+
+    Es gibt keinen Schalter „lokal bevorzugen" mehr: jedes Gerät nimmt
+    denselben Weg. Raum- und Gruppenbefehle gelten immer.
     """
-    if prefer_local:
-        # Gruppe zuerst: sie greift nur, wenn weder Gerät noch Raum im Satz
-        # steht. "Licht an" auf dem Wohnzimmer-Gerät schaltet dessen Gruppe.
-        gbatch = group_batch(text, assistant)
-        if gbatch:
-            result = {"ok": True, "route": "local", "utterance": text,
-                      "room": None, "device": gbatch["device"],
-                      "group_name": gbatch["group_name"],
-                      "action": gbatch["action"],
-                      "targets": gbatch["targets"]}
-            if dry_run:
-                result["datapoints"] = [dp for dp, _ in gbatch["assignments"]]
-                result["values"] = [v for _, v in gbatch["assignments"]]
-                return result
-            written, failed = [], []
-            for dp, wert in gbatch["assignments"]:
-                ok, status, elapsed, detail = write_state(dp, wert)
-                eintrag = {"datapoint": dp, "value": wert, "http": status}
-                (written if ok else failed).append(eintrag)
-            result["written"] = written
-            result["failed"] = failed
-            result["ok"] = bool(written) and not failed
+    # Temperaturfrage zuerst: "Wie ist die Temperatur im Wohnzimmer?".
+    # Das ist KEIN Schaltbefehl, sondern ein Messwert. Vorher landete der Satz
+    # bei parse_action() als "frage" und lief über den Agenten (7-9 s, gemessen
+    # 2026-11-07). Hier wird derselbe Datenpunkt gelesen, den das Panel zeigt.
+    frage = temperature_query(text, assistant)
+    if frage is not None:
+        return frage
+
+    # Danach der Sollwert: "stell die klimaanlage auf 22 grad". Braucht eine
+    # eigene Antwort, weil "geschaltet" dafür das falsche Wort ist.
+    antwort = setpoint_result(text)
+    if antwort is not None:
+        return antwort
+
+    # Gruppe zuerst: sie greift nur, wenn weder Gerät noch Raum im Satz
+    # steht. "Licht an" auf dem Wohnzimmer-Gerät schaltet dessen Gruppe.
+    gbatch = group_batch(text, assistant)
+    if gbatch:
+        result = {"ok": True, "utterance": text,
+                  "room": None, "device": gbatch["device"],
+                  "group_name": gbatch["group_name"],
+                  "action": gbatch["action"],
+                  "targets": gbatch["targets"]}
+        if dry_run:
+            result["datapoints"] = [dp for dp, _ in gbatch["assignments"]]
+            result["values"] = [v for _, v in gbatch["assignments"]]
             return result
-        batch = room_batch(text)
-        if batch:
-            result = {"ok": True, "route": "local", "utterance": text,
-                      "room": batch["room"], "device": batch["room"],
-                      "action": "on" if batch["value"] else "off",
-                      "targets": len(batch["targets"]),
-                      "group": batch.get("group")}
-            if dry_run:
-                result["datapoints"] = batch["targets"]
-                result["value"] = batch["value"]
-                return result
-            written, failed = [], []
-            for dp in batch["targets"]:
-                ok, status, elapsed, detail = write_state(dp, batch["value"])
-                entry = {"datapoint": dp, "http": status}
-                if ok:
-                    entry["confirm"] = confirm_write(dp, batch["value"])
-                (written if ok else failed).append(entry)
-            result["written"] = written
-            result["failed"] = failed
-            result["ok"] = not failed
-            offline = [w["datapoint"] for w in written if is_available(w["datapoint"]) is False]
-            if offline:
-                result["offline_warning"] = offline
-            # Nach einem Gruppenbefehl bleiben die Einzel-Datenpunkte stehen.
-            # Wer danach den Zustand einer Lampe liest, bekommt einen falschen
-            # Wert. Das wird ausgewiesen, statt es zu verschweigen.
-            if any(is_group_target(w["datapoint"]) for w in written):
-                result["stale_warning"] = (
-                    "Gruppenbefehl: die Einzel-Datenpunkte der Lampen werden "
-                    "vom zigbee-Adapter NICHT mitaktualisiert und zeigen "
-                    "weiterhin den alten Zustand."
-                )
+        written, failed = [], []
+        for dp, wert in gbatch["assignments"]:
+            ok, status, elapsed, detail = write_state(dp, wert)
+            eintrag = {"datapoint": dp, "value": wert, "http": status}
+            (written if ok else failed).append(eintrag)
+        result["written"] = written
+        result["failed"] = failed
+        result["ok"] = bool(written) and not failed
+        return result
+    batch = room_batch(text)
+    if batch:
+        result = {"ok": True, "utterance": text,
+                  "room": batch["room"], "device": batch["room"],
+                  "action": "on" if batch["value"] else "off",
+                  "targets": len(batch["targets"]),
+                  "group": batch.get("group")}
+        if dry_run:
+            result["datapoints"] = batch["targets"]
+            result["value"] = batch["value"]
             return result
-    devices = catalog.load()["devices"]
-    resolution = None
-    if prefer_local:
-        # Erst lokal aufloesen: dort gibt es keine Cloud-Mehrdeutigkeit.
-        local_devs = local_devices()
-        local_res = resolver.resolve(text, local_devs)
-        if local_res.ok:
-            hit = local_target(local_res.device, local_res.action, local_res.value)
-            if hit:
-                resolution = local_res
-    if resolution is None:
-        resolution = resolver.resolve(text, devices)
+        written, failed = [], []
+        for dp in batch["targets"]:
+            ok, status, elapsed, detail = write_state(dp, batch["value"])
+            entry = {"datapoint": dp, "http": status}
+            if ok:
+                entry["confirm"] = confirm_write(dp, batch["value"])
+            (written if ok else failed).append(entry)
+        result["written"] = written
+        result["failed"] = failed
+        result["ok"] = not failed
+        offline = [w["datapoint"] for w in written if is_available(w["datapoint"]) is False]
+        if offline:
+            result["offline_warning"] = offline
+        # Nach einem Gruppenbefehl bleiben die Einzel-Datenpunkte stehen.
+        # Wer danach den Zustand einer Lampe liest, bekommt einen falschen
+        # Wert. Das wird ausgewiesen, statt es zu verschweigen.
+        if any(is_group_target(w["datapoint"]) for w in written):
+            result["stale_warning"] = (
+                "Gruppenbefehl: die Einzel-Datenpunkte der Lampen werden "
+                "vom zigbee-Adapter NICHT mitaktualisiert und zeigen "
+                "weiterhin den alten Zustand."
+            )
+        return result
+    # EINE Geräteliste für alle, EIN Auflöseweg. Früher lief hier zuerst die
+    # localmap und nur bei Erfolg der Katalog - eine Sonderregel nach Herkunft,
+    # die Cloud-Geräte ohne lokales Gegenstück durchfallen liess (gemessen
+    # 2026-11-04: "monitor an", "monitorlicht aus", "mach den computer aus",
+    # "garten steckdose an").
+    devices = local_devices()
+    resolution = resolver.resolve(text, devices)
     result, _ = execute(resolution, dry_run=True)   # erst aufloesen, nicht schreiben
     result["utterance"] = text
     if not resolution.ok:
@@ -598,19 +1112,19 @@ def handle(text, dry_run=False, prefer_local=False, assistant=None):
         if changes:
             result["corrected"] = [{"from": a, "to": b, "ratio": round(r, 2)}
                                    for a, b, r in changes]
-            retry = None
-            if prefer_local:
-                local_res = resolver.resolve(fixed, local_devices())
-                if local_res.ok and local_target(local_res.device, local_res.action,
-                                                  local_res.value):
-                    retry = local_res
-            if retry is None:
-                retry = resolver.resolve(fixed, devices)
+            # Die Korrektur IMMER vermerken, auch wenn der eigene Resolver
+            # damit noch nichts anfangen kann. HassIL und die Zielsuche
+            # arbeiten spaeter damit - sonst geht der reparierte Name
+            # verloren. Belegt 2026-11-04: "Steckenstrahlarm warmes weiss"
+            # wurde zu "Deckenstrahler ..." korrigiert, der Resolver fand
+            # aber keine Aktion (Weisston kennt er nicht) - und HassIL bekam
+            # wieder den verhoerten Satz.
+            result["corrected_utterance"] = fixed
+            retry = resolver.resolve(fixed, devices)
             if retry.ok:
-                # Wichtig: resolution ersetzen, damit das lokale Routing
-                # unten den KORRIGIERTEN Treffer benutzt, nicht den Fehlschlag.
+                # Wichtig: resolution ersetzen, damit der korrigierte Treffer
+                # auch geschrieben wird, nicht der Fehlschlag.
                 resolution = retry
-                result["corrected_utterance"] = fixed
                 result, _ = execute(resolution, dry_run=True)
                 result["utterance"] = text
                 result["corrected_utterance"] = fixed
@@ -648,7 +1162,12 @@ def handle(text, dry_run=False, prefer_local=False, assistant=None):
     # "<Raum> an/aus" ohne Geraetenamen und schaltet dann mehrere Lampen.
     try:
         import hassil_router
-        erkannt = hassil_router.parse(text)
+        # Korrigierte Fassung bevorzugen: HassIL kennt die STT-Verhoerer nicht,
+        # also muss der reparierte Satz hinein. Belegt 2026-11-04:
+        # "Steckenstrahlarm warmes weiss" ergab im Original keine Zuordnung,
+        # mit "Deckenstrahler" dagegen den richtigen Datenpunkt.
+        _text_fuer_hassil = result.get("corrected_utterance") or text
+        erkannt = hassil_router.parse(_text_fuer_hassil)
         befehl = hassil_router.als_schaltbefehl(erkannt) if erkannt else None
     except Exception as exc:  # noqa: BLE001
         print(f"hassil nicht nutzbar: {exc!r}", flush=True)
@@ -657,17 +1176,22 @@ def handle(text, dry_run=False, prefer_local=False, assistant=None):
     # Kein Wert bedeutet keinen Schaltbefehl; dann entscheidet der eigene Weg.
     if befehl and befehl[1] is not None:
         ziel, wert = befehl
-        lokal = localmap._is_local(ziel)
         treffer = {
             "ok": True,
             "engine": "hassil",
             "intent": (erkannt or {}).get("intent"),
-            "device": (erkannt or {}).get("name") or (erkannt or {}).get("area") or text,
+            # Der Geraetename kommt aus dem ZIEL, nicht aus dem Satz. HassIL
+            # legt bei Farbe/Weisston den Rest als "floor" ab (belegt
+            # 2026-11-04: "Deckenstrahler warmes Weiss" -> floor="Deckenstrahler
+            # warmes"), wodurch der ganze Satz als Geraetename in der
+            # Sprachantwort landete. Der Datenpunkt ist eindeutig.
+            "device": name_zu_datenpunkt(ziel)
+                      or (erkannt or {}).get("name")
+                      or (erkannt or {}).get("area") or text,
             "room": (erkannt or {}).get("area"),
             "action": "set",
             "datapoint": ziel,
             "value": wert,
-            "route": "local" if lokal else "alexa2-cloud",
             "utterance": text,
         }
         if dry_run:
@@ -677,23 +1201,9 @@ def handle(text, dry_run=False, prefer_local=False, assistant=None):
                         "seconds": round(dauer, 3), "detail": detail[:200]})
         return treffer
 
-    result["route"] = "alexa2-cloud"
-
-    if resolution.ok and prefer_local:
-        hit = local_target(resolution.device, resolution.action, resolution.value,
-                           ident=resolution.device_id)
-        if hit:
-            target, value = hit
-            # Nicht jedes vorgeschlagene Ziel ist wirklich lokal: eine
-            # Eigentuemer-Vorgabe darf auch auf einen Alexa-Kanal zeigen.
-            # Dann bleibt die Kennzeichnung "alexa2-cloud", sonst behauptet
-            # das Ergebnis einen Cloud-freien Weg, den es nicht gibt.
-            if localmap._is_local(target):
-                result["route"] = "local"
-            else:
-                result["alexa2_datapoint"] = result.get("datapoint")
-            result["datapoint"] = target
-            result["value"] = value
+    # Das Ziel steht bereits im Ergebnis: execute() hat Vorgabe, localmap und
+    # Katalog in EINEM Weg aufgelöst. Hier wird nichts mehr nach Herkunft
+    # umgebogen oder umbenannt.
 
     if not dry_run:
         if not result.get("ok") or "datapoint" not in result:
@@ -710,10 +1220,9 @@ def main():
     parser = argparse.ArgumentParser(description="Alexa-Geraet direkt schalten")
     parser.add_argument("utterance", help="gesprochener Satz")
     parser.add_argument("--dry-run", action="store_true", help="nur aufloesen, nichts schreiben")
-    parser.add_argument("--local", action="store_true", help="lokales Ziel bevorzugen")
     args = parser.parse_args()
-    print(json.dumps(handle(args.utterance, dry_run=args.dry_run,
-                            prefer_local=args.local), ensure_ascii=False, indent=1))
+    print(json.dumps(handle(args.utterance, dry_run=args.dry_run),
+                     ensure_ascii=False, indent=1))
     return 0
 
 

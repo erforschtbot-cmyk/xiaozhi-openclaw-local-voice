@@ -84,6 +84,21 @@ def live_values(datapoints: list) -> dict:
     return out
 
 
+def _objekt_einheit(datapoint: str) -> str:
+    """Einheit eines Datenpunkts direkt aus ioBroker (leer, wenn keine).
+
+    Nur der Rueckfall: normalerweise kommt die Einheit aus der localmap.
+    Gebraucht, wenn das Ziel per Vorgabe auf einen anderen Datenpunkt zeigt.
+    """
+    try:
+        obj = _http_json(f"{BASE}/get/{urllib.parse.quote(datapoint, safe='')}/", timeout=5)
+    except Exception:
+        return ""
+    common = (obj or {}).get("common") or {}
+    einheit = str(common.get("unit") or "").replace("℃", "°C")
+    return einheit
+
+
 def datapoint_rooms() -> dict:
     """Datenpunkt -> Raum, aus rooms.json und den Overrides.
 
@@ -141,8 +156,10 @@ def assistant_liste():
 def collect():
     """Geraete aus beiden Quellen zusammenfuehren.
 
-    localmap hat belegte lokale Ziele, catalog den Alexa-Weg. Ein Geraet kann in
-    beiden stehen; dann gilt das lokale Ziel, weil es ohne Amazon schaltet.
+    localmap und catalog sind nur zwei Wege, an einen Datenpunkt zu kommen.
+    Keiner ist besser: steht ein Geraet in beiden, wird das Ziel aus localmap
+    genommen, weil es dort meist der Geraete-Datenpunkt selbst ist statt eines
+    Alexa-Kanals. Geschaltet wird in beiden Faellen gleich.
     """
     local = {}
     try:
@@ -159,8 +176,8 @@ def collect():
                 "baseName": dev.get("baseName") or dev.get("name"),
                 "caps": sorted(caps),
                 "capTargets": {k: v for k, v in caps.items()},
+                "units": dev.get("units") or {},
                 "target": target,
-                "route": "local",
                 "broken": dev.get("broken") or [],
                 "room": dev.get("room"),
             }
@@ -185,7 +202,6 @@ def collect():
             "caps": writable,
             "capTargets": katalog_caps,
             "target": f"{dev.get('id')}.{writable[0]}" if dev.get("id") and writable else None,
-            "route": "alexa2-cloud",
             "manufacturer": dev.get("manufacturer") or "",
             "broken": [],
             "room": dev.get("room"),
@@ -194,7 +210,7 @@ def collect():
         if hit:
             entry["local"] = {"caps": hit["caps"], "target": hit["target"],
                               "broken": hit["broken"]}
-            entry["route"] = "local"
+            entry["units"] = dict(hit.get("units") or {})
             if hit["target"]:
                 entry["target"] = hit["target"]
             entry["caps"] = sorted(set(entry["caps"]) | set(hit["caps"]))
@@ -214,8 +230,8 @@ def collect():
             "baseName": hit["baseName"],
             "caps": hit["caps"],
             "capTargets": hit.get("capTargets") or {},
+            "units": hit.get("units") or {},
             "target": hit["target"],
-            "route": "local",
             "manufacturer": "",
             "broken": hit["broken"],
             "room": hit["room"],
@@ -259,6 +275,11 @@ def collect():
         if vorgabe.get("datapoint"):
             dev["target"] = vorgabe["datapoint"]
             dev["targetOverridden"] = True
+            # Eine Vorgabe des Eigentuemers ersetzt das defekte Alias. Der
+            # alte Hinweis ("... -> ... (fehlt)") ist damit erledigt und
+            # wuerde sonst als "defekt" stehenbleiben, obwohl das Geraet
+            # jetzt liest (belegt 2026-11-07 an Pool).
+            dev["broken"] = []
         else:
             dev["targetOverridden"] = False
 
@@ -272,6 +293,30 @@ def collect():
         # Dann gibt es keinen Zustand zu zeigen - das ist kein Fehler.
         dev["readable"] = bool(info is not None and info.get("val") is not None
                                or (info or {}).get("ts"))
+
+    # Einheit des Hauptwerts: nur fuer Messgeraete gesetzt (localmap liefert
+    # sie aus dem Alias). Schalter zeigen weiterhin an/aus. Fehlt sie - etwa
+    # wenn der Eigentuemer das Ziel auf einen anderen Datenpunkt gelegt hat -
+    # wird sie einmalig am echten Objekt nachgesehen.
+    for dev in devices:
+        einheiten = dev.get("units") or {}
+        haupt = (dev.get("target") or "")
+        faecher = set((dev.get("capTargets") or {}).keys())
+        einheit = ""
+        # Einheit NUR an reinen Messgeraeten (ausschliesslich Lesefaehigkeiten).
+        # Ein Schalter mit zusaetzlichem Messwert (Luefter, Duschwasser,
+        # Temperatur Klimaanlage) zeigt weiter an/aus - sonst stuende dort
+        # "aus °C" (gesehen 2026-11-07).
+        if faecher and faecher <= localmap.READ_CAPS:
+            for faehigkeit, ziel in (dev.get("capTargets") or {}).items():
+                if ziel and ziel == haupt:
+                    einheit = einheiten.get(faehigkeit) or ""
+                    break
+            if not einheit:
+                einheit = next((einheiten.get(f) or "" for f in sorted(faecher)), "")
+            if not einheit and haupt:
+                einheit = _objekt_einheit(haupt)
+        dev["unit"] = einheit
     # Ausgeblendete ans Ende, damit sie die normale Liste nicht stoeren.
     devices.sort(key=lambda d: (bool(d.get("deleted")),
                                 (d.get("room") or "").casefold(),
@@ -384,6 +429,12 @@ pre{background:var(--card);border:1px solid var(--line);border-radius:9px;paddin
            onkeydown="if(event.key==='Enter'){speichereAdresse();}">
     <button onclick="speichereAdresse()" title="ioBroker-Adresse speichern">setzen</button>
   </label>
+  <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim)"
+         title="Ausgeblendete Geräte wieder anzeigen (nur hier, geschaltet werden sie nicht)">
+    <input type="checkbox" id="showgone" onchange="render()"
+           style="width:auto;min-width:0;padding:0">
+    Ausgeblendete
+  </label>
   <input id="filter" placeholder="Gerät filtern …" style="min-width:210px">
   <button id="savebtn" class="primary" onclick="saveAll()" disabled>Speichern</button>
   <button onclick="load()">Neu laden</button>
@@ -431,7 +482,8 @@ function toast(text, kind) {
   el._t = setTimeout(() => { el.style.display = "none"; }, 2600);
 }
 
-function stateText(v, readable) {
+function stateText(v, readable, unit) {
+  const u = unit ? ' ' + esc(unit) : '';
   if (v === true) return '<span class="state on">an</span>';
   if (v === false) return '<span class="state off">aus</span>';
   if (v === null || v === undefined) {
@@ -439,14 +491,14 @@ function stateText(v, readable) {
       ? '<span class="state unknown" title="Reiner Befehlsdatenpunkt ohne Rückkanal">kein Rückkanal</span>'
       : '<span class="state unknown">–</span>';
   }
-  return '<span class="state">' + esc(v) + '</span>';
+  return '<span class="state">' + esc(v) + u + '</span>';
 }
 
 function row(d) {
   const key = d.id || d.name;
-  const badge = d.route === "local"
-    ? '<span class="badge local">lokal</span>'
-    : '<span class="badge cloud">Alexa-Cloud</span>';
+  // Keine Herkunfts-Markierung mehr: ein Gerät ist ein Gerät. Ob das Ziel
+  // unter zigbee., alexa2. oder sonst wo liegt, ist für die Bedienung
+  // unerheblich - es wird identisch geschaltet.
   const broken = (d.broken && d.broken.length)
     ? ' <span class="badge broken" title="' + esc(d.broken.join("\\n")) + '">' + d.broken.length + ' defekt</span>'
     : "";
@@ -466,8 +518,8 @@ function row(d) {
     + '<td><input class="inline" data-f="room" data-v="' + esc(room)
     + '" value="' + esc(room) + '" placeholder="—" list="raumliste"'
     + ' oninput="touch(this)" style="min-width:105px"></td>'
-    + '<td>' + badge + broken + '</td>'
-    + '<td>' + stateText(d.state, d.readable) + '</td>'
+    + '<td>' + broken + '</td>'
+    + '<td>' + stateText(d.state, d.readable, d.unit) + '</td>'
     + '<td class="dp"><input class="dpin" data-f="target" data-v="' + esc(d.target || "")
     + '" data-base="' + esc(d.autoTarget || d.target || "")
     + '" value="' + esc(d.target || "") + '" placeholder="Datenpunkt" oninput="touch(this)" title="'
@@ -536,10 +588,14 @@ function raumVorschlaege() {
 
 function render() {
   const q = document.getElementById("filter").value.trim().toLowerCase();
-  const shown = DATA.filter(d => !q
+  // Ausgeblendete Geräte sind aus der Liste genommen: sie werden weder
+  // angezeigt noch geschaltet. Das Kästchen im Kopf holt sie nur zur Ansicht
+  // zurück, damit sich ein versehentliches Ausblenden rückgängig machen lässt.
+  const zeigeWeg = !!(document.getElementById("showgone") || {}).checked;
+  const shown = DATA.filter(d => (zeigeWeg || !d.deleted) && (!q
     || (d.name || "").toLowerCase().includes(q)
     || (d.room || "").toLowerCase().includes(q)
-    || (d.target || "").toLowerCase().includes(q));
+    || (d.target || "").toLowerCase().includes(q)));
 
   const groups = new Map();
   for (const d of shown) {
@@ -554,19 +610,16 @@ function render() {
     const list = groups.get(room);
     return '<div class="roomgroup"><div class="roomhead">' + esc(room)
       + ' <span class="n">' + list.length + '</span></div>'
-      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Weg</th><th>Zustand</th><th>Datenpunkt</th><th></th><th></th></tr></thead><tbody>'
+      + '<table><thead><tr><th>Sprechname</th><th>Raum</th><th>Hinweis</th><th>Zustand</th><th>Datenpunkt</th><th></th><th></th></tr></thead><tbody>'
       + list.map(row).join("") + '</tbody></table></div>';
   }).join("");
 
   raumVorschlaege();
 
-  const local = DATA.filter(d => d.route === "local").length;
   const broken = DATA.filter(d => d.broken && d.broken.length).length;
   const weg = DATA.filter(d => d.deleted).length;
   document.getElementById("stats").innerHTML =
     '<span><b>' + (DATA.length - weg) + '</b> Geräte</span>'
-    + '<span><b>' + local + '</b> lokal schaltbar</span>'
-    + '<span><b>' + (DATA.length - weg - local) + '</b> nur über Alexa</span>'
     + '<span><b>' + broken + '</b> mit defektem Ziel</span>'
     + (weg ? '<span><b>' + weg + '</b> ausgeblendet</span>' : '');
 }
@@ -667,12 +720,10 @@ function renderGruppen() {
 
     const geraete = GERAETENAMEN.map(eintrag => {
       const n = eintrag.name || eintrag;
-      const lokal = eintrag.local !== false;
       const an = (g.devices || []).includes(n);
       return '<label class="chk"><input type="checkbox"' + (an ? " checked" : "")
         + ' onchange="toggleGeraet(' + i + ', this.value, this.checked)" value="' + esc(n) + '">'
         + '<span>' + esc(n)
-        + (lokal ? '' : ' <small title="geht über Amazon, kein Rückkanal">Cloud</small>')
         + '</span></label>';
     }).join("") || '<div class="empty">keine schaltbaren Geräte</div>';
 
@@ -1038,12 +1089,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {
                     "groups": groups.liste(),
                     "assistants": assistant_liste(),
-                    # Alle schaltbaren Geräte, auch die mit reinem
-                    # alexa2-Kanal. "local" sagt, ob ohne Amazon geschaltet
-                    # wird - das Panel kennzeichnet den Unterschied.
+                    # Alle schaltbaren Geräte. Keine Kennzeichnung nach
+                    # Herkunft mehr: jedes Gerät lässt sich gleich wählen.
                     "devices": [
-                        {"name": name, "local": groups.ist_lokal(caps)}
-                        for name, caps in sorted(groups.alle_geraete().items())
+                        {"name": name}
+                        for name in sorted(groups.alle_geraete())
                     ],
                 })
             except Exception as exc:  # noqa: BLE001
@@ -1122,7 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not text:
                     self._json(400, {"ok": False, "error": "kein Satz"})
                     return
-                result = control.handle(text, dry_run=True, prefer_local=True)
+                result = control.handle(text, dry_run=True)
                 self._json(200, {"ok": True, "result": result})
                 return
         except Exception as exc:  # noqa: BLE001

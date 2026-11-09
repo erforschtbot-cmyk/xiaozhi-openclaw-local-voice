@@ -9,6 +9,7 @@ import signal
 import uuid
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 import opuslib
@@ -17,6 +18,10 @@ from websockets.asyncio.server import serve
 # Raum-Zuordnung: das Geraet schickt seine MAC im Handshake (Device-Id).
 # Daraus wird der Raum ermittelt und fuer die Weiche hinterlegt.
 from room_command import publish_active_room, room_for_device, normalize_mac
+
+# Mikrofon-Mitschnitt. Das Modul schreibt nur, wenn daneben die Datei
+# `capture.enabled` liegt; ohne sie ist der Aufruf ein reiner Existenz-Check.
+import mic_capture
 
 # Lokale Sprachausgabe. Das Modul wird nur importiert, wenn der lokale
 # TTS-Pfad aktiv ist; so bleibt der Provider-Pfad ohne Piper-Abhaengigkeit
@@ -388,6 +393,10 @@ class XiaozhiSession:
             self.arbiter.register(self)
         self.turn_id = str(uuid.uuid4())
         self.decoder = opuslib.Decoder(16000, 1)
+        # Eigener Decoder fuer den Mitschnitt: Opus ist zustandsbehaftet, ein
+        # zweiter Decode auf demselben Objekt wuerde die Erkennung verschieben.
+        self.capture = None
+        self.capture_decoder = None
         self.encoder = opuslib.Encoder(24000, 1, opuslib.APPLICATION_VOIP)
         self.encoder.bitrate = 32000
         self.process = None
@@ -407,6 +416,8 @@ class XiaozhiSession:
         self.followup_open = False
         self.followup_audio_packets = 0
         self.followup_forwarded_packets = 0
+        self.followup_last_refresh_at = 0.0
+        self.followup_opened_at = 0.0
         self.followup_peak = 0
         self.followup_audio_guard_until = 0.0
         self.audio_guard_until = 0.0
@@ -1396,6 +1407,10 @@ class XiaozhiSession:
     # Eine Sperre dieser Laenge verwirft nur den Ton; echte Sprache beginnt
     # erst, nachdem der Nutzer ihn gehoert hat, und bleibt erhalten.
     POPUP_GUARD_SECONDS = 0.55
+    # Abstand, in dem eine leere Erkennung noch der Aktivierungston
+    # sein kann und nicht "der Nutzer hat nichts gesagt" bedeutet.
+    # Gemessen: der Ton erzeugt Aeuszerungen bei 0.90 s und 1.62 s.
+    NO_SPEECH_GRACE_SECONDS = 3.0
 
     # Frist nach dem Wecken ohne erkanntes Wort. Bewusst NICHT
     # followup_seconds(): das ist das Nachhoerfenster NACH einer Antwort und
@@ -1786,12 +1801,32 @@ class XiaozhiSession:
         """Dieselbe Dauer wie das Nachhoerfenster: 5 s persistent, sonst 10 s."""
         return 5.0 if getattr(self, "persistent_standby", False) else 10.0
 
-    def schedule_followup_timeout(self):
+    # Harte Obergrenze fuer das Nachhoerfenster, unabhaengig von Verlaengerungen.
+    # Ohne sie haelt gleichmaessiges Geraet das Fenster beliebig lange offen:
+    # belegt 03.11.2026, ein Luefter stand 48 s. Die Verlaengerung ist fuer
+    # Sprache gedacht, nicht als Dauerbetrieb.
+    FOLLOWUP_MAX_SECONDS = 20.0
+
+    def schedule_followup_timeout(self, quiet=False):
         self.cancel_followup_timeout()
 
         async def close_after_followup_window():
             seconds = self.followup_seconds()
-            print(f"{self.tag} Follow-up window open for {seconds:g} seconds", flush=True)
+            # Restzeit bis zur harten Grenze; die Verlaengerung darf sie nicht
+            # ueberschreiten. Danach geht das Geraet in Bereitschaft, auch wenn
+            # weiter Geraete zu hoeren sind.
+            opened_at = getattr(self, "followup_opened_at", 0.0)
+            if opened_at <= 0.0:
+                # Ohne Startzeit (Pfad ohne open_followup_window) beginnt die
+                # Frist jetzt; sonst waere die Restzeit negativ und das Fenster
+                # schloesse sofort.
+                opened_at = self.followup_opened_at = asyncio.get_running_loop().time()
+            elapsed = asyncio.get_running_loop().time() - opened_at
+            remaining = self.FOLLOWUP_MAX_SECONDS - elapsed
+            if remaining < seconds:
+                seconds = max(remaining, 0.0)
+            if not quiet:
+                print(f"{self.tag} Follow-up window open for {seconds:g} seconds", flush=True)
             await asyncio.sleep(seconds)
             print(
                 f"{self.tag} Follow-up window expired; returning to standby "
@@ -1842,8 +1877,10 @@ class XiaozhiSession:
         self.audio_progress_event = asyncio.Event()
         self.input_stopped = False
         self.followup_open = True
+        self.followup_opened_at = asyncio.get_running_loop().time()
         self.followup_audio_packets = 0
         self.followup_forwarded_packets = 0
+        self.followup_last_refresh_at = 0.0
         self.followup_peak = 0
         self.followup_audio_guard_until = (
             asyncio.get_running_loop().time() + audio_guard_seconds
@@ -2160,7 +2197,51 @@ class XiaozhiSession:
                 # Jedes Provider-Ereignis ist Aktivitaet. Der Zwischenansage-
                 # Waechter entscheidet daran, ob wirklich Stille herrscht.
                 self.last_relay_activity_at = asyncio.get_running_loop().time()
-                if kind == "user_transcript":
+                if kind == "utterance_detected":
+                    # Der Detektor hat eine Aeusserung abgeschlossen; die
+                    # Erkennung laeuft noch etwa eine Sekunde. Das Fenster
+                    # darf jetzt nicht zumachen, sonst schneidet es den Satz
+                    # ab, bevor das Transkript da ist.
+                    if self.followup_open:
+                        refresh_now = asyncio.get_running_loop().time()
+                        if refresh_now - getattr(self, "followup_last_refresh_at", 0.0) >= 1.0:
+                            self.followup_last_refresh_at = refresh_now
+                            print(
+                                f"{self.tag} Utterance detected ({event.get('seconds')}s); "
+                                "keeping follow-up window open for the transcript",
+                                flush=True,
+                            )
+                            self.schedule_followup_timeout(quiet=True)
+                elif kind == "utterance_empty":
+                    # Das Ergebnis der Erkennung ist entscheidend, nicht der
+                    # Pegel: kam kein Text heraus, war keine Stimme da. Ein
+                    # Geraeusch kann laut sein und trotzdem nichts ergeben -
+                    # dann gehoert das Fenster geschlossen, statt an Pegeln
+                    # weiter offen zu bleiben (belegt 03.11.2026 02:39: ein
+                    # Luefter hielt es 48 s offen).
+                    if self.followup_open:
+                        # Der Aktivierungston kommt nach JEDER Antwort und
+                        # erzeugt genau so eine leere Erkennung (gemessen:
+                        # 0.90 s und 1.62 s nach Fensterstart). Er darf das
+                        # Fenster nicht schliessen, sonst hoert das Geraet
+                        # nach jeder Antwort nur noch eine Sekunde zu.
+                        age = asyncio.get_running_loop().time() - getattr(
+                            self, "followup_opened_at", 0.0
+                        )
+                        if age < self.NO_SPEECH_GRACE_SECONDS:
+                            print(
+                                f"{self.tag} Empty utterance {age:.1f}s into the "
+                                "window; treating as activation tone, window stays",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"{self.tag} No speech after {age:.1f}s "
+                                f"({event.get('reason')}); returning to standby",
+                                flush=True,
+                            )
+                            await self.return_to_standby("no_speech")
+                elif kind == "user_transcript":
                     self.cancel_interim_watchdog()
                     self.cancel_helper_guard()
                     self.cancel_followup_timeout()
@@ -2375,7 +2456,50 @@ class XiaozhiSession:
         except Exception as exc:
             print(f"{self.tag} event relay failed: {exc}", flush=True)
 
+    def _capture_packet(self, packet):
+        """Rohstimme mitschreiben, unabhaengig vom Turn-Zustand.
+
+        Sitzt bewusst VOR allen Zustandspruefungen: im Standby und nach dem
+        Satzende verwirft die Bridge Pakete, fuer eine Aufnahme ist aber
+        genau das interessant. Fehler duerfen den Turn nie stoeren, deshalb
+        wird der Mitschnitt bei Problemen stillschweigend abgeschaltet.
+        """
+        if not mic_capture.enabled():
+            if self.capture is not None:
+                self._capture_close()
+            return
+        if self.capture is None:
+            try:
+                self.capture_decoder = self.capture_decoder or opuslib.Decoder(16000, 1)
+                self.capture = mic_capture.Capture(
+                    getattr(self, "device_id", None) or "unknown"
+                )
+                print(f"{self.tag} Mitschnitt aktiv: {self.capture.base_dir}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"{self.tag} Mitschnitt nicht moeglich: {exc!r}", flush=True)
+                self.capture = None
+                return
+        try:
+            pcm = self.capture_decoder.decode(packet, 960, False)
+        except Exception:  # noqa: BLE001
+            return
+        if pcm:
+            try:
+                self.capture.write(pcm)
+            except Exception as exc:  # noqa: BLE001
+                print(f"{self.tag} Mitschnitt-Schreibfehler: {exc!r}", flush=True)
+                self._capture_close()
+
+    def _capture_close(self):
+        if getattr(self, "capture", None) is not None:
+            try:
+                self.capture.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.capture = None
+
     async def feed_opus(self, packet):
+        self._capture_packet(packet)
         # A finalized utterance is already being answered. In particular, do
         # not spawn a replacement helper after a fast-path helper exits while
         # its acknowledgement is still playing.
@@ -2476,11 +2600,15 @@ class XiaozhiSession:
             ):
                 return
             if self.followup_open:
+                # Verlaengerung und Abschluss entscheidet die Erkennung, nicht
+                # ein Pegel: das Fenster wird bei `utterance_detected`
+                # verlaengert und bei `utterance_empty` geschlossen.
                 self.followup_forwarded_packets += 1
             self.process.stdin.write(pcm)
             await self.process.stdin.drain()
 
     async def close(self, abort=False):
+        self._capture_close()
         # From here on every child-process exit is intentional.  Set this
         # before terminate()/stdin close so the process watcher cannot start a
         # second, misleading recovery while teardown is already in progress.
@@ -3191,12 +3319,30 @@ async def main():
                 f"to {writer.get_extra_info('peername')}",
                 flush=True,
             )
+            # Uhrzeit mitliefern. Das Geraet hat keinen RTC-Chip mit
+            # Stuetzbatterie und kein SNTP; die einzige Zeitquelle der Firmware
+            # ist `server_time` aus genau dieser Antwort (ota.cc:
+            # settimeofday). Fehlt sie, steht die Systemzeit auf 1970 und die
+            # Statusleiste schreibt statt HH:MM jede Sekunde
+            # "System time not set (tm_year=70)" - belegt am UART-Log
+            # 03.11.2026 15:08.
+            #
+            # Einheit ist MILLISEKUNDEN, `timezone_offset` MINUTEN (so rechnet
+            # ota.cc: ts += offset * 60 * 1000). Das Geraet setzt damit die
+            # LOKALE Zeit als Systemzeit; die eigene Zone kennt es nicht.
+            now = datetime.now().astimezone()
             body = json.dumps({
                 "websocket": {
                     "url": f"ws://{local_ip}:{args.port}",
                     "token": "local-openclaw",
                     "version": 1,
-                }
+                },
+                "server_time": {
+                    "timestamp": int(now.timestamp() * 1000),
+                    "timezone_offset": int(
+                        (now.utcoffset().total_seconds() // 60) if now.utcoffset() else 0
+                    ),
+                },
             }).encode()
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
