@@ -87,6 +87,17 @@ control.py -> catalog.py, fuzzy.py, localmap.py, resolver.py, rooms.py
 werden bei Wiederholung des Installers erhalten. Die anderen JSON-Dateien
 werden aus ioBroker erzeugt und gehören nicht ins Repository.
 
+## Geräteverwaltung im Browser
+
+`local-smarthome/panel.py` wird nach `~/.local/share/alexa-direct/panel.py`
+installiert und über `systemd/geraeteverwaltung.service.in` als
+`geraeteverwaltung.service` gestartet. Der Dienst läuft mit dem Python des
+Bridge-venv, bindet standardmäßig `0.0.0.0:8088` und braucht außer den
+Resolver-Dateien keinen zusätzlichen Bestand. Port und ioBroker-Adresse sind
+Betreiberangaben (`PANEL_PORT`, `IOBROKER_SIMPLE_API` bzw. `settings.json`).
+Aufbau, IP-Konvention, Sicherheitsgrenzen und Fehlersuche:
+[`16-WEBOBERFLAECHE.md`](16-WEBOBERFLAECHE.md).
+
 ## Automatisch erzeugte Daten
 
 | Datei | Erzeuger | Zeitbasis / Verhalten bei Fehlen |

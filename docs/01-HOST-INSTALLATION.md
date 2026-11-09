@@ -88,6 +88,11 @@ Der Installer:
    Dienst einschließlich INT8-Modell, VAD, Warmup und systemd-Unit, sofern er
    noch nicht läuft. `--skip-stt-install` ist nur für bewusst extern
    bereitgestellte STT-Dienste gedacht.
+10. rendert `geraeteverwaltung.service`, aktiviert und startet ihn und prüft
+    ihn wie die beiden anderen Dienste. Die Weboberfläche ist danach unter
+    `http://<LAN-IP-DES-HOSTS>:<PANEL_PORT>/` erreichbar (Standardport `8088`).
+    Erzeugung, Port/Host, ioBroker-Adresse, Sicherheitsgrenzen und
+    Fehlersuche stehen in [`16-WEBOBERFLAECHE.md`](16-WEBOBERFLAECHE.md).
 
 **Prüfpunkt:** Am Ende muss `import OK: server.py inkl. room_command, opuslib,
 websockets` erscheinen und der Dienst `active` sein. Kommt stattdessen

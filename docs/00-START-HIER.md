@@ -41,6 +41,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | Gateway-Helfer | authentifizierte Talk-Verbindung | `gateway/openclaw-talk-realtime.mjs` |
 | OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.11.2`, TLS TCP 18789 |
 | Lokaler Smart-Home-Resolver | eindeutige Befehle ohne Agentenlauf | `local-smarthome/`, ioBroker Simple API |
+| Geräteverwaltung im Browser | Namen, Räume, Gruppen, Satz-Test unter `:8088` | `local-smarthome/panel.py`, `systemd/geraeteverwaltung.service.in`, `docs/16-WEBOBERFLAECHE.md` |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Foto per Sprache | Kamera auslösen, Bild an den Agenten, Antwort sprechen | `gateway/photo-consult.mjs`, `POST /photo` in `server.py`; `docs/13-FOTO-PER-SPRACHE.md` |
 | TFT-Karten/Bilder | Wetter, Textkarte und Bildsuche als RGB565 | `screen/`, `openclaw/skills/display-cards/`, `docs/15-ANZEIGEN.md` |

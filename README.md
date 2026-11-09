@@ -57,8 +57,13 @@ USB-Gerät muss trotzdem zuerst erkannt und das passende Board (`4b` oder
 `audio`) ausdrücklich gewählt werden; ein Vollimage überschreibt NVS/WLAN.
 Der Host-Installer richtet Bridge, lokale Sprache, Geräteserver und die
 Weboberfläche ein. Diese ist danach im LAN unter
-`http://<IP-DES-OPENCLAW-HOSTS>:8088/` erreichbar. Betreiberabhängig bleiben
-nur Zugangsdaten, WLAN, ioBroker-Endpunkt sowie konkrete Geräte und Räume.
+`http://<IP-DES-OPENCLAW-HOSTS>:8088/` erreichbar. Wie die Seite entsteht,
+welche Datei sie ist, wie Port/Host/ioBroker-Adresse gesetzt werden und warum
+jede IP in der Anleitung ein Beispiel ist:
+[`docs/16-WEBOBERFLAECHE.md`](docs/16-WEBOBERFLAECHE.md).
+
+Betreiberabhängig bleiben nur Zugangsdaten, WLAN, ioBroker-Endpunkt sowie
+konkrete Geräte und Räume.
 
 ## Hardware
 
@@ -107,6 +112,8 @@ Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 | Lokale Erkennung (Wyoming-STT) | `gateway/local_stt.mjs` |
 | Lokale Stimme (Piper) | `gateway/piper_speaker.py` |
 | Lokaler Smart-Home-Resolver (ohne Agentenlauf) | `local-smarthome/` |
+| **Geräteverwaltung im Browser** (`:8088`, Namen/Räume/Gruppen/Satz-Test) | `local-smarthome/panel.py`, `systemd/geraeteverwaltung.service.in`, `docs/16-WEBOBERFLAECHE.md` |
+
 | **Schnellweg für einfache Schaltbefehle** (Gateway-Weiche, ohne KI-Lauf) | `gateway/smart-home-router.mjs`, `docs/12-SMART-HOME-SCHNELLWEG.md` |
 | Alexa-Geräteliste für den Schnellweg (taeglich erneuert) | `gateway/refresh-alexa-catalog.mjs`, `systemd/jarvis-alexa-catalog.timer` |
 | Tests des Schnellwegs (46 Faelle, kein Geraetezugriff) | `gateway/test-smart-home-router.mjs` |

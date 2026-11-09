@@ -373,13 +373,25 @@ fi
 # --- Start ----------------------------------------------------------------
 if (( restart )); then
   systemctl --user daemon-reload
-  systemctl --user enable --now jarvis-realtime-bridge.service jarvis-screen.service
+  # Die Geräteverwaltung gehört zum Standardaufbau: Ohne sie fehlt die im
+  # Browser erreichbare Oberfläche, obwohl ihre Quelldateien und Unit bereits
+  # geschrieben wurden. Sie liest lokale JSON-Dateien und ioBroker; ein
+  # falscher/fehlender ioBroker-Endpunkt macht die Seite nicht unstartbar.
+  systemctl --user enable --now \
+    jarvis-realtime-bridge.service jarvis-screen.service geraeteverwaltung.service
   if ! systemctl --user is-active --quiet jarvis-realtime-bridge.service; then
     echo "Dienst startet nicht. Log: journalctl --user -u jarvis-realtime-bridge -n 50" >&2
     exit 1
   fi
   if ! systemctl --user is-active --quiet jarvis-screen.service; then
     echo "Anzeigen-Dienst startet nicht. Log: journalctl --user -u jarvis-screen -n 50" >&2
+    exit 1
+  fi
+  if ! systemctl --user is-active --quiet geraeteverwaltung.service; then
+    echo "Geräteverwaltung startet nicht. Log: journalctl --user -u geraeteverwaltung -n 50" >&2
+    echo "Häufigste Ursache: Port $panel_port ist bereits belegt." >&2
+    echo "  ss -ltnp | grep $panel_port" >&2
+    echo "Anderen Port wählen: PANEL_PORT=9000 ./scripts/install-host.sh ..." >&2
     exit 1
   fi
 fi
@@ -391,6 +403,7 @@ fi
 echo
 echo "Installed: jarvis-realtime-bridge.service  ($install_dir)"
 echo "Installed: jarvis-screen.service           ($screen_dir)"
+echo "Installed: geraeteverwaltung.service       (http://<LAN-IP>:$panel_port)"
 if (( local_stt )); then
   echo "  recognition: lokal  -> $stt_uri  (Dienst muss laufen, siehe docs/10-CANARY-FAVORIT.md)"
 else
@@ -410,6 +423,9 @@ Noch zu tun (bewusst nicht automatisiert):
      mit Canary-1B eingerichtet.
   3. Gateway-TLS/Token muss passen: ~/.openclaw/ssl/gateway.crt und
      gateway.authToken in ~/.openclaw/secrets.json.
-  4. Pruefen: python3 scripts/check-new-host.py
-  5. Erst danach Firmware flashen und den Testplan (docs/04-TESTPLAN.md) fahren.
+  4. Geraeteverwaltung im Browser oeffnen: http://<LAN-IP>:<PANEL_PORT>/
+     (Standard 8088). Kein Login: nur im LAN betreiben, nicht ins Internet
+     weiterleiten. Aufbau und Fehlersuche: docs/16-WEBOBERFLAECHE.md
+  5. Pruefen: python3 scripts/check-new-host.py
+  6. Erst danach Firmware flashen und den Testplan (docs/04-TESTPLAN.md) fahren.
 EOF
