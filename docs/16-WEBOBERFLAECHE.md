@@ -165,6 +165,14 @@ Der Satz-Test ist ausdrücklich `dry_run` und schaltet nichts.
 | Änderungen wirken nicht im Sprachweg | Datei am falschen Ort oder Dienst nicht neu gestartet; Ziel ist `~/.local/share/alexa-direct/` |
 | Port vergessen | Kopfzeile der Seite oder `journalctl … \| grep http` |
 
+## Abgrenzung zum lokalen Schaltweg
+
+Die Seite ist **nicht** Voraussetzung dafür, dass das Gerät einfache Befehle
+schnell und ohne Agentenlauf ausführt. Dafür ist allein der lokale Resolver
+zuständig. Wenn im Bridge-Log „Lokaler Smart-Home-Weg nicht nutzbar“ steht,
+fehlt die Python-Seite des Resolvers – nicht diese Seite. Diagnose:
+[`17-SCHNELLWEG-DIAGNOSE.md`](17-SCHNELLWEG-DIAGNOSE.md).
+
 ## Bezug zu den anderen Kapiteln
 
 - Installation und Reihenfolge: [`01-HOST-INSTALLATION.md`](01-HOST-INSTALLATION.md)

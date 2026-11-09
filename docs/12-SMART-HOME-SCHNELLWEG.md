@@ -32,6 +32,11 @@ weder aus einem Zwischenstand geschaltet noch die Sicherheitsprüfung gelockert.
 
 ---
 
+> **Wenn der lokale Weg „nicht nutzbar“ meldet:** Das betrifft nur die
+> Python-Seite des Resolvers, nicht die Oberfläche 8088 und nicht den
+> Bildschirm-Dienst 8770. Prüfliste, Dry-Run-Test und Logdeutung:
+> [`17-SCHNELLWEG-DIAGNOSE.md`](17-SCHNELLWEG-DIAGNOSE.md).
+
 ## Warum das nicht einfach „Schlüsselwörter matchen“ ist
 
 Ein naiver Filter („enthält *Monitor* und *aus*“) schaltet bei
