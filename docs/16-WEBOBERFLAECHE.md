@@ -12,6 +12,45 @@ wird aus der Seite heraus **nicht**.
 > steht sie als Platzhalter (`<LAN-IP-DES-HOSTS>`, `IOBROKER-IP`); wo eine
 > Beispieladresse steht, ist sie ausdrücklich als Beispiel gekennzeichnet.
 
+## In einem Satz
+
+Die Seite ist die **Verwaltungsschicht über einer Liste von Datenpunkten, die zu
+steuernden Geräten gehören** — Sprechname, Raum, Fähigkeiten und Zielpunkt je
+Gerät. Sie ist **keine ioBroker-Oberfläche und kein Adapter-Plugin**: ioBroker
+ist heute nur die Quelle dieser Datenpunkte (Simple API und Alexa-Katalog), die
+Wahrheit bleibt dort. Die Seite legt Namen, Räume, Zielpunkte und Gruppen als
+Notizen daneben.
+
+## Was sie kann
+
+| Aufgabe | Wirkung |
+|---|---|
+| Geräte sehen | eine Zeile je Gerät, live aus der Quelle, eine Abfrage für alle |
+| Sprechnamen vergeben | Name, der gesprochen werden muss; der alte wirkt danach nicht mehr |
+| Räume zuordnen | „Licht Arbeitszimmer an“ und „Wohnzimmer an“ |
+| Datenpunkt ändern | überschreibt das abgeleitete Ziel, auch im Sprachweg |
+| Gerät ausblenden | wird nicht mehr erkannt und nicht mehr geschaltet |
+| **Gruppen** | ein Sprachgerät schaltet mehrere Geräte mit Kurzbefehl |
+| Satz testen | zeigt den Ziel-Datenpunkt — `dry_run`, schaltet nichts |
+| ioBroker-Adresse | eintragbar, mit Herkunft und Erreichbarkeitsanzeige |
+
+### Gruppen und Kurzbefehle
+
+Eine Gruppe ordnet **einem Sprachassistenten** (Device-ID des Geräts, das das
+Wachwort hört) mehrere Geräte zu. Danach genügen Sätze **ohne Geräte- und
+Raumnamen**:
+
+```text
+„Licht an“        → alle Geräte der Gruppe
+„Licht aus“       → alle Geräte der Gruppe
+„Licht auf 50 %“  → Helligkeit auf allen
+„Licht blau“      → Farbe auf allen
+```
+
+Entscheidend ist der **Assistent**, nicht der Gruppenname. „Licht Arbeitszimmer
+an“ nennt ein Gerät und „Wohnzimmer an“ einen Raum — beides hat Vorrang vor der
+Gruppe. Details: [`../local-smarthome/README.md`](../local-smarthome/README.md#gruppen-ein-gerät-schaltet-viele).
+
 ## Woher die Seite kommt
 
 ```text

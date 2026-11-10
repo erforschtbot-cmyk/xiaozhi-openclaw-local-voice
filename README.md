@@ -34,6 +34,31 @@ einen Cloud-Sprachdienst.**
 Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 [Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
 
+## Die Geräteverwaltung `:8088` — was das ist
+
+Das ist **keine ioBroker-Funktion und kein Adapter-Plugin**. Es ist eine
+Verwaltungsseite über einer Liste von **Datenpunkten, die zu steuernden Geräten
+gehören**:
+
+- **Eine Zeile je Gerät:** Sprechname, Raum, Fähigkeiten (an/aus, dimmen,
+  Farbe, Farbtemperatur, Position, Temperatur) und der Datenpunkt, der
+  tatsächlich geschrieben wird.
+- **ioBroker ist heute die Quelle** dieser Datenpunkte (Simple API und
+  Alexa-Katalog). Die Seite legt nur Namen, Räume, Zielpunkte und Gruppen
+  daneben — die Wahrheit bleibt im angeschlossenen System. Wer eine andere
+  Quelle anbindet, ändert die Lese-/Schreibstellen, nicht das Bedienmodell.
+- **Gruppen:** Ein Sprachassistent — die Device-ID des Geräts, das das Wachwort
+  hört — wird einer Gruppe von Geräten zugeordnet. Danach genügen Kurzbefehle
+  wie „Licht an“, „Licht aus“, „Licht auf 50 %“, „Licht blau“, ohne Geräte- oder
+  Raumnamen. Entscheidend ist der Assistent, nicht der Gruppenname.
+- **Satz testen:** zeigt, welcher Datenpunkt geschrieben würde — `dry_run`, es
+  wird nichts geschaltet.
+- Die Seite schaltet selbst nicht. Geschaltet wird über den Sprachweg.
+
+Betrieb und Endpunkte: [`docs/16-WEBOBERFLAECHE.md`](docs/16-WEBOBERFLAECHE.md) ·
+Gruppen im Detail:
+[`local-smarthome/README.md`](local-smarthome/README.md#gruppen-ein-gerät-schaltet-viele)
+
 Für eine KI ohne Vorwissen ist
 [`docs/14-KI-NEUAUFBAU-CHECKLISTE.md`](docs/14-KI-NEUAUFBAU-CHECKLISTE.md)
 der Entscheidungs- und Fragenkatalog: beide Geräte, Gateway, OpenClaw-Patch,

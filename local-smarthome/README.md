@@ -55,6 +55,12 @@ Sprechnamen vergeben, Räume zuordnen, Datenpunkte korrigieren, Gruppen bilden,
 einen Satz testen. Gedanke: ein Gegenstück zur Alexa-App — mit dem Unterschied,
 dass die Wahrheit in ioBroker bleibt und die Oberfläche nur Notizen danebenlegt.
 
+Die Seite ist **keine ioBroker-Funktion und kein Adapter-Plugin**. Sie verwaltet
+eine Liste von **Datenpunkten, die zu steuernden Geräten gehören**: je Gerät ein
+Sprechname, ein Raum, Fähigkeiten (an/aus, dimmen, Farbe, …) und der Punkt, der
+wirklich geschrieben wird. ioBroker ist heute die Quelle dieser Punkte — das
+Bedienmodell hängt nicht daran.
+
 ### Aufrufen — welcher Port?
 
 Die Seite läuft auf **Port 8088**, erreichbar aus dem ganzen LAN:
