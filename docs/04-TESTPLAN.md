@@ -42,6 +42,21 @@ Sprich: **„Jarvis, Helligkeit auf 40 Prozent."**
 
 Erwartet: sofortige Änderung und Anzeige.
 
+Gleichwertig: **„Jarvis, Bildschirmhelligkeit auf 40 Prozent."** Der Schnellweg
+kennt `Helligkeit`/`Bildschirmhelligkeit`/`Displayhelligkeit` mit einem Wert
+0–100; „heller" oder „dunkler" ohne Zahl geht an den Agenten.
+
+## C2. Tasten am Audio-Board
+
+Ohne Sprache, in jedem Zustand:
+
+1. **K1** dreimal drücken → Lautstärke +30 %, Ring zeigt den Pegel als Balken.
+2. **K3** einmal drücken → −10 %.
+3. **K2** drücken → Ring-Helligkeit eine Stufe weiter (Start 25 % → 45 % →
+   70 % → aus → 8 % → 15 % → 25 %).
+
+Erwartet: jede Änderung sofort sichtbar/hörbar, Logzeilen
+`Volume up -> …` bzw. `Ring-Helligkeit: … %`, kein Neustart nötig.
 ## D. Erstes Werkzeug nach einer Pause (der kritische Test)
 
 1. Etwa 60–120 Sekunden warten, bis das Gerät wieder in Bereitschaft ist.

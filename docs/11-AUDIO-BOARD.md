@@ -337,12 +337,13 @@ in `firmware/audio-board/build-proof-20261109.json` dokumentiert.
 
 ## Tasten am Gerät
 
-Die nackte Platine hat fünf Taster. Zwei davon steuern jetzt die Lautstärke.
+Die nackte Platine hat fünf Taster. Drei davon hängen am I/O-Expander: K1 und
+K3 steuern die Lautstärke, K2 die Helligkeit des Rings.
 
 | Taste | Anschluss | Funktion in dieser Firmware |
 |---|---|---|
 | **K1** | TCA9555 **EXIO9** | **lauter** (+10 % pro Druck) |
-| **K2** | TCA9555 **EXIO10** | frei (im Waveshare-Demo: MP3-Wiedergabe, hier nicht vorhanden) |
+| **K2** | TCA9555 **EXIO10** | **Ring-Helligkeit** eine Stufe weiter: 25 % → 45 % → 70 % → aus → 8 % → 15 % → 25 % … (Start 25 %) |
 | **K3** | TCA9555 **EXIO11** | **leiser** (−10 % pro Druck) |
 | BOOT | GPIO0 | Gespräch umschalten; beim Start: WLAN-Einrichtung |
 | RESET | CHIP_PU | Neustart |
@@ -352,17 +353,23 @@ Deshalb liest sie ein eigener Treiber (`iot_button` mit eigener
 `get_key_level`-Funktion) statt der GPIO-Variante — dasselbe Verfahren nutzt
 das Upstream-Board `df-k10`.
 
-Die Lautstärke wird in 10-%-Schritten verändert und auf 0…100 % begrenzt.
+Die Lautstärke wird in 10-%-Schritten verändert und auf 0…100 % begrenzt und
+in der NVS gespeichert (`audio` / `output_volume`); sie überlebt einen Neustart.
+K2 schaltet nur die Ring-LEDs, nicht die Lampen im Raum — die Stufe ist
+absichtlich flüchtig und beginnt nach einem Neustart wieder bei 25 %.
+
 Jeder Druck wird im seriellen Log protokolliert:
 
 ```text
 waveshare_s3_audio_board: Volume up -> 80%
+JarvisRingLed: Ring-Helligkeit: 45 %
 ```
 
 Beim Start meldet die Firmware, ob die Tasten bereit sind:
 
 ```text
 waveshare_s3_audio_board: K1 volume-up ready
+waveshare_s3_audio_board: K2 ring-brightness ready
 waveshare_s3_audio_board: K3 volume-down ready
 ```
 
@@ -371,8 +378,7 @@ Quelle der Pin-Zuordnung: Waveshare-Pinout und Schaltplan
 
 Die Tasten funktionieren in **jedem** Gerätezustand — `ChangeVolume()` prüft
 den Zustand nicht, und der `iot_button`-Treiber pollt unabhängig von der
-Gesprächslogik. Der Wert wird in der NVS (`audio` / `output_volume`) gespeichert
-und überlebt einen Neustart.
+Gesprächslogik.
 
 ## Lautstärke-Anzeige im Ring
 

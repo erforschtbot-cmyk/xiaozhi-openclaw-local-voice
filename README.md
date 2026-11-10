@@ -106,6 +106,20 @@ Lautsprecher. Board-Ziel: `esp32-s3-touch-lcd-4b`.
 **Preis:** unter 50 € · **Bezug:** [Amazon](https://link.amazon/B0a9foEMG) ·
 [Waveshare](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm)
 
+**Bildschirmhelligkeit per Sprache** — der Schnellweg in der Bridge braucht
+einen Prozentwert:
+
+```text
+„Jarvis, Bildschirmhelligkeit auf 40 Prozent.“
+„Jarvis, Helligkeit auf 40 Prozent.“
+```
+
+Erlaubt sind 0–100. Der Wert wirkt sofort am Gerät, die Anzeige bestätigt mit
+`Helligkeit: 40 %`, und er liegt in der NVS — er überlebt also einen Neustart
+(gesichert durch `firmware/patches/jarvis-4b-restore-brightness.patch`).
+„Heller“/„dunkler“ ohne Zahl kennt der Schnellweg nicht; solche Sätze gehen an
+den Agenten.
+
 ### Zweites Gerät: Waveshare ESP32-S3 AI Smart Speaker (= Audio-Board)
 
 <img src="docs/images/jarvis-audio-board.jpg" alt="Waveshare ESP32-S3 AI Smart Speaker, zylindrisches Gehäuse ohne Display" width="260">
@@ -115,6 +129,21 @@ Zylindrisches Gehäuse mit Acryl-Deckel, **kein Display** — die Rückmeldung
 Board-Ziel: `esp32-s3-audio-board` (SKU 32184/32185).
 
 **Preis:** unter 30 € · **Bezug:** [Amazon](https://link.amazon/B02n0BuFL)
+
+**Tasten am Gerät** — alles ohne Sprache, in jedem Gerätezustand:
+
+| Taste | Wirkung |
+|---|---|
+| **K1** | lauter, +10 % pro Druck |
+| **K3** | leiser, −10 % pro Druck |
+| **K2** | Ring-Helligkeit eine Stufe weiter: 25 % → 45 % → 70 % → aus → 8 % → 15 % → 25 % … (Start 25 %) |
+| **BOOT** | Gespräch umschalten; beim Start: WLAN-Einrichtung |
+| **RESET** | Neustart |
+
+K2 schaltet nur die **Ring-LEDs** des Geräts, keine Lampen im Raum. Die
+Lautstärke wird in der NVS gespeichert und überlebt einen Neustart; die
+Ring-Stufe beginnt danach wieder bei 25 %. Details:
+[`docs/11-AUDIO-BOARD.md`](docs/11-AUDIO-BOARD.md#tasten-am-gerät).
 
 > **Namensverwirrung vermeiden:** „Smart 86 Box" und „Touch-LCD-4B" bezeichnen
 > **dasselbe** Gerät — Waveshare selbst nennt es im Board-README „intelligent 86
