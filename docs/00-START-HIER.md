@@ -11,6 +11,12 @@ prüft sich selbst; der Gateway-Patchsatz liegt für 2026.10.4 bis 2026.11.2 vor
 Der verbindliche Dateibestand steht in
 [`00-DATEIBESTAND.md`](00-DATEIBESTAND.md).
 
+> **Netzadressen nicht kopieren:** `192.168.178.143` und
+> `192.168.178.24` beschreiben ausschließlich den dokumentierten
+> Referenzaufbau. Auf einem anderen Host sind sie keine auffindbaren Dienste.
+> Vor Installation oder Firmware-Bau die Zuordnung und die echten
+> Betreiberwerte in [`18-ANDERE-HOSTS.md`](18-ANDERE-HOSTS.md) klären.
+
 Für einen Nachbau ohne Vorwissen gilt: **`docs/01-HOST-INSTALLATION.md` in der
 Reihenfolge abarbeiten, nicht querlesen.** Dort steht nach jedem Schritt, was
 hätte passieren müssen. Diese Seite hier erklärt den Aufbau und die
@@ -83,6 +89,8 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
    führt der Betreiber aus; kein Skript dieser neuen Wiederherstellung tut das.
 7. Eigene Netzadresse einsetzen: Firmware-OTA-URL und `--public-host` müssen
    vom Geräte-WLAN erreichbar sein. Referenz-IP-Adressen nicht blind übernehmen.
+   Der Wert ist absichtlich Pflicht; eine KI darf hier weder
+   `192.168.178.143` noch die zuerst gefundene Host-IP erraten.
 8. Geräte-Firmware bauen und das richtige Image flashen (unten).
 9. WLAN über den Einrichtungs-AP `Xiaozhi-…` provisionieren; Adresse/Anweisungen
    aus serieller Ausgabe bzw. Gerätedisplay verwenden. Gespeicherte NVS-OTA-URL

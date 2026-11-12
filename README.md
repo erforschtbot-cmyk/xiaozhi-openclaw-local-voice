@@ -8,6 +8,15 @@
 > Der genaue Pflicht-/Laufzeit-/Außenbestand steht in
 > [`docs/00-DATEIBESTAND.md`](docs/00-DATEIBESTAND.md).
 
+> **Wichtig für fremde KIs und andere Netze:** Adressen wie
+> `192.168.178.143` (OpenClaw-Referenzhost) und `192.168.178.24` (ioBroker im
+> Referenznetz) sind **Beispieldaten dieses Aufbaus**, keine weltweit gültigen
+> Jarvis-Adressen. Sie existieren auf einem fremden System normalerweise nicht.
+> Nicht durch Raten ersetzen: zuerst Host, Netzweg und Betreiberangaben
+> ermitteln. `127.0.0.1`, `0.0.0.0` und Platzhalter wie `<HOST-IP>` haben andere,
+> genau erklärte Bedeutungen. Siehe
+> [`docs/18-ANDERE-HOSTS.md`](docs/18-ANDERE-HOSTS.md#ip-legende-für-menschen-und-ki-agenten).
+
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um ein funktionierendes Jarvis-System auf einem leeren Linux-/OpenClaw-Host
 exakt wiederherzustellen — mit **lokaler Erkenung und lokaler

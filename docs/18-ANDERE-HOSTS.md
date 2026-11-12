@@ -6,6 +6,48 @@ absolutem Pfad. Dieses Kapitel beschreibt, was davon konfigurierbar ist, was
 nicht – und welche Fragen eine KI dem Betreiber stellen muss, statt Annahmen zu
 treffen.
 
+## IP-Legende für Menschen und KI-Agenten
+
+Nicht jede IP-Adresse in diesem Repository ist dieselbe Art von Wert:
+
+| Schreibweise | Bedeutung | Auf einem fremden System übernehmen? |
+|---|---|---|
+| `192.168.178.143` | historische Adresse des OpenClaw-/Bridge-Hosts im Referenznetz | **Nein.** Echte, aus dem Geräte-WLAN erreichbare Host-Adresse ermitteln und als `--public-host` angeben. |
+| `192.168.178.24` | historische Adresse des ioBroker im Referenznetz | **Nein.** Betreiber nach ioBroker-Host und Simple-API-Port fragen. |
+| `192.168.68.157`, `192.168.1.10`, `10.0.0.5` | Beispiele bzw. Testdaten für andere private Netze | **Nein.** Sie beweisen nur, dass andere Subnetze unterstützt werden. |
+| `127.0.0.1` / `localhost` | der Rechner, auf dem der jeweilige Prozess läuft | Nur übernehmen, wenn Dienst und Aufrufer wirklich auf demselben Host laufen. In einem Container bezeichnet es den Container selbst. |
+| `0.0.0.0` | Bind-Adresse: auf allen lokalen Netzwerkkarten lauschen | Nie als Zieladresse in Browser, Firmware oder Client einsetzen. |
+| `<HOST-IP>`, `<NAS-IP>`, `IOBROKER-IP` | absichtlicher Platzhalter | Vor Ausführung durch einen echten Betreiberwert ersetzen; spitze Klammern nicht mitsenden. |
+
+**Entscheidungsregel für eine KI:** Eine private Adresse aus dem Repository ist
+kein Hinweis darauf, dass dieses Ziel im aktuellen Netz existiert. Erst
+Topologie feststellen, dann Werte einsetzen, danach Erreichbarkeit prüfen. Bei
+fehlender Information den Betreiber fragen statt Adressen zu erfinden.
+
+## Harte Kopplungen und konfigurierbare Werte
+
+Die Netzwerkwerte sind konfigurierbar; einige andere Teile des
+Referenzaufbaus sind es noch nicht vollständig:
+
+- `--public-host` ist eine Pflichtangabe für Bridge/Firmware und muss aus dem
+  Geräte-WLAN erreichbar sein. Das ist **keine** Adresse des KI-Systems.
+- ioBroker wird über Oberfläche, `JARVIS_IOBROKER_URL` oder
+  `IOBROKER_SIMPLE_API` gesetzt; die Referenz-IP ist nur Dokumentation/Rückfall
+  für den Originalaufbau.
+- `OPENCLAW_GATEWAY_URL=wss://127.0.0.1:18789` setzt voraus, dass Helfer und
+  Gateway auf demselben Host laufen. Bei getrennten Hosts ist URL plus
+  TLS-Vertrauen anzupassen.
+- Die OpenClaw-Patches enthalten absolute Modulpfade. Ein anderer Benutzer,
+  Home-Pfad, Container oder Gateway-Host verlangt einen passend neu erzeugten
+  Patchsatz; bloß eine IP zu ändern genügt nicht.
+- Session-Keys, Echo-Geräte-ID, MAC-/Raumzuordnung, WLAN, Token und Provider
+  gehören zum Betreiber. Sie dürfen nicht aus dem Referenzsystem übernommen
+  oder geraten werden.
+
+Damit ist eine **Referenzkonfiguration** nicht mit einer
+**Installationsvorgabe** gleichzusetzen. `.reference`-Dateien dokumentieren den
+Originalhost; `.in`-Vorlagen und Installer sind für den Zielhost bestimmt.
+
 ## Kurzentscheidung
 
 | Situation | Vorgehen |

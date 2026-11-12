@@ -3,7 +3,12 @@
 # Gepinnter Upstream + Board-Patch (led-Ring) + deutscher Sprache.
 set -euo pipefail
 
-public_host="${1:-192.168.178.143}"
+if [[ $# -lt 1 || -z "${1:-}" ]]; then
+  echo "Usage: $0 HOST_IM_GERAETENETZ [WAKE_WORD]" >&2
+  echo "Die Referenz-IP 192.168.178.143 ist kein allgemeiner Standard." >&2
+  exit 2
+fi
+public_host="$1"
 board_dir="waveshare/esp32-s3-audio-board"
 board_name="esp32-s3-audio-board"
 wake_word="${2:-wn9_jarvis_tts}"

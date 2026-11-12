@@ -2875,7 +2875,14 @@ async def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--ota-port", type=int, default=8766)
-    parser.add_argument("--public-host", default="192.168.178.143")
+    parser.add_argument(
+        "--public-host",
+        required=True,
+        help=(
+            "Adresse dieses Bridge-Hosts aus Sicht des Geraete-WLANs; "
+            "keine Referenz-IP aus der Dokumentation uebernehmen"
+        ),
+    )
     parser.add_argument("--model", default="gpt-live-1-codex")
     parser.add_argument("--voice", default="cove")
     parser.add_argument("--session-key", default="agent:voice:xiaozhi-realtime")
