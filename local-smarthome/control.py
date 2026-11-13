@@ -675,7 +675,7 @@ def temperature_query(text, assistant=None):
             "utterance": text, "candidates": [d["name"] for d in geraete][:8]}
 
 
-def setpoint_result(text):
+def setpoint_result(text, dry_run=False):
     """Sollwert setzen - aber nur bei vollstaendigem Thermostat.
 
     Gibt None zurueck, wenn der Satz kein Sollwert-Befehl ist (dann laeuft
@@ -684,6 +684,12 @@ def setpoint_result(text):
 
     Die harte Sperre sitzt in execute() (_thermostat_sperre): Ist- und
     Sollwert-Datenpunkt muessen beide existieren.
+
+    Wichtig: Der Sollwert wird hier auch WIRKLICH geschrieben. Frueher lief
+    dieser Weg nur als Dry-Run und antwortete "gestellt", ohne den
+    schreibbaren Datenpunkt anzufassen (gefunden 13.11.2026 an der
+    Klimaanlage). Bei dry_run bleibt es beim reinen Aufloesen, und die Antwort
+    sagt das mit "wuerde".
     """
     intent = resolver.parse_action(text)
     if intent.action != "temperature" or intent.value is None:
@@ -701,17 +707,24 @@ def setpoint_result(text):
         return None
     if resolution.action != "temperature":
         return None
-    result, _ = execute(resolution, dry_run=True)
+    result, _ = execute(resolution, dry_run=dry_run)
     result["utterance"] = text
-    if not result.get("ok"):
-        # Zum Beispiel thermostat-unvollstaendig: den Grund sprechen.
-        return result
     wert = resolution.value
     try:
         zahl = f"{float(wert):g}"
     except (TypeError, ValueError):
         zahl = str(wert)
-    result["answer"] = f"{resolution.device} auf {zahl} Grad gestellt."
+    if not result.get("ok"):
+        # Zum Beispiel thermostat-unvollstaendig oder Schreibfehler:
+        # den Grund sprechen, keinen Erfolg behaupten.
+        result["answer"] = (result.get("detail")
+                            or f"{resolution.device} konnte nicht auf "
+                               f"{zahl} Grad gestellt werden.")
+        return result
+    if dry_run:
+        result["answer"] = f"{resolution.device} würde auf {zahl} Grad gestellt."
+    else:
+        result["answer"] = f"{resolution.device} auf {zahl} Grad gestellt."
     return result
 
 
@@ -1035,7 +1048,7 @@ def handle(text, dry_run=False, assistant=None):
 
     # Danach der Sollwert: "stell die klimaanlage auf 22 grad". Braucht eine
     # eigene Antwort, weil "geschaltet" dafür das falsche Wort ist.
-    antwort = setpoint_result(text)
+    antwort = setpoint_result(text, dry_run=dry_run)
     if antwort is not None:
         return antwort
 

@@ -496,6 +496,45 @@ eindeutig, wird abgelehnt statt geraten.
 
 Gemessen: 14 von 15 geprüften Sätzen werden schaltbar.
 
+### Thermostat: Istwert lesen, Sollwert stellen
+
+Ein Klima-/Heizgerät ist **kein** Schalter mit Temperaturanzeige. Es braucht
+drei getrennte Datenpunkte; die Fähigkeiten der Oberfläche heißen:
+
+| Fähigkeit | Bedeutung | Schreibrecht |
+|---|---|---|
+| `temperature` | Istwert, wird nur gelesen | **nein** (`write: false`) |
+| `setpoint` | Sollwert, wird gestellt | **ja** (`write: true`) |
+| `onoff` | Ein/Aus (Boolean) | ja |
+
+Beispiel am Alias-Thermostaten `alias.0.<Raum>.<Gerät>`:
+
+```text
+…​.POWER   role switch.power     boolean, write true   → onoff
+…​.SET     role level.temperature number, write true  → setpoint
+…​.ACTUAL  role value.temperature number, write false → temperature
+```
+
+Sätze, die damit lokal laufen:
+
+```text
+„Klimaanlage an" / „Klimaanlage aus"
+„stelle die Klimaanlage auf 22 Grad"
+„wie ist die Temperatur von der Klimaanlage"
+„wie warm ist es in der Klimaanlage"
+```
+
+Zwei harte Regeln:
+
+- **Gefragt wird immer am Istwert** (`ACTUAL`, schreibgeschützt). So kann eine
+  Frage nie den Sollwert verändern.
+- **Gestellt wird nur bei vollständigem Thermostat**: `execute()` prüft vor dem
+  Schreiben, dass Ist- *und* Sollwert-Datenpunkt in ioBroker existieren
+  (`_thermostat_sperre`). Fehlt einer, wird abgelehnt statt geraten.
+- Der Sollwert-Befehl schreibt **wirklich**; er lief früher nur als Dry-Run und
+  behauptete „gestellt". Bei `SMARTHOME_DRY_RUN=1` sagt die Antwort jetzt
+  „würde … gestellt".
+
 ### Grenzen, ehrlich
 
 - **„heller"/„dunkler" bleibt offen.** HassIL kennt ebenfalls keine relativen
